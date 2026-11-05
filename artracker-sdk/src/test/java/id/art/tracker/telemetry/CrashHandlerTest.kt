@@ -74,6 +74,26 @@ class CrashHandlerTest {
     }
 
     @Test
+    fun noPreviousHandler_writesExactlyOneFile_printsTrace_andDoesNotRecurse() {
+        Thread.setDefaultUncaughtExceptionHandler(null)
+        val handler = CrashHandler.install(store, { _, _ -> "id-${System.nanoTime()}" to "{}" })
+        val originalErr = System.err
+        val captured = java.io.ByteArrayOutputStream()
+        System.setErr(java.io.PrintStream(captured, true))
+        try {
+            // Through the real dispatch path: the default handler is ours and there is nothing before it.
+            Thread.getDefaultUncaughtExceptionHandler()!!
+                .uncaughtException(Thread.currentThread(), RuntimeException("lonely crash"))
+        } finally {
+            System.setErr(originalErr)
+        }
+
+        assertSame(handler, Thread.getDefaultUncaughtExceptionHandler())
+        assertEquals("exactly one crash file", 1, store.pending().size)
+        assertTrue(captured.toString().contains("RuntimeException: lonely crash"))
+    }
+
+    @Test
     fun previousHandlerThrowing_doesNotPropagate() {
         val previous = Recorder().apply { onCall = { throw IllegalStateException("crashlytics bug") } }
         CrashHandler(previous, store, { _, _ -> "id" to "{}" })

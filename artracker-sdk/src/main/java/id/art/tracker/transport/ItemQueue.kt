@@ -13,7 +13,12 @@ internal data class StoredItem(
 internal data class Batch(val id: String, val items: List<StoredItem>)
 
 internal interface ItemQueue {
-    fun insert(items: List<StoredItem>)
+    /**
+     * Persists [items]. Returns true when the write committed (an id that is already stored is ignored and still
+     * counts as success: the row exists), false when nothing could be stored (database unavailable, locked, full or
+     * corrupt). Callers that hold the only copy of an item must keep it when this returns false.
+     */
+    fun insert(items: List<StoredItem>): Boolean
 
     /**
      * Atomically claims up to [maxItems] pending items (<= [maxBytes] in total, though the first item is

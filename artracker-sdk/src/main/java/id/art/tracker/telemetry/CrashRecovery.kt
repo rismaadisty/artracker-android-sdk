@@ -15,10 +15,10 @@ internal object CrashRecovery {
 
     /**
      * For each pending file: validate, insert into [queue] as a priority-0 item (the file content already is the
-     * final item JSON), and delete the file only after `insert` returned, so a failure or a kill in between
-     * leaves the file for the next start (the item id makes a double insert a no-op).
+     * final item JSON), and delete the file only when `insert` returned true (stored, or already stored under that
+     * id). On false or an exception, or a kill in between, the file stays for the next start.
      * A file that is unreadable or not a valid crash item is deleted without being inserted, so one poison
-     * file can neither be retried forever nor spoil the others. Returns the number of items inserted.
+     * file can neither be retried forever nor spoil the others. Returns the number of items that are now in the queue.
      */
     fun recover(store: CrashStore, queue: ItemQueue): Int {
         var recovered = 0
@@ -32,9 +32,14 @@ internal object CrashRecovery {
                     continue
                 }
                 val createdAt = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()
-                queue.insert(listOf(StoredItem(id, CRASH_PRIORITY, createdAt, json)))
-                store.delete(file)
-                recovered++
+                if (queue.insert(listOf(StoredItem(id, CRASH_PRIORITY, createdAt, json)))) {
+                    store.delete(file)
+                    recovered++
+                } else {
+                    // The queue could not store it (the real EventStore reports this as false, it never throws):
+                    // the file is the only copy, so it stays for the next start.
+                    SdkLog.w("the queue could not store a crash item; keeping its file")
+                }
             } catch (t: Throwable) {
                 // Queue failure: keep the file, try again on the next start, go on with the next file.
                 SdkLog.w("recovering a crash file failed", t)

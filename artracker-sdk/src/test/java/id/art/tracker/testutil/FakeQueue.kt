@@ -15,13 +15,13 @@ internal class FakeQueue : ItemQueue {
     val releasedBatches = ArrayList<String>()
     val completedBatches = ArrayList<String>()
 
-    override fun insert(items: List<StoredItem>) = synchronized(lock) {
+    override fun insert(items: List<StoredItem>): Boolean = synchronized(lock) {
         for (item in items) {
             if (pending.none { it.id == item.id } && inFlight.values.none { b -> b.any { it.id == item.id } }) {
                 pending += item
             }
         }
-        Unit
+        true
     }
 
     override fun claimBatch(maxItems: Int, maxBytes: Int): Batch? = synchronized(lock) {

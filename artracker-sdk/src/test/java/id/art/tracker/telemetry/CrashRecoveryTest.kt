@@ -114,8 +114,9 @@ class CrashRecoveryTest {
         val good = FakeQueue()
         var calls = 0
         val flaky = object : ItemQueue by good {
-            override fun insert(items: List<StoredItem>) {
-                if (calls++ == 0) throw IllegalStateException("db locked") else good.insert(items)
+            override fun insert(items: List<StoredItem>): Boolean {
+                if (calls++ == 0) throw IllegalStateException("db locked")
+                return good.insert(items)
             }
         }
 
@@ -128,6 +129,40 @@ class CrashRecoveryTest {
         // Next start: the left-over file is recovered.
         assertEquals(1, CrashRecovery.recover(store, good))
         assertTrue(store.pending().isEmpty())
+    }
+
+    @Test
+    fun insertReturningFalse_keepsTheFile_andIsNotCounted() {
+        val store = CrashStore(crashDir)
+        store.writeSync("0001", crashJson("0001"))
+        store.writeSync("0002", crashJson("0002"))
+        val good = FakeQueue()
+        var calls = 0
+        // Like the real EventStore on a locked/full/corrupt database: no exception, just `false`.
+        val failing = object : ItemQueue by good {
+            override fun insert(items: List<StoredItem>): Boolean = if (calls++ == 0) false else good.insert(items)
+        }
+
+        val recovered = CrashRecovery.recover(store, failing)
+
+        assertEquals(1, recovered)
+        assertEquals("the unstored item's file is kept", listOf("0001.json"), store.pending().map { it.name })
+        assertEquals(listOf("0002"), claimAll(good).map { it.id })
+
+        assertEquals(1, CrashRecovery.recover(store, good))
+        assertTrue(store.pending().isEmpty())
+    }
+
+    @Test
+    fun alreadyStoredId_countsAsRecovered_andFileIsDeleted() {
+        val store = CrashStore(crashDir)
+        val queue = FakeQueue()
+        queue.insert(listOf(StoredItem("0001", 0, 1, crashJson("0001"))))
+        store.writeSync("0001", crashJson("0001"))
+
+        assertEquals(1, CrashRecovery.recover(store, queue))
+        assertTrue(store.pending().isEmpty())
+        assertEquals(1, queue.pendingCount())
     }
 
     @Test

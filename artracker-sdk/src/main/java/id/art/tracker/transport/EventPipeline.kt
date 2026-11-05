@@ -337,7 +337,7 @@ internal class EventPipeline(
     private fun persist(items: List<StoredItem>) {
         if (items.isEmpty()) return
         try {
-            queue.insert(items.toList())
+            if (!queue.insert(items.toList())) SdkLog.w("the queue could not store ${items.size} items")
         } catch (e: Exception) {
             SdkLog.w("persisting ${items.size} items failed", e)
             return

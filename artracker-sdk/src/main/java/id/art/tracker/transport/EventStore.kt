@@ -38,9 +38,9 @@ internal class EventStore(
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
     }
 
-    override fun insert(items: List<StoredItem>) {
-        if (items.isEmpty()) return
-        guarded("insert") { db ->
+    override fun insert(items: List<StoredItem>): Boolean {
+        if (items.isEmpty()) return true
+        return guarded("insert") { db ->
             db.inTransaction {
                 for (item in items) {
                     val values = ContentValues(6).apply {
@@ -55,7 +55,8 @@ internal class EventStore(
                 }
                 evictIfNeeded(db)
             }
-        }
+            true
+        } ?: false
     }
 
     override fun claimBatch(maxItems: Int, maxBytes: Int): Batch? =

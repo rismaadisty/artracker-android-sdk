@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.testutil.FakeClock
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -186,8 +187,9 @@ class EventStoreTest {
     @Test
     fun duplicateId_ignored() {
         val s = store()
-        s.insert(listOf(item("a", 2, 1, "first")))
-        s.insert(listOf(item("a", 2, 2, "second"), item("a", 0, 3, "third")))
+        assertTrue(s.insert(listOf(item("a", 2, 1, "first"))))
+        // A duplicate is ignored, which still counts as stored: the row exists.
+        assertTrue(s.insert(listOf(item("a", 2, 2, "second"), item("a", 0, 3, "third"))))
         assertEquals(1, rowCount())
         val got = s.claimBatch()!!.items.single()
         assertEquals("first", got.payloadJson)
@@ -313,7 +315,7 @@ class EventStoreTest {
                 it.execSQL("DROP TABLE items")
             }
         }
-        s.insert(listOf(item("b", 2, 2)))
+        assertFalse(s.insert(listOf(item("b", 2, 2))))
         assertNull(s.claimBatch())
         assertEquals(0, s.pendingCount())
         s.complete("nope")

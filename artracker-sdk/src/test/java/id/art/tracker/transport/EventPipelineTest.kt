@@ -32,9 +32,9 @@ private class RecordingQueue(val delegate: FakeQueue = FakeQueue()) : ItemQueue 
     val groups = ArrayList<List<StoredItem>>()
     val stored: List<StoredItem> get() = groups.flatten()
 
-    override fun insert(items: List<StoredItem>) {
+    override fun insert(items: List<StoredItem>): Boolean {
         groups += items
-        delegate.insert(items)
+        return delegate.insert(items)
     }
 }
 

@@ -57,8 +57,11 @@ internal class CrashHandler(
             if (previous != null) {
                 previous.uncaughtException(thread, throwable)
             } else {
-                // No handler before us: do what the JVM does by default (print through the thread group).
-                thread.threadGroup?.uncaughtException(thread, throwable)
+                // No handler before us. Do NOT go through `thread.threadGroup.uncaughtException`: it dispatches to the
+                // default handler, which is this one, and would loop. Print the trace like the JVM does (on Android
+                // System.err ends up in logcat) and let the process die normally.
+                System.err.println("Exception in thread \"${thread.name}\"")
+                throwable.printStackTrace()
             }
         } catch (_: Throwable) {
             // The runtime ignores exceptions thrown by an uncaught-exception handler as well.
