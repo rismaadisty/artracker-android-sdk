@@ -33,6 +33,9 @@ internal interface ItemQueue {
     /** Makes items left in-flight by a dead process pending again. */
     fun resetOrphanedBatches()
 
+    /** Deletes every row, including in-flight and priority 0 (used when the user opts out). */
+    fun clear()
+
     /** Drops items created before [cutoffMs], except priority 0 (crash/fatal). */
     fun purgeOlderThan(cutoffMs: Long)
 }

@@ -8,6 +8,7 @@ internal class FaultyQueue(
     val delegate: FakeQueue,
     var failComplete: Throwable? = null,
     var failRelease: Throwable? = null,
+    var failClear: Throwable? = null,
 ) : ItemQueue by delegate {
     var completeCalls = 0
     var releaseCalls = 0
@@ -22,6 +23,11 @@ internal class FaultyQueue(
         releaseCalls++
         failRelease?.let { throw it }
         delegate.release(batchId)
+    }
+
+    override fun clear() {
+        failClear?.let { throw it }
+        delegate.clear()
     }
 
     override fun claimBatch(maxItems: Int, maxBytes: Int): Batch? = delegate.claimBatch(maxItems, maxBytes)

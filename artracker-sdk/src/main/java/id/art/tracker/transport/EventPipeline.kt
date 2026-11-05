@@ -53,12 +53,24 @@ internal class EventPipeline(
     private val flushContext: CoroutineContext = EmptyCoroutineContext,
 ) {
     /** Idle accounting: [settled] counts items fully handled (persisted, dropped, or evicted from the channel). */
-    private data class Progress(val settled: Long = 0, val flushes: Int = 0, val stopped: Boolean = false)
+    private data class Progress(
+        val settled: Long = 0,
+        val flushes: Int = 0,
+        val stopped: Boolean = false,
+        val discardsHandled: Long = 0,
+    )
+
+    /** An item plus its acceptance sequence number, which [discardAll] compares against. */
+    private class Queued(val item: TelemetryItem, val seq: Long)
 
     private val progress = MutableStateFlow(Progress())
     private val accepted = AtomicLong(0)
 
-    private val channel = Channel<TelemetryItem>(
+    /** Items with a sequence number up to this value are dropped, never persisted ([discardAll]). */
+    private val discardCutoff = AtomicLong(0)
+    private val discardRequested = AtomicLong(0)
+
+    private val channel = Channel<Queued>(
         capacity = CHANNEL_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
         // Items evicted by DROP_OLDEST never reach the consumer; they still count as handled for awaitIdle.
@@ -89,9 +101,9 @@ internal class EventPipeline(
      * accepted at all (channel closed); when the buffer is full the oldest queued item is dropped instead.
      */
     fun enqueue(item: TelemetryItem): Boolean {
-        accepted.incrementAndGet()
+        val seq = accepted.incrementAndGet()
         return try {
-            if (channel.trySend(item).isSuccess) {
+            if (channel.trySend(Queued(item, seq)).isSuccess) {
                 true
             } else {
                 settle(1)
@@ -142,6 +154,17 @@ internal class EventPipeline(
         }
     }
 
+    /**
+     * Drops everything accepted so far (opt-out): items still in the hand-off buffer, the open group and every
+     * row already in the queue. Items accepted after this call are unaffected. Never blocks (safe from any
+     * thread): the consumer performs the clearing in order, before it handles any later item.
+     */
+    fun discardAll() {
+        discardCutoff.set(accepted.get())
+        discardRequested.incrementAndGet()
+        nudge.trySend(Unit)
+    }
+
     /** Same as [flushNow]; kept for existing callers. */
     fun requestFlush() = flushNow()
 
@@ -161,8 +184,11 @@ internal class EventPipeline(
     @VisibleForTesting
     suspend fun awaitIdle() {
         val target = accepted.get()
+        val discardTarget = discardRequested.get()
         nudge.trySend(Unit)
-        progress.first { it.stopped || (it.settled >= target && it.flushes == 0) }
+        progress.first {
+            it.stopped || (it.settled >= target && it.flushes == 0 && it.discardsHandled >= discardTarget)
+        }
     }
 
     private fun settle(count: Int) {
@@ -176,6 +202,7 @@ internal class EventPipeline(
         val buffer = ArrayList<StoredItem>(GROUP_SIZE)
         var groupMessages = 0
         var groupTimer: Job? = null
+        var discardsDone = 0L
 
         fun persistGroup() {
             groupTimer?.cancel()
@@ -190,7 +217,32 @@ internal class EventPipeline(
             }
         }
 
-        fun accept(item: TelemetryItem) {
+        // Called before every step that could persist or accept: a pending discard always wins over later work.
+        fun checkDiscard() {
+            val requested = discardRequested.get()
+            if (requested == discardsDone) return
+            groupTimer?.cancel()
+            groupTimer = null
+            val dropped = groupMessages
+            groupMessages = 0
+            buffer.clear()
+            settle(dropped)
+            try {
+                queue.clear()
+            } catch (e: Exception) {
+                SdkLog.w("clearing the queue failed", e)
+            }
+            discardsDone = requested
+            progress.update { it.copy(discardsHandled = requested) }
+        }
+
+        fun accept(queued: Queued) {
+            checkDiscard()
+            if (queued.seq <= discardCutoff.get()) {
+                settle(1)
+                return
+            }
+            val item = queued.item
             if (groupMessages == 0) {
                 groupTimer = scope.launch {
                     delay(GROUP_WINDOW_MS)
@@ -205,11 +257,12 @@ internal class EventPipeline(
 
         while (true) {
             // Channel first: pending items are always drained before a nudge persists the partial group.
-            val item = select<TelemetryItem?> {
+            val item = select<Queued?> {
                 channel.onReceive { it }
                 nudge.onReceive { null }
             }
             try {
+                checkDiscard()
                 if (item != null) {
                     accept(item)
                     continue

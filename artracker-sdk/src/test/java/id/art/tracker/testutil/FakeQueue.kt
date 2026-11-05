@@ -65,5 +65,10 @@ internal class FakeQueue : ItemQueue {
         Unit
     }
 
+    override fun clear() = synchronized(lock) {
+        pending.clear()
+        inFlight.clear()
+    }
+
     fun inFlightCount(): Int = synchronized(lock) { inFlight.values.sumOf { it.size } }
 }

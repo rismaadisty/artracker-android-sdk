@@ -82,8 +82,10 @@ public object ARTracker {
     }
 
     /**
-     * Opts the user out ([enabled] = true: nothing is recorded or sent, persisted across restarts) or back in.
-     * Takes effect immediately; the preference is written on a background thread.
+     * Opts the user out ([enabled] = true) or back in. Takes effect immediately for every part of the SDK:
+     * nothing more is recorded or sent, and everything already queued is deleted (it is never sent later, even
+     * after opting back in). The choice is persisted: off the main thread it is written before this call
+     * returns; on the main thread the write is queued on a background thread.
      */
     @JvmStatic
     public fun optOut(enabled: Boolean) {

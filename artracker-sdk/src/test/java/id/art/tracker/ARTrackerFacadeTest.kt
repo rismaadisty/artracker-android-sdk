@@ -6,6 +6,7 @@ import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SdkLog
 import id.art.tracker.core.SharedPrefsStore
+import id.art.tracker.transport.FlushOutcome
 import id.art.tracker.transport.FlusherRegistry
 import id.art.tracker.transport.TransportConfigStore
 import java.util.concurrent.CountDownLatch
@@ -259,7 +260,7 @@ class ARTrackerFacadeTest {
         start()
         ARTracker.track("before_opt_out")
         awaitIdle()
-        val pendingBefore = ARTracker.diagnostics().pendingItems
+        assertTrue(ARTracker.diagnostics().pendingItems > 0)
 
         ARTracker.optOut(true)
         assertTrue(ARTracker.diagnostics().disabled)
@@ -272,7 +273,8 @@ class ARTrackerFacadeTest {
         awaitIdle()
 
         assertEquals(0, server.requestCount)
-        assertEquals(pendingBefore, ARTracker.diagnostics().pendingItems)
+        // Opting out also deleted what was queued, and nothing new was recorded.
+        assertEquals(0, ARTracker.diagnostics().pendingItems)
         // Persisted in the same prefs file the background worker reads.
         val prefs = SharedPrefsStore(context, TransportConfigStore.PREFS_NAME)
         assertEquals(1L, prefs.getLong(KillSwitch.KEY_OPTED_OUT, 0L))
@@ -284,6 +286,114 @@ class ARTrackerFacadeTest {
         awaitIdle()
         assertTrue(sentItems().named("resumed").isNotEmpty())
         assertEquals(0L, prefs.getLong(KillSwitch.KEY_OPTED_OUT, 0L))
+    }
+
+    @Test
+    fun optOut_true_thenImmediateFlush_sendsNothing() {
+        start()
+        ARTracker.track("queued")
+        awaitIdle() // persisted in the queue
+        val core = ARTrackerCore.instanceOrNull()!!
+
+        ARTracker.optOut(true)
+        // No awaitIdle(): the flusher must already see the opt-out even though nothing was written to disk yet.
+        assertEquals(FlushOutcome.DISABLED, core.flusher.flushOnce())
+        ARTracker.flush()
+        awaitIdle()
+
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun optOut_clearsPersistedItems_neverSentAfterOptIn() {
+        server.enqueue(MockResponse().setResponseCode(202))
+        start()
+        ARTracker.track("before_opt_out")
+        awaitIdle()
+        assertTrue(ARTracker.diagnostics().pendingItems > 0)
+
+        ARTracker.optOut(true)
+        ARTracker.optOut(false)
+        ARTracker.track("after_opt_in")
+        ARTracker.flush()
+        awaitIdle()
+
+        assertEquals(listOf("after_opt_in"), sentItems().map { it.getString("name") })
+    }
+
+    @Test
+    fun optOut_dropsItemsStillInThePipeline_neverSentAfterOptIn() {
+        server.enqueue(MockResponse().setResponseCode(202))
+        start()
+        ARTracker.track("not_yet_persisted")
+
+        ARTracker.optOut(true)
+        ARTracker.optOut(false)
+        ARTracker.track("after_opt_in")
+        ARTracker.flush()
+        awaitIdle()
+
+        assertEquals(listOf("after_opt_in"), sentItems().map { it.getString("name") })
+    }
+
+    @Test
+    fun optOut_false_thenFlush_sends() {
+        server.enqueue(MockResponse().setResponseCode(202))
+        start()
+        ARTracker.optOut(true)
+        ARTracker.optOut(false)
+        // Immediately: the persisted flag may still be 1 on disk, the in-memory value must win everywhere.
+        ARTracker.track("resumed")
+        ARTracker.flush()
+        awaitIdle()
+
+        assertEquals(1, server.requestCount)
+        assertEquals(listOf("resumed"), sentItems().map { it.getString("name") })
+        assertFalse(ARTracker.diagnostics().disabled)
+    }
+
+    @Test
+    fun optOut_fromBackgroundThread_isPersistedBeforeItReturns() {
+        start()
+        thread { ARTracker.optOut(true) }.join(10_000)
+        // No awaitIdle(): a process death right now must not lose the choice.
+        val prefs = SharedPrefsStore(context, TransportConfigStore.PREFS_NAME)
+        assertEquals(1L, prefs.getLong(KillSwitch.KEY_OPTED_OUT, 0L))
+    }
+
+    @Test
+    fun persistedOptOut_survivesReinitWithSamePrefs() {
+        start()
+        ARTracker.optOut(true)
+        awaitIdle()
+        ARTracker.resetForTest()
+
+        ARTracker.init(context, config())
+        assertTrue(ARTracker.isInitialized())
+        assertTrue(ARTracker.diagnostics().disabled)
+        ARTracker.track("ignored")
+        ARTracker.flush()
+        awaitIdle()
+        assertEquals(0, ARTracker.diagnostics().pendingItems)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun persistedUnauthorizedTrip_survivesReinitWithSamePrefs() {
+        server.enqueue(MockResponse().setResponseCode(401))
+        start()
+        ARTracker.track("first")
+        ARTracker.flush()
+        awaitIdle()
+        assertTrue(ARTracker.diagnostics().disabled)
+        ARTracker.resetForTest()
+
+        ARTracker.init(context, config())
+        assertTrue(ARTracker.diagnostics().disabled)
+        ARTracker.track("ignored")
+        ARTracker.flush()
+        awaitIdle()
+        assertEquals(1, server.requestCount)
     }
 
     @Test

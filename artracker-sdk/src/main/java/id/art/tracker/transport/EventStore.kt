@@ -111,6 +111,10 @@ internal class EventStore(
         }
     }
 
+    override fun clear() {
+        guarded("clear") { db -> db.inTransaction { db.delete("items", null, null) } }
+    }
+
     override fun purgeOlderThan(cutoffMs: Long) {
         guarded("purgeOlderThan") { db ->
             db.delete("items", "created_at < ? AND priority > 0", arrayOf(cutoffMs.toString()))

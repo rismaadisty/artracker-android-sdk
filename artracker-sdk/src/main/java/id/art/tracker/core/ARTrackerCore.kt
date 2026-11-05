@@ -1,6 +1,7 @@
 package id.art.tracker.core
 
 import android.app.Application
+import android.os.Looper
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.ARTrackerConfig
 import id.art.tracker.Diagnostics
@@ -110,10 +111,6 @@ internal class ARTrackerCore(
 
     @Volatile
     private var foreground = false
-
-    /** Set synchronously by [optOut]; null until then (the persisted flag in [killSwitch] is authoritative). */
-    @Volatile
-    private var optOutOverride: Boolean? = null
 
     @Volatile
     private var persistJob: Job? = null
@@ -242,19 +239,32 @@ internal class ARTrackerCore(
     }
 
     /**
-     * The in-memory flag flips at once so tracking stops immediately; the SharedPreferences `commit()` of the
-     * kill-switch runs on [scope] (never on the caller, which may be the main thread).
+     * Opt-out is held by [killSwitch], the single source of truth that the facade, the flusher and the timer all
+     * consult: the in-memory flag flips synchronously, so no later flush or track can slip through.
+     *
+     * Persistence (a SharedPreferences `commit()`, i.e. disk I/O): off the main thread it is written before this
+     * call returns, so the choice survives a process death right afterwards; on the main thread it is queued on
+     * [scope] instead (a crash in that short window can lose it). Opting out also stops the timer and DISCARDS all
+     * queued data (database rows and items still in the pipeline), so nothing recorded earlier is sent later,
+     * even after opting back in. Opting back in resumes normally.
      */
     fun optOut(enabled: Boolean) {
-        optOutOverride = enabled
+        killSwitch.applyOptedOut(enabled)
         if (enabled) {
             pipeline.stopTimer()
+            pipeline.discardAll()
         } else if (foreground) {
             pipeline.startTimer()
         }
-        persistJob = scope.launch {
-            runCatching { killSwitch.optedOut = enabled }.onFailure { SdkLog.w("persisting opt-out failed", it) }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            persistJob = scope.launch { persistOptOut() }
+        } else {
+            persistOptOut()
         }
+    }
+
+    private fun persistOptOut() {
+        runCatching { killSwitch.persistOptedOut() }.onFailure { SdkLog.w("persisting opt-out failed", it) }
     }
 
     /**
@@ -297,10 +307,7 @@ internal class ARTrackerCore(
     // endregion
 
     /** True while the user opted out or the 401 kill-switch is tripped. Cheap: in-memory prefs reads. */
-    fun isDisabled(): Boolean {
-        val override = optOutOverride ?: return killSwitch.isActive()
-        return override || clock.nowMs() < transportPrefs.getLong(KillSwitch.KEY_DISABLED_UNTIL, 0L)
-    }
+    fun isDisabled(): Boolean = killSwitch.isActive()
 
     private fun emit(item: TelemetryItem) {
         pipeline.enqueue(item)

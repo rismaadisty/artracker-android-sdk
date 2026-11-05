@@ -35,6 +35,24 @@ class KillSwitchTest {
     }
 
     @Test
+    fun setOptedOut_isVisibleAtOnceButNotPersistedUntilAsked() {
+        val k = KillSwitch(store, clock)
+        k.applyOptedOut(true)
+        assertTrue(k.optedOut)
+        assertTrue(k.isActive())
+        assertFalse(KillSwitch(store, clock).isActive())
+
+        k.persistOptedOut()
+        assertTrue(KillSwitch(store, clock).isActive())
+
+        k.applyOptedOut(false)
+        assertFalse(k.isActive())
+        assertTrue(KillSwitch(store, clock).isActive())
+        k.persistOptedOut()
+        assertFalse(KillSwitch(store, clock).isActive())
+    }
+
+    @Test
     fun optOut_persists() {
         val k = KillSwitch(store, clock)
         k.optedOut = true

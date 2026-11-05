@@ -7,6 +7,7 @@ import id.art.tracker.core.ItemFactory
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.FakeQueue
+import id.art.tracker.testutil.FaultyQueue
 import id.art.tracker.testutil.InMemoryStore
 import java.io.ByteArrayInputStream
 import java.util.zip.GZIPInputStream
@@ -80,6 +81,37 @@ class EventPipelineTest {
         assertTrue(payload, payload.contains("[redacted]"))
         assertFalse(payload, payload.contains("\"x\""))
         assertTrue(payload, payload.contains("home"))
+    }
+
+    @Test
+    fun discardAll_dropsPersistedBufferedAndOpenGroupItems_butNotLaterOnes() = runTest {
+        val p = pipeline()
+        val persisted = factory.event("persisted")
+        p.enqueue(persisted)
+        p.awaitIdle()
+        assertEquals(1, queue.pendingCount())
+
+        val buffered = factory.event("buffered") // still in the channel / open group when discardAll() runs
+        p.enqueue(buffered)
+        p.discardAll()
+        val later = factory.event("later")
+        p.enqueue(later)
+        p.awaitIdle()
+
+        assertEquals(listOf(later.id), queue.delegate.claimBatch()!!.items.map { it.id })
+    }
+
+    @Test
+    fun discardAll_survivesAFailingClear() = runTest {
+        val faulty = FaultyQueue(FakeQueue(), failClear = IllegalStateException("db"))
+        val p = EventPipeline(backgroundScope, faulty, flusher, clock, null, 10_000L)
+        p.enqueue(factory.event("a"))
+        p.discardAll()
+        val b = factory.event("b")
+        p.enqueue(b)
+        p.awaitIdle()
+
+        assertEquals(listOf(b.id), faulty.delegate.claimBatch()!!.items.map { it.id })
     }
 
     @Test

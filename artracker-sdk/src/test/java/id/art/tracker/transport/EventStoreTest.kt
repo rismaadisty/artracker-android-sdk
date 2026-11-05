@@ -288,6 +288,23 @@ class EventStoreTest {
     }
 
     @Test
+    fun clear_deletesEverythingIncludingInFlightAndPriority0() {
+        val s = store()
+        s.insert(listOf(item("crash", 0, 1), item("err", 1, 2), item("evt", 2, 3), item("chunk", 3, 4)))
+        assertNotNull(s.claimBatch(maxItems = 2)) // two rows are now in flight
+        assertEquals(2, s.pendingCount())
+
+        s.clear()
+
+        assertEquals(0, s.pendingCount())
+        assertTrue(allIds().isEmpty())
+        assertNull(s.claimBatch())
+        // Still usable afterwards.
+        s.insert(listOf(item("after", 2, 5)))
+        assertEquals(listOf("after"), allIds())
+    }
+
+    @Test
     fun insert_swallowsSqliteFailureAndReadsDegradeGracefully() {
         val s = store()
         s.insert(listOf(item("a", 2, 1)))
