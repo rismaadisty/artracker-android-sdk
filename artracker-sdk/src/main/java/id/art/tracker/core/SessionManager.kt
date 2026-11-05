@@ -48,6 +48,10 @@ internal class SessionManager(
         return result
     }
 
+    /** The current session id without starting or rotating anything (null before the first session). */
+    @Synchronized
+    fun peekId(): String? = id
+
     fun onForeground() {
         val events = ArrayList<Event>(2)
         synchronized(this) {

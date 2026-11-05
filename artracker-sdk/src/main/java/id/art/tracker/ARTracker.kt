@@ -69,7 +69,10 @@ public object ARTracker {
         withCore("log") { it.log(level, message, attributes) }
     }
 
-    /** Records a handled [throwable] as an `error` log item named `exception`. */
+    /**
+     * Records a handled [throwable] as an `error` log item named `exception`, with its stack trace, a fingerprint,
+     * the recent breadcrumbs and the current screen attached. At most 10 identical errors are sent per session.
+     */
     @JvmStatic
     @JvmOverloads
     public fun captureException(throwable: Throwable, attributes: Map<String, Any?> = emptyMap()) {

@@ -13,6 +13,14 @@ import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.lifecycle.AppLifecycleObserver
 import id.art.tracker.lifecycle.NavTracker
 import id.art.tracker.lifecycle.ScreenTracker
+import id.art.tracker.privacy.AttributeRedactor
+import id.art.tracker.telemetry.Breadcrumbs
+import id.art.tracker.telemetry.CrashHandler
+import id.art.tracker.telemetry.CrashItemBuilder
+import id.art.tracker.telemetry.CrashRecovery
+import id.art.tracker.telemetry.CrashStore
+import id.art.tracker.telemetry.ErrorDeduper
+import id.art.tracker.telemetry.Stacktrace
 import id.art.tracker.transport.Backoff
 import id.art.tracker.transport.EventPipeline
 import id.art.tracker.transport.EventStore
@@ -22,8 +30,7 @@ import id.art.tracker.transport.IngestClient
 import id.art.tracker.transport.PayloadEncoder
 import id.art.tracker.transport.TransportConfigStore
 import id.art.tracker.transport.WorkManagerScheduler
-import java.io.PrintWriter
-import java.io.StringWriter
+import java.io.File
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,6 +69,24 @@ internal class ARTrackerCore(
 
     val identity = IdentityStore(SharedPrefsStore(app, IDENTITY_PREFS))
 
+    /** Last actions of the user/app, attached to crashes and handled errors (never sent on their own). */
+    val breadcrumbs = Breadcrumbs()
+    private val errorDeduper = ErrorDeduper()
+    private val crashStore = CrashStore(File(app.filesDir, CRASH_DIR))
+
+    /**
+     * Lock-free snapshot of what the crash handler needs, kept up to date by the paths below: the handler runs on
+     * a dying thread that may hold any lock, so it must not call [session] (synchronized) or [device] (lazy).
+     * The user id is read straight from [identity] (a volatile) and the screen from [screens] (a volatile).
+     */
+    @Volatile
+    private var crashSessionId: String? = null
+
+    @Volatile
+    private var crashAppVersion: String? = config.appVersion?.takeIf { it.isNotBlank() }
+
+    private var crashHandler: CrashHandler? = null
+
     /** Lazy: building it may query the PackageManager, which init must not do on the main thread. */
     val device: DeviceContext by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { DeviceContext(app, config.appVersion) }
 
@@ -71,6 +96,7 @@ internal class ARTrackerCore(
 
     private val sessionListener = object : SessionManager.Listener {
         override fun onSessionStart(id: String) {
+            crashSessionId = id
             runCatching {
                 if (isDisabled()) return@runCatching
                 // Device facts are gathered lazily on the pipeline thread: nothing here may cost the caller.
@@ -99,13 +125,23 @@ internal class ARTrackerCore(
         listener = sessionListener,
     )
 
-    val items: ItemFactory = ItemFactory(clock, { session.currentId() }, { identity.userId })
+    val items: ItemFactory = ItemFactory(
+        clock,
+        { session.currentId().also { crashSessionId = it } },
+        { identity.userId },
+    )
 
     /**
-     * Funnel for every `screen_view`. TODO(Task 15): pass `onScreenChanged` to feed the breadcrumb ring buffer.
-     * Items are dropped here while the SDK is disabled (opt-out / 401 kill-switch).
+     * Funnel for every `screen_view`. Items are dropped here while the SDK is disabled (opt-out / 401
+     * kill-switch). `onScreenChanged` runs inside the tracker's monitor, so it only does a lock-free breadcrumb add.
      */
-    val screens: ScreenTracker = ScreenTracker({ item -> if (!isDisabled()) emit(item) }, items)
+    val screens: ScreenTracker = ScreenTracker(
+        { item -> if (!isDisabled()) emit(item) },
+        items,
+        onScreenChanged = { previous, current ->
+            breadcrumbs.add("screen", current, if (previous != null) mapOf("previous" to previous) else emptyMap())
+        },
+    )
 
     private val activityTracker = ActivityTracker(screens, listener = null) // TODO(Task 23): replay window listener
     private val navTracker = NavTracker(screens)
@@ -137,6 +173,10 @@ internal class ARTrackerCore(
     @Volatile
     private var persistJob: Job? = null
 
+    /** The second half of init (crash recovery and the initial flush decision); awaited by [awaitIdle]. */
+    @Volatile
+    private var backgroundInitJob: Job? = null
+
     /** Whether the queue already held items from an earlier run; decided before this run enqueues anything. */
     @Volatile
     private var leftoverItems = false
@@ -163,8 +203,11 @@ internal class ARTrackerCore(
      * still fires exactly once (no manual call, which would double count).
      */
     fun start() {
+        // First thing, before any further work: a crash during the rest of init is already captured.
+        crashHandler = CrashHandler.install(crashStore, ::buildCrashItem, shouldCapture = { !killSwitch.optedOut })
+        crashSessionId = session.peekId()
         FlusherRegistry.current = flusher
-        scope.launch {
+        backgroundInitJob = scope.launch {
             runCatching { onBackgroundInit() }.onFailure { SdkLog.w("background init hook failed", it) }
             // Items left by a previous run (including a crash) are sent right away; a fresh queue is not flushed.
             if (leftoverItems) pipeline.flushNow()
@@ -195,10 +238,35 @@ internal class ARTrackerCore(
     private var lifecycleStopped = false
 
     /**
-     * Extension point that runs on [scope] after queue maintenance and with [pipeline] ready.
-     * TODO(Task 15): recover crash files of the previous session. TODO(Task 16): collect ApplicationExitInfo.
+     * Extension point that runs on [scope] after queue maintenance and with [pipeline] ready: recovers the crash
+     * files of earlier runs into the queue (the caller flushes right away when anything was recovered, through
+     * [leftoverItems]). TODO(Task 16): collect ApplicationExitInfo.
      */
-    internal fun onBackgroundInit() = Unit
+    internal fun onBackgroundInit() {
+        crashStore.prepare()
+        // The redactor compiles its regexes on first use; do that now rather than while a process is dying.
+        runCatching { AttributeRedactor.redactString("warm-up 1 a@b.co") }
+        crashStore.deleteStaleTemp(clock.nowMs())
+        if (killSwitch.optedOut) {
+            // The user opted out after the crash: nothing recorded earlier may be sent.
+            crashStore.pending().forEach(crashStore::delete)
+            return
+        }
+        if (CrashRecovery.recover(crashStore, queue) > 0) leftoverItems = true
+    }
+
+    /** Runs inside the crash handler: lock-free reads only, no coroutines, database or network. */
+    private fun buildCrashItem(thread: Thread, t: Throwable): Pair<String, String> =
+        CrashItemBuilder.build(
+            thread = thread,
+            t = t,
+            nowMs = clock.nowMs(),
+            sessionId = crashSessionId,
+            userId = identity.userId,
+            appVersion = crashAppVersion,
+            screen = screens.currentScreen,
+            breadcrumbs = breadcrumbs,
+        )
 
     /** Returns true when items from an earlier run are waiting. Runs before the pipeline consumer ever starts. */
     private fun maintainQueueAndSaveTransportConfig(): Boolean {
@@ -212,6 +280,7 @@ internal class ARTrackerCore(
                 environment = config.environment,
                 appVersion = device.appVersion,
             )
+            crashAppVersion = device.appVersion
         }.onFailure { SdkLog.w("saving transport config failed", it) }
         return runCatching { queue.pendingCount() > 0 }.getOrDefault(false)
     }
@@ -224,6 +293,7 @@ internal class ARTrackerCore(
             SdkLog.w("track() ignored: name is blank")
             return
         }
+        breadcrumbs.add("event", name)
         emit(items.event(name, snapshot(properties)))
     }
 
@@ -244,6 +314,7 @@ internal class ARTrackerCore(
 
     fun log(level: LogLevel, message: String, attributes: Map<String, Any?>) {
         if (isDisabled()) return
+        breadcrumbs.add("log", message, mapOf("level" to level.wire))
         emit(items.log(level, "log", message, snapshot(attributes)))
     }
 
@@ -261,15 +332,27 @@ internal class ARTrackerCore(
     }
 
     /**
-     * TODO(Task 15): replaced by the telemetry pipeline (stack trace limits, fingerprint dedupe, breadcrumbs).
-     * Until then: a basic `log`/`error` item named `exception`.
+     * Handled exception: `log`/`error` item named `exception` with the stack trace (cause chain, max 16 KB), a
+     * fingerprint, the breadcrumbs and the current screen. The same fingerprint is reported at most 10 times
+     * per session. The item passes through the pipeline, so redaction and the 24 KB attribute budget apply.
      */
     fun captureException(throwable: Throwable, attributes: Map<String, Any?>) {
         if (isDisabled()) return
+        val fingerprint = Stacktrace.fingerprint(throwable)
+        val summary = Stacktrace.summary(throwable)
+        // Evaluated for its side effect too: it records the session id for the crash handler.
+        val sessionId = session.currentId().also { crashSessionId = it }
+        if (!errorDeduper.shouldReport(sessionId, fingerprint)) return
         val attrs = LinkedHashMap<String, Any?>(snapshot(attributes))
         attrs["exception_class"] = throwable.javaClass.name
-        attrs["stacktrace"] = stackTraceOf(throwable)
-        emit(items.log(LogLevel.ERROR, "exception", "${throwable.javaClass.name}: ${throwable.message}", attrs))
+        attrs["stacktrace"] = Stacktrace.format(throwable)
+        attrs["fingerprint"] = fingerprint
+        attrs["handled"] = true
+        attrs["breadcrumbs"] = breadcrumbs.snapshot()
+        screens.currentScreen?.let { attrs["screen"] = it }
+        // Added after the snapshot: the trail attached to this error ends before it, later errors see it.
+        breadcrumbs.add("error", summary)
+        emit(items.log(LogLevel.ERROR, "exception", summary, attrs))
     }
 
     fun flush() {
@@ -369,16 +452,11 @@ internal class ARTrackerCore(
     private fun snapshot(map: Map<String, Any?>): Map<String, Any?> =
         if (map.isEmpty()) emptyMap() else LinkedHashMap(map)
 
-    private fun stackTraceOf(t: Throwable): String {
-        val sw = StringWriter()
-        PrintWriter(sw).use { t.printStackTrace(it) }
-        return sw.toString().take(MAX_STACKTRACE_CHARS)
-    }
-
     /** Awaits queued persistence/opt-out writes and the pipeline: deterministic tests without sleeping. */
     @VisibleForTesting
     suspend fun awaitIdle() {
         persistJob?.join()
+        backgroundInitJob?.join()
         pipeline.awaitIdle()
     }
 
@@ -390,6 +468,7 @@ internal class ARTrackerCore(
         runCatching { navTracker.clear() }
         onMain { ProcessLifecycleOwner.get().lifecycle.removeObserver(processObserver) }
         runCatching { pipeline.stopTimer() }
+        runCatching { crashHandler?.uninstall() }
         scope.cancel()
         if (FlusherRegistry.current === flusher) FlusherRegistry.current = null
         queue.close()
@@ -407,7 +486,7 @@ internal class ARTrackerCore(
         private const val SESSION_PREFS = "artracker_session"
         private const val IDENTITY_PREFS = "artracker_identity"
         private const val RETENTION_MS = 7L * 24 * 60 * 60 * 1000
-        private const val MAX_STACKTRACE_CHARS = 16 * 1024
+        private const val CRASH_DIR = "artracker/crash"
 
         @Volatile
         private var instance: ARTrackerCore? = null
