@@ -181,6 +181,7 @@ class AttributeRedactorTest {
         val out = AttributeRedactor.redact(a)
         val json = Json.encode(out)
         assertTrue(json.length <= AttributeRedactor.MAX_BYTES)
+        assertTrue(json.contains("[circular]") || json.contains("_truncated"))
     }
 
     @Test
@@ -271,12 +272,59 @@ class AttributeRedactorTest {
 
     @Test
     fun jsWhitespaceSemantics_nbspAfterBearer() {
-        assertEquals("Bearer [redacted]", rs("Bearer abcdef123456"))
+        assertEquals("Bearer [redacted]", rs("Bearer\u00A0abcdef123456"))
     }
 
     @Test
     fun asciiWordBoundaries() {
         // JS \b is ASCII-only: a leading non-ASCII letter still counts as a boundary.
         assertEquals("é[redacted]", rs("ésk_live_abcdefghijklmnop"))
+    }
+
+    // ---- email: linear time and no recursion (fix round 1) ----
+
+    @Test
+    fun longStringWithoutAt_isLinear() {
+        // Digits and '=' pass the trigger pre-check; the email pattern used to be quadratic here (73 s for 100 KB).
+        // Generous 2 s bound so the test is not flaky; a regression is orders of magnitude slower.
+        val input = "a1=".repeat(34_000) // 102 KB
+        val start = System.nanoTime()
+        val out = rs(input)
+        val ms = (System.nanoTime() - start) / 1_000_000
+        assertEquals(input, out)
+        assertTrue("took ${ms}ms", ms < 2_000)
+    }
+
+    @Test
+    fun manyDomainLabels_doesNotOverflowTheStack() {
+        val labels = ".b".repeat(50_000)
+        // No TLD (labels are single letters): not an email, left untouched, same as the web regex.
+        assertEquals("a@b$labels", rs("a@b$labels"))
+        // With a TLD at the end the whole address is masked.
+        assertEquals("a***@b$labels.com", rs("a@b$labels.com"))
+    }
+
+    @Test
+    fun longLegitimateEmail_isMasked() {
+        assertEquals("u***@sub.sub2.sub3.example.co.id", rs("u.name+tag_1%x@sub.sub2.sub3.example.co.id"))
+        assertEquals("hi x***@a-b.example.com, bye", rs("hi x@a-b.example.com, bye"))
+    }
+
+    @Test
+    fun maskEmails_matchesTheWebRegexOnRandomInputs() {
+        val reference = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}""")
+        val alphabet = "abcab.. -@1_%+Z" // letters and dots weighted so many strings contain real emails
+        val rnd = java.util.Random(42)
+        var matched = 0
+        repeat(60_000) {
+            val s = String(CharArray(rnd.nextInt(24)) { alphabet[rnd.nextInt(alphabet.length)] })
+            val expected = reference.replace(s) { m ->
+                val at = m.value.indexOf('@')
+                "${m.value.substring(0, 1)}***${m.value.substring(at)}"
+            }
+            if (expected != s) matched++
+            assertEquals("input '$s'", expected, AttributeRedactor.maskEmails(s))
+        }
+        assertTrue("fuzz produced too few matches: $matched", matched > 300)
     }
 }

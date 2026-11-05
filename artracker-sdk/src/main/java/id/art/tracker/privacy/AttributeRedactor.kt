@@ -36,7 +36,6 @@ internal object AttributeRedactor {
         Regex("""$B_START(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{8,}$B_END"""),
         Regex("""${B_START}art_(?:sec|live)_[A-Za-z0-9]{8,}$B_END"""),
     )
-    private val EMAIL_RE = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}""")
     private val CARD_RE = Regex("""(^|\D)((?:\d[ -]?){12,18}\d)(?!\d)""")
     private val NIK_RE = Regex("""(^|\D)(\d{16})(?!\d)""")
     private val PHONE_RE = Regex("""(^|\D)((?:\+62|62|0)8\d{8,11})(?!\d)""")
@@ -70,6 +69,66 @@ internal object AttributeRedactor {
         return "${email.substring(0, 1)}***${email.substring(at)}"
     }
 
+    private fun isLocalChar(c: Char) =
+        c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '.' || c == '_' || c == '%' || c == '+' || c == '-'
+
+    private fun isLabelChar(c: Char) = c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '-'
+
+    private fun isAsciiLetter(c: Char) = c in 'A'..'Z' || c in 'a'..'z'
+
+    /**
+     * End index (exclusive) of the domain that the web pattern `[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`
+     * would match starting at [from], or -1. Hand-rolled because java.util.regex recurses once per `(?:...)*`
+     * iteration (StackOverflowError on thousands of labels), and a possessive group would change the result.
+     * Semantics: labels are dot-separated non-empty runs; the match takes as many labels as possible and ends with
+     * the leading letters (>= 2) of the last label used.
+     */
+    private fun domainEnd(s: String, from: Int): Int {
+        var run = from
+        while (run < s.length && (isLabelChar(s[run]) || s[run] == '.')) run++
+        var best = -1
+        var segStart = from
+        var index = 0
+        while (true) {
+            var segEnd = segStart
+            while (segEnd < run && s[segEnd] != '.') segEnd++
+            if (segEnd == segStart) break // empty label ends the chain
+            if (index >= 1) {
+                var e = segStart
+                while (e < segEnd && isAsciiLetter(s[e])) e++
+                if (e - segStart >= 2) best = e
+            }
+            if (segEnd == run) break
+            segStart = segEnd + 1
+            index++
+        }
+        return best
+    }
+
+    /**
+     * Same matches as the web `EMAIL_RE` (`[A-Za-z0-9._%+-]+@domain`, leftmost, non-overlapping) in linear time:
+     * every match needs an '@', and the local part always starts at the beginning of the run of local characters.
+     */
+    internal fun maskEmails(s: String): String {
+        var at = s.indexOf('@')
+        if (at < 0) return s
+        val out = StringBuilder()
+        var copied = 0
+        while (at >= 0) {
+            var start = at
+            while (start > copied && isLocalChar(s[start - 1])) start--
+            val end = if (start < at) domainEnd(s, at + 1) else -1
+            if (end > 0) {
+                out.append(s, copied, start).append(maskEmail(s.substring(start, end)))
+                copied = end
+                at = s.indexOf('@', end)
+            } else {
+                at = s.indexOf('@', at + 1)
+            }
+        }
+        return out.append(s, copied, s.length).toString()
+    }
+
     fun redactString(s: String): String {
         if (!TRIGGER.containsMatchIn(s)) return s
         var out = s
@@ -78,7 +137,7 @@ internal object AttributeRedactor {
         out = BASIC_RE.replace(out, "Basic $REDACTED")
         for (re in API_KEY_RES) out = re.replace(out, REDACTED)
         out = UrlScrubber.redactQueryParams(out)
-        out = EMAIL_RE.replace(out) { maskEmail(it.value) }
+        out = maskEmails(out)
         out = CARD_RE.replace(out) { m ->
             val pre = m.groupValues[1]
             val digits = m.groupValues[2].replace(" ", "").replace("-", "")
