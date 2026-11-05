@@ -285,9 +285,11 @@ class AttributeRedactorTest {
 
     @Test
     fun longStringWithoutAt_isLinear() {
-        // Digits and '=' pass the trigger pre-check; the email pattern used to be quadratic here (73 s for 100 KB).
+        // Digits pass the trigger pre-check, and every character is a valid local-part character, so a naive
+        // `[A-Za-z0-9._%+-]+@...` regex rescans the whole run from each start position (quadratic, ~73 s here).
+        // A separator such as '=' would break the run into short pieces and hide the problem.
         // Generous 2 s bound so the test is not flaky; a regression is orders of magnitude slower.
-        val input = "a1=".repeat(34_000) // 102 KB
+        val input = "a1".repeat(50_000) // 100 KB, no '@'
         val start = System.nanoTime()
         val out = rs(input)
         val ms = (System.nanoTime() - start) / 1_000_000
