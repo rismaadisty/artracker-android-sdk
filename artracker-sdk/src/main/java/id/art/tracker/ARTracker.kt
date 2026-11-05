@@ -52,6 +52,16 @@ public object ARTracker {
         withCore("screen") { it.screen(name) }
     }
 
+    /**
+     * Records a `screen_view` (type `compose`) for every destination change of a Jetpack Navigation
+     * `NavController`. Typed `Any` so the SDK does not need Navigation on the classpath: without it (or for any
+     * other argument) the call is ignored. Tracking the same controller twice has no extra effect.
+     */
+    @JvmStatic
+    public fun trackNavController(navController: Any) {
+        withCore("trackNavController") { it.trackNavController(navController) }
+    }
+
     /** Records a log item at [level]. */
     @JvmStatic
     @JvmOverloads

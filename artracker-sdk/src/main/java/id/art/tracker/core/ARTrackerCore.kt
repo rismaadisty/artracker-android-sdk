@@ -1,12 +1,18 @@
 package id.art.tracker.core
 
 import android.app.Application
+import android.os.Handler
 import android.os.Looper
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.ARTrackerConfig
 import id.art.tracker.Diagnostics
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
+import id.art.tracker.lifecycle.ActivityTracker
+import id.art.tracker.lifecycle.AppLifecycleObserver
+import id.art.tracker.lifecycle.NavTracker
+import id.art.tracker.lifecycle.ScreenTracker
 import id.art.tracker.transport.Backoff
 import id.art.tracker.transport.EventPipeline
 import id.art.tracker.transport.EventStore
@@ -92,6 +98,19 @@ internal class ARTrackerCore(
 
     val items = ItemFactory(clock, { session.currentId() }, { identity.userId })
 
+    /**
+     * Funnel for every `screen_view`. TODO(Task 15): pass `onScreenChanged` to feed the breadcrumb ring buffer.
+     * Items are dropped here while the SDK is disabled (opt-out / 401 kill-switch).
+     */
+    val screens = ScreenTracker({ item -> if (!isDisabled()) emit(item) }, items)
+
+    private val activityTracker = ActivityTracker(screens, listener = null) // TODO(Task 23): replay window listener
+    private val navTracker = NavTracker(screens)
+
+    /** Hooks of [ProcessLifecycleOwner]; added on the main thread (see [registerProcessObserver]). */
+    private val processObserver = AppLifecycleObserver(onForeground = ::onForeground, onBackground = ::onBackground)
+    private val mainHandler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Handler(Looper.getMainLooper()) }
+
     /** Cheap to construct: the database is only opened on first use, in the background. */
     private val queue = EventStore(app, clock)
 
@@ -136,8 +155,9 @@ internal class ARTrackerCore(
 
     /**
      * Second half of init, after construction: publishes the flusher, schedules the remaining background work
-     * and enters the foreground. Task 14 replaces the direct [onForeground] call with the real process/activity
-     * lifecycle observers; until then init counts as the first foreground.
+     * and starts the lifecycle observers. The foreground is entered by [processObserver]: `LifecycleRegistry`
+     * replays `ON_START` to a late observer, so when init runs after the first Activity started, [onForeground]
+     * still fires exactly once (no manual call, which would double count).
      */
     fun start() {
         FlusherRegistry.current = flusher
@@ -146,8 +166,30 @@ internal class ARTrackerCore(
             // Items left by a previous run (including a crash) are sent right away; a fresh queue is not flushed.
             if (leftoverItems) pipeline.flushNow()
         }
-        onForeground()
+        app.registerActivityLifecycleCallbacks(activityTracker)
+        registerProcessObserver()
     }
+
+    /**
+     * `LifecycleRegistry` of the process owner only accepts calls on the main thread, so off the main thread the
+     * registration is posted there. [lifecycleStopped] keeps a late post from registering after [shutdown].
+     */
+    private fun registerProcessObserver() {
+        onMain {
+            if (!lifecycleStopped) ProcessLifecycleOwner.get().lifecycle.addObserver(processObserver)
+        }
+    }
+
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runCatching(block).onFailure { SdkLog.w("main-thread lifecycle work failed", it) }
+        } else {
+            mainHandler.post { runCatching(block).onFailure { SdkLog.w("main-thread lifecycle work failed", it) } }
+        }
+    }
+
+    @Volatile
+    private var lifecycleStopped = false
 
     /**
      * Extension point that runs on [scope] after queue maintenance and with [pipeline] ready.
@@ -188,8 +230,13 @@ internal class ARTrackerCore(
             SdkLog.w("screen() ignored: name is blank")
             return
         }
-        // TODO(Task 14): ScreenTracker adds `previous` and `type`; this is the manual path.
-        emit(items.event("screen_view", mapOf("screen" to name)))
+        screens.onScreen(name, "manual")
+    }
+
+    /** Facade entry for `ARTracker.trackNavController`; a no-op without the Navigation dependency. */
+    fun trackNavController(navController: Any) {
+        if (isDisabled()) return
+        navTracker.track(navController)
     }
 
     fun log(level: LogLevel, message: String, attributes: Map<String, Any?>) {
@@ -281,7 +328,7 @@ internal class ARTrackerCore(
 
     // endregion
 
-    // region lifecycle hooks (Task 14 wires the real observers to these)
+    // region lifecycle hooks (driven by [processObserver])
 
     internal fun onForeground() {
         foreground = true
@@ -334,6 +381,11 @@ internal class ARTrackerCore(
 
     /** Cancels everything this instance started. Used by `ARTracker.resetForTest()`. */
     fun shutdown() {
+        lifecycleStopped = true
+        runCatching { app.unregisterActivityLifecycleCallbacks(activityTracker) }
+        runCatching { activityTracker.detachAll() }
+        runCatching { navTracker.clear() }
+        onMain { ProcessLifecycleOwner.get().lifecycle.removeObserver(processObserver) }
         runCatching { pipeline.stopTimer() }
         scope.cancel()
         if (FlusherRegistry.current === flusher) FlusherRegistry.current = null

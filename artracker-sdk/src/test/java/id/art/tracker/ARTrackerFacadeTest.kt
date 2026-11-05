@@ -248,9 +248,9 @@ class ARTrackerFacadeTest {
 
         val pending = ARTracker.diagnostics().pendingItems
         val sent = sentItems()
-        // 800 tracked items + the session items emitted by init (session_start, app_foreground),
-        // each either still queued or delivered exactly once.
-        assertEquals(802, pending + sent.size)
+        // 800 tracked items + the session_start emitted lazily by the first of them (init no longer enters the
+        // foreground by itself: the process lifecycle observer does), each either queued or delivered once.
+        assertEquals(801, pending + sent.size)
         assertEquals(sent.size, sent.map { it.getString("id") }.toSet().size)
     }
 
@@ -348,7 +348,8 @@ class ARTrackerFacadeTest {
         awaitIdle()
 
         assertEquals(1, server.requestCount)
-        assertEquals(listOf("resumed"), sentItems().map { it.getString("name") })
+        // Nothing but the post-opt-in item (and the session it lazily started): init's own items were discarded.
+        assertEquals(listOf("resumed", "session_start"), sentItems().map { it.getString("name") }.sorted())
         assertFalse(ARTracker.diagnostics().disabled)
     }
 
