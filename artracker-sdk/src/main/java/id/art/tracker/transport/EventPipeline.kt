@@ -70,6 +70,9 @@ internal class EventPipeline(
     private val flushSignal = Channel<Unit>(Channel.CONFLATED)
     private val flushPending = AtomicBoolean(false)
 
+    /** Set by [flushNow]; taken by the consumer once it has drained and persisted everything enqueued before. */
+    private val drainFlushPending = AtomicBoolean(false)
+
     private val timerLock = Any()
     private var timerJob: Job? = null
 
@@ -108,7 +111,7 @@ internal class EventPipeline(
                 while (isActive) {
                     delay(flushIntervalMs)
                     try {
-                        if (queue.pendingCount() > 0) requestFlush()
+                        if (queue.pendingCount() > 0) triggerFlush()
                     } catch (e: Exception) {
                         SdkLog.w("flush timer tick failed", e)
                     }
@@ -124,8 +127,26 @@ internal class EventPipeline(
         }
     }
 
-    /** Asks for a flush on the pipeline scope. Requests made while one is already queued are merged. */
-    fun requestFlush() {
+    /**
+     * Flush that is ordered after everything already enqueued. Never blocks the caller (safe from the main
+     * thread): it only flags the request and wakes the consumer, which drains the channel, persists the open
+     * group and only then triggers the flush, so the flush sees every row enqueued before this call. Items
+     * enqueued afterwards may or may not be included. Repeated calls before the consumer reacts are merged.
+     * Use this for `ARTracker.flush()`, app-background and the like.
+     */
+    fun flushNow() {
+        if (drainFlushPending.compareAndSet(false, true)) {
+            // Counted immediately so awaitIdle() also waits for the flush this call leads to.
+            progress.update { it.copy(flushes = it.flushes + 1) }
+            nudge.trySend(Unit)
+        }
+    }
+
+    /** Same as [flushNow]; kept for existing callers. */
+    fun requestFlush() = flushNow()
+
+    /** Unordered flush trigger for the consumer (after its own persist) and the timer. Merged while one is queued. */
+    private fun triggerFlush() {
         if (flushPending.compareAndSet(false, true)) {
             progress.update { it.copy(flushes = it.flushes + 1) }
             flushSignal.trySend(Unit)
@@ -156,7 +177,7 @@ internal class EventPipeline(
         var groupMessages = 0
         var groupTimer: Job? = null
 
-        suspend fun persistGroup() {
+        fun persistGroup() {
             groupTimer?.cancel()
             groupTimer = null
             val count = groupMessages
@@ -169,6 +190,19 @@ internal class EventPipeline(
             }
         }
 
+        fun accept(item: TelemetryItem) {
+            if (groupMessages == 0) {
+                groupTimer = scope.launch {
+                    delay(GROUP_WINDOW_MS)
+                    nudge.trySend(Unit)
+                }
+            }
+            groupMessages++
+            val stored = prepare(item)
+            if (stored != null) buffer += stored
+            if (groupMessages >= GROUP_SIZE || stored?.priority == 0) persistGroup()
+        }
+
         while (true) {
             // Channel first: pending items are always drained before a nudge persists the partial group.
             val item = select<TelemetryItem?> {
@@ -176,20 +210,33 @@ internal class EventPipeline(
                 nudge.onReceive { null }
             }
             try {
-                if (item == null) {
-                    if (groupMessages > 0) persistGroup()
+                if (item != null) {
+                    accept(item)
                     continue
                 }
-                if (groupMessages == 0) {
-                    groupTimer = scope.launch {
-                        delay(GROUP_WINDOW_MS)
-                        nudge.trySend(Unit)
+                // Taking the flag first means every item enqueued before flushNow() is visible to tryReceive.
+                val flushAfter = drainFlushPending.compareAndSet(true, false)
+                try {
+                    if (flushAfter) {
+                        while (true) {
+                            val next = channel.tryReceive().getOrNull() ?: break
+                            try {
+                                accept(next)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                SdkLog.w("pipeline step failed", e)
+                            }
+                        }
+                    }
+                    if (groupMessages > 0) persistGroup()
+                } finally {
+                    if (flushAfter) {
+                        // Trigger first, then release flushNow()'s reservation, so the count never dips to zero.
+                        triggerFlush()
+                        progress.update { it.copy(flushes = it.flushes - 1) }
                     }
                 }
-                groupMessages++
-                val stored = prepare(item)
-                if (stored != null) buffer += stored
-                if (groupMessages >= GROUP_SIZE || stored?.priority == 0) persistGroup()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -248,7 +295,7 @@ internal class EventPipeline(
         } catch (e: Exception) {
             0
         }
-        if (urgent || pending >= FLUSH_PENDING_THRESHOLD) requestFlush()
+        if (urgent || pending >= FLUSH_PENDING_THRESHOLD) triggerFlush()
     }
 
     // endregion

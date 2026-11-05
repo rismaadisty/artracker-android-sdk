@@ -256,6 +256,61 @@ class EventPipelineTest {
     }
 
     @Test
+    fun flushNow_includesUnpersistedPartialGroup_inOneRequest() = runTest {
+        val p = pipeline()
+        // Distinct timestamps: the queue orders by priority, then age, then id.
+        val items = (0 until 3).map { clock.advance(1); factory.event("e$it") }
+        items.forEach { p.enqueue(it) }
+
+        p.flushNow() // before the 1000 ms group window elapses; nothing is persisted yet
+        p.awaitIdle()
+
+        assertEquals(listOf(items.map { it.id }), requests)
+        assertEquals(listOf(3), queue.groups.map { it.size })
+        assertEquals(0, queue.pendingCount())
+        assertTrue("took ${currentTime}ms of virtual time", currentTime < 1_000)
+    }
+
+    @Test
+    fun flushNow_includesAllEnqueuedItems_beyondGroupSize() = runTest {
+        val p = pipeline()
+        val items = (0 until 45).map { clock.advance(1); factory.event("e$it") }
+        items.forEach { p.enqueue(it) }
+
+        p.flushNow()
+        p.awaitIdle()
+
+        assertEquals(items.map { it.id }, queue.stored.map { it.id })
+        assertEquals(listOf(20, 20, 5), queue.groups.map { it.size })
+        // Sent in order, in batches of at most 50: here a single request with all 45.
+        assertEquals(listOf(items.map { it.id }), requests)
+        assertEquals(0, queue.pendingCount())
+    }
+
+    @Test
+    fun flushNow_doesNotBlockCaller() = runTest {
+        val p = pipeline()
+        p.enqueue(factory.event("a"))
+        p.flushNow()
+        // The consumer has not run yet (StandardTestDispatcher): the call returned without doing any work.
+        assertTrue(queue.groups.isEmpty())
+        assertTrue(requests.isEmpty())
+        p.awaitIdle()
+        assertEquals(1, requests.size)
+    }
+
+    @Test
+    fun requestFlush_isOrderedAfterEnqueuedItems() = runTest {
+        val p = pipeline()
+        val a = factory.event("a")
+        p.enqueue(a)
+        p.requestFlush()
+        p.awaitIdle()
+
+        assertEquals(listOf(listOf(a.id)), requests)
+    }
+
+    @Test
     fun enqueue_neverBlocks() = runTest {
         // The consumer cannot run until this test body suspends (StandardTestDispatcher), i.e. it is held.
         val p = pipeline()
