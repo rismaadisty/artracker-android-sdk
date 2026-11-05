@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "artracker-android"
 include(":app")
+include(":artracker-sdk")
