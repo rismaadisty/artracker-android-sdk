@@ -3,6 +3,7 @@ package id.art.tracker.transport
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.FakeQueue
+import id.art.tracker.testutil.FaultyQueue
 import id.art.tracker.testutil.InMemoryStore
 import java.io.ByteArrayInputStream
 import java.io.IOException
@@ -19,6 +20,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,7 +51,7 @@ class FlusherTest {
     private var encoderContext: () -> Map<String, Any?> = { mapOf("environment" to "test") }
     private val encoder = PayloadEncoder { encoderContext() }
 
-    private fun flusher() = Flusher(queue, encoder, sender, killSwitch, clock, Backoff(random = maxJitter), scheduler)
+    private fun flusher(q: ItemQueue = queue) = Flusher(q, encoder, sender, killSwitch, clock, Backoff(random = maxJitter), scheduler)
 
     private fun idsOf(body: ByteArray): List<String> {
         val json = GZIPInputStream(ByteArrayInputStream(body)).use { String(it.readBytes(), Charsets.UTF_8) }
@@ -369,5 +371,87 @@ class FlusherTest {
         assertEquals(400, seen.size)
         assertEquals(400, seen.toSet().size)
         assertFalse(queue.pendingCount() > 0)
+    }
+
+    @Test
+    fun senderThrowsError_batchReleased_errorPropagates() {
+        seed(3)
+        val f = Flusher(
+            queue, encoder, Sender { throw OutOfMemoryError("oom") }, killSwitch, clock,
+            Backoff(random = maxJitter), scheduler,
+        )
+        try {
+            f.flushOnce()
+            fail("expected OutOfMemoryError")
+        } catch (e: OutOfMemoryError) {
+            // propagated by design, after the batch was released
+        }
+        assertEquals(0, queue.inFlightCount())
+        assertEquals(3, queue.pendingCount())
+        // The lock was released by the unwinding: the batch can be claimed and sent again.
+        assertEquals(FlushOutcome.SENT, flusher().flushOnce())
+    }
+
+    @Test
+    fun encoderThrowsError_batchReleased_errorPropagates() {
+        seed(3)
+        encoderContext = { throw StackOverflowError() }
+        val f = flusher()
+        try {
+            f.flushOnce()
+            fail("expected StackOverflowError")
+        } catch (e: StackOverflowError) {
+            // propagated
+        }
+        assertEquals(0, queue.inFlightCount())
+        assertEquals(3, queue.pendingCount())
+    }
+
+    @Test
+    fun completeThrowsAfterAccepted_batchNotLeftInFlight() {
+        seed(3)
+        val faulty = FaultyQueue(queue, failComplete = IllegalStateException("sqlite"))
+        val f = flusher(faulty)
+        // Server accepted it, so releasing may cause a duplicate delivery; acceptable since ids are stable.
+        assertEquals(FlushOutcome.FAILED, f.flushOnce())
+        assertEquals(0, queue.inFlightCount())
+        assertEquals(3, queue.pendingCount())
+        assertEquals("queue_error", f.lastResult)
+        faulty.failComplete = null
+        assertEquals(FlushOutcome.SENT, f.flushOnce())
+        assertEquals(requests[0], requests[1])
+    }
+
+    @Test
+    fun unauthorizedWithThrowingRelease_stillTripsKillSwitch() {
+        seed(2)
+        results += SendResult.Unauthorized
+        val faulty = FaultyQueue(queue, failRelease = IllegalStateException("sqlite"))
+        val f = flusher(faulty)
+        assertEquals(FlushOutcome.FAILED, f.flushOnce())
+        assertTrue(killSwitch.isActive())
+        assertEquals("queue_error", f.lastResult)
+    }
+
+    @Test
+    fun releaseThrowingTwice_doesNotMaskOrCrash() {
+        seed(2)
+        results += SendResult.NetworkError(IOException("x"))
+        val faulty = FaultyQueue(queue, failRelease = IllegalStateException("sqlite"))
+        assertEquals(FlushOutcome.FAILED, flusher(faulty).flushOnce())
+        assertEquals(2, faulty.releaseCalls) // original attempt + finally retry
+    }
+
+    @Test
+    fun pausedUntil_usesClockAfterSendReturns() {
+        seed(2)
+        val slowSender = Sender {
+            clock.advance(7_000)
+            SendResult.NetworkError(IOException("slow"))
+        }
+        val f = Flusher(queue, encoder, slowSender, killSwitch, clock, Backoff(random = maxJitter), scheduler)
+        val start = clock.now
+        f.flushOnce()
+        assertEquals(start + 7_000 + 2_000, f.pausedUntilMs)
     }
 }

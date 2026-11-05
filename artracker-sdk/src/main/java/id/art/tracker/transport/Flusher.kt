@@ -5,6 +5,7 @@ import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SdkLog
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 internal enum class FlushOutcome {
@@ -36,6 +37,11 @@ internal enum class FlushOutcome {
  * caller blocks until the running batch finishes and then proceeds with its own claim; it never returns early
  * with a stale result. Callers therefore must not invoke this from the main thread.
  *
+ * Failure handling: once a batch is claimed it is always settled. Any [Exception] from the queue or kill-switch
+ * (not from the sender, which maps to a network error) ends the step as [FlushOutcome.FAILED] with
+ * `lastResult = "queue_error"`; [Error]s (e.g. OutOfMemoryError) and cancellation are NOT swallowed: the batch is
+ * released and they propagate to the caller.
+ *
  * The consecutive-failure counter that feeds [Backoff] lives here ([Backoff] is stateless).
  */
 internal class Flusher(
@@ -52,6 +58,7 @@ internal class Flusher(
     // Guarded by [lock].
     private var failures = 0
     private var claimCap = MAX_BATCH_ITEMS
+    private var settled = false
 
     /** Epoch millis before which no request is made. */
     @Volatile
@@ -60,7 +67,7 @@ internal class Flusher(
 
     /**
      * Short human-readable description of the last meaningful outcome, for diagnostics: `accepted`,
-     * `http_<status>_dropped`, `too_large_dropped`, `encode_failed_dropped`, `unauthorized`, `disabled`,
+     * `http_<status>_dropped`, `too_large_dropped`, `too_large_split`, `encode_failed_dropped`, `queue_error`, `unauthorized`, `disabled`,
      * `retry_after`, `network_error`. Null until the first batch is attempted. Idle (`EMPTY`) and
      * still-paused calls leave it unchanged so the cause of the pause stays visible.
      */
@@ -99,65 +106,107 @@ internal class Flusher(
             lastResult = "disabled"
             return stop(FlushOutcome.DISABLED)
         }
-        val now = clock.nowMs()
-        if (now < pausedUntilMs) return stop(FlushOutcome.PAUSED)
+        if (clock.nowMs() < pausedUntilMs) return stop(FlushOutcome.PAUSED)
 
         val batch = queue.claimBatch(maxItems = claimCap) ?: run {
             claimCap = MAX_BATCH_ITEMS
             return stop(FlushOutcome.EMPTY)
         }
 
+        // From here on the batch is in-flight and must be settled (completed or released) exactly once.
+        settled = false
+        try {
+            return process(batch)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // e.g. a SQLite failure in complete/release, or a throwing kill-switch store. The batch is
+            // released in the finally block below; report it and let the next trigger retry.
+            SdkLog.w("flush step failed", e)
+            lastResult = "queue_error"
+            return stop(FlushOutcome.FAILED)
+        } finally {
+            // Also runs for Errors (e.g. OutOfMemoryError while gzipping), which propagate after this.
+            if (!settled) {
+                try {
+                    queue.release(batch.id)
+                } catch (e: Throwable) {
+                    // Must not mask the original failure; resetOrphanedBatches() recovers it on next start.
+                    SdkLog.w("releasing batch ${batch.id} failed", e)
+                }
+            }
+        }
+    }
+
+    private fun process(batch: Batch): Step {
         val body = try {
-            encoder.encodeGzip(batch.items, now)
+            encoder.encodeGzip(batch.items, clock.nowMs())
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             // Encoding is deterministic: retrying the same items would fail forever and block the queue.
             SdkLog.w("encoding batch failed; dropping ${batch.items.size} items", e)
-            queue.complete(batch.id)
+            complete(batch)
             lastResult = "encode_failed_dropped"
             return Step(FlushOutcome.DROPPED, proceed = true)
         }
 
         val result = try {
             sender.send(body)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             SendResult.NetworkError(e)
         }
 
         return when (result) {
             SendResult.Accepted -> {
-                queue.complete(batch.id)
+                // If complete() throws the batch is released by step(): the server already has it, so this may
+                // cause a duplicate, which is acceptable because item ids are stable (server dedupes retries).
+                complete(batch)
                 failures = 0
                 lastResult = "accepted"
                 Step(FlushOutcome.SENT, proceed = true)
             }
             is SendResult.Drop -> {
-                queue.complete(batch.id)
+                complete(batch)
                 lastResult = "http_${result.status}_dropped"
                 Step(FlushOutcome.DROPPED, proceed = true)
             }
             SendResult.Unauthorized -> {
-                queue.release(batch.id)
+                // Trip first so a failing release() cannot skip the kill-switch.
                 killSwitch.trip()
                 lastResult = "unauthorized"
+                release(batch)
                 stop(FlushOutcome.DISABLED)
             }
             SendResult.TooLarge -> tooLarge(batch)
             is SendResult.RetryAfter -> {
-                queue.release(batch.id)
-                pauseFor(now, result.delayMs ?: backoff.delayFor(failures))
+                release(batch)
+                pauseFor(result.delayMs ?: backoff.delayFor(failures))
                 failures++
                 lastResult = "retry_after"
                 stop(FlushOutcome.PAUSED)
             }
             is SendResult.NetworkError -> {
-                queue.release(batch.id)
-                pauseFor(now, backoff.delayFor(failures))
+                release(batch)
+                pauseFor(backoff.delayFor(failures))
                 failures++
                 lastResult = "network_error"
                 scheduler.scheduleFlush()
                 stop(FlushOutcome.FAILED)
             }
         }
+    }
+
+    private fun complete(batch: Batch) {
+        queue.complete(batch.id)
+        settled = true
+    }
+
+    private fun release(batch: Batch) {
+        queue.release(batch.id)
+        settled = true
     }
 
     /**
@@ -167,18 +216,19 @@ internal class Flusher(
      */
     private fun tooLarge(batch: Batch): Step {
         if (batch.items.size <= 1) {
-            queue.complete(batch.id)
+            complete(batch)
             lastResult = "too_large_dropped"
             return Step(FlushOutcome.DROPPED, proceed = true)
         }
-        queue.release(batch.id)
+        release(batch)
         claimCap = (batch.items.size / 2).coerceAtLeast(1)
         lastResult = "too_large_split"
         return Step(FlushOutcome.FAILED, proceed = true)
     }
 
-    private fun pauseFor(now: Long, delayMs: Long) {
-        pausedUntilMs = now + delayMs.coerceAtLeast(0L)
+    /** Reads the clock again: the request may have taken a while since the pre-send check. */
+    private fun pauseFor(delayMs: Long) {
+        pausedUntilMs = clock.nowMs() + delayMs.coerceAtLeast(0L)
     }
 
     private companion object {
