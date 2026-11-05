@@ -21,19 +21,36 @@ internal class ScreenTracker(
     var currentScreen: String? = null
         private set
 
+    private var currentType: String = "manual"
+
+    @Synchronized
     fun onScreen(name: String, type: String) {
         if (name.isBlank()) return
-        val previous: String?
-        synchronized(this) {
-            previous = currentScreen
-            if (previous == name) return
-            currentScreen = name
-        }
+        val previous = currentScreen
+        if (previous == name) return
+        // Build the item BEFORE recording the new screen: creating it may start a session (hard-cap rotation),
+        // whose listener calls onSessionStarted(), which must still see the old screen.
         val attrs = LinkedHashMap<String, Any?>(3)
         attrs["screen"] = name
         if (previous != null) attrs["previous"] = previous
         attrs["type"] = type
-        emit(items.event("screen_view", attrs))
+        val item = items.event("screen_view", attrs)
+        currentScreen = name
+        currentType = type
+        emit(item)
         runCatching { onScreenChanged?.invoke(previous, name) }
+    }
+
+    /**
+     * A new session has begun (idle timeout, hard cap, logout): the screen the user is still looking at is
+     * reported again, in the new session and without `previous`, because Activities and Compose navigation do
+     * not re-resume on their own. [sessionItems] must stamp the NEW session (the caller is inside the session
+     * listener). Does nothing before the first screen, and within one session duplicates stay suppressed.
+     * Not reported to [onScreenChanged]: the visible screen did not change.
+     */
+    @Synchronized
+    fun onSessionStarted(sessionItems: ItemFactory) {
+        val screen = currentScreen ?: return
+        emit(sessionItems.event("screen_view", mapOf("screen" to screen, "type" to currentType)))
     }
 }

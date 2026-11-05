@@ -75,7 +75,10 @@ internal class ARTrackerCore(
                 if (isDisabled()) return@runCatching
                 // Device facts are gathered lazily on the pipeline thread: nothing here may cost the caller.
                 val attrs = LazyAttributes { device.sessionStartAttributes() }
-                emit(itemsFor(id, identity.userId).session("session_start", attrs))
+                val sessionItems = itemsFor(id, identity.userId)
+                emit(sessionItems.session("session_start", attrs))
+                // The screen still on display belongs to this new session too (no-op for the very first one).
+                screens.onSessionStarted(sessionItems)
             }
         }
 
@@ -89,20 +92,20 @@ internal class ARTrackerCore(
         }
     }
 
-    val session = SessionManager(
+    val session: SessionManager = SessionManager(
         store = SharedPrefsStore(app, SESSION_PREFS),
         clock = clock,
         timeoutMs = config.sessionTimeoutMs,
         listener = sessionListener,
     )
 
-    val items = ItemFactory(clock, { session.currentId() }, { identity.userId })
+    val items: ItemFactory = ItemFactory(clock, { session.currentId() }, { identity.userId })
 
     /**
      * Funnel for every `screen_view`. TODO(Task 15): pass `onScreenChanged` to feed the breadcrumb ring buffer.
      * Items are dropped here while the SDK is disabled (opt-out / 401 kill-switch).
      */
-    val screens = ScreenTracker({ item -> if (!isDisabled()) emit(item) }, items)
+    val screens: ScreenTracker = ScreenTracker({ item -> if (!isDisabled()) emit(item) }, items)
 
     private val activityTracker = ActivityTracker(screens, listener = null) // TODO(Task 23): replay window listener
     private val navTracker = NavTracker(screens)

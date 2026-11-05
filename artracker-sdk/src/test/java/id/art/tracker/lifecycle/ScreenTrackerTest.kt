@@ -68,4 +68,30 @@ class ScreenTrackerTest {
         assertEquals(listOf(null to "A", "A" to "B"), calls)
         assertEquals(2, emitted.size)
     }
+
+    @Test
+    fun onSessionStarted_reportsCurrentScreenInNewSession_withoutPrevious() {
+        val c = ScreenCapture()
+        c.tracker.onScreen("Home", "activity")
+        c.tracker.onScreen("Cart", "compose")
+        val newSession = ItemFactory(FakeClock(2_000), { "session-2" }, { "user" })
+
+        c.tracker.onSessionStarted(newSession)
+
+        assertEquals(3, c.emitted.size)
+        val again = c.emitted[2]
+        assertEquals("session-2", again.sessionId)
+        assertEquals(mapOf("screen" to "Cart", "type" to "compose"), again.attributes)
+        assertEquals("Cart", c.tracker.currentScreen)
+        // Still the same screen: duplicates keep being suppressed within the new session.
+        c.tracker.onScreen("Cart", "compose")
+        assertEquals(3, c.emitted.size)
+    }
+
+    @Test
+    fun onSessionStarted_beforeAnyScreen_emitsNothing() {
+        val c = ScreenCapture()
+        c.tracker.onSessionStarted(ItemFactory(FakeClock(), { "s2" }, { null }))
+        assertEquals(0, c.emitted.size)
+    }
 }

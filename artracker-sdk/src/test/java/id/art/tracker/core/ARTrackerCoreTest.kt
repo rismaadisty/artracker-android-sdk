@@ -21,7 +21,9 @@ import id.art.tracker.lifecycle.HostActivity
 import id.art.tracker.lifecycle.ListFragment
 import id.art.tracker.lifecycle.NavBinder
 import id.art.tracker.lifecycle.PlainActivity
+import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
+import java.lang.ref.WeakReference
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -42,13 +44,23 @@ import org.robolectric.annotation.Config
 class ARTrackerCoreTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
     private val seen = CopyOnWriteArrayList<TelemetryItem>()
-    private val config = ARTrackerConfig(
+    private val config = configWith()
+
+    private fun configWith(sessionTimeoutMs: Long = 1_800_000) = ARTrackerConfig(
         endpoint = "http://127.0.0.1:9",
         apiKey = "art_live_" + "a".repeat(43),
         environment = "test",
         appVersion = "1.0",
+        sessionTimeoutMs = sessionTimeoutMs,
         beforeSend = BeforeSend { it.also(seen::add) },
     )
+
+    /** Starts a core on a fake clock so that sessions can be aged without sleeping. */
+    private fun startCoreWith(clock: FakeClock, sessionTimeoutMs: Long = 1_000) {
+        val core = ARTrackerCore(app, configWith(sessionTimeoutMs), clock)
+        ARTrackerCore.install(core)
+        core.start()
+    }
 
     @Before
     fun setUp() {
@@ -218,6 +230,113 @@ class ARTrackerCoreTest {
         // The current destination ("home") is reported when the listener is added, then each change.
         assertEquals(listOf("home:compose", "cart:compose", "home:compose"), items.screens())
         assertEquals("cart", items.named("screen_view")[2].attributes["previous"])
+    }
+
+    private fun newNavController(): NavController {
+        val nav = NavController(app)
+        nav.navigatorProvider.addNavigator(TestNavigator())
+        nav.graph = nav.createGraph(startDestination = "home") {
+            screen("home")
+            screen("cart")
+        }
+        return nav
+    }
+
+    @Test
+    fun trackNavController_doesNotKeepTheControllerAlive() {
+        ARTracker.init(app, config)
+        var nav: NavController? = newNavController()
+        val ref = WeakReference(nav)
+        ARTracker.trackNavController(nav!!)
+        nav = null
+
+        // Bounded retry: a collection is only a request, so poll for a few seconds before giving up.
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (ref.get() != null && System.nanoTime() < deadline) {
+            System.gc()
+            @Suppress("DEPRECATION")
+            Runtime.getRuntime().runFinalization()
+            Thread.sleep(50)
+        }
+        assertEquals("the SDK still holds the NavController", null, ref.get())
+    }
+
+    @Test
+    fun shutdown_detachesNavListener_ofAControllerThatIsStillAlive() {
+        ARTracker.init(app, config)
+        val nav = newNavController()
+        ARTracker.trackNavController(nav)
+        val oldCore = core()
+        assertEquals("home", oldCore.screens.currentScreen)
+
+        ARTracker.resetForTest()
+        nav.navigate("cart")
+
+        assertEquals("home", oldCore.screens.currentScreen)
+    }
+
+    private fun sessionOf(items: List<TelemetryItem>, name: String) = items.named(name).map { it.sessionId }
+
+    @Test
+    fun sessionTimeoutRotation_reportsVisibleScreenInNewSession() {
+        val clock = FakeClock(1_700_000_000_000)
+        startCoreWith(clock, sessionTimeoutMs = 1_000)
+        ProcessLifecycleTestUtil.start()
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+        ProcessLifecycleTestUtil.stop()
+        clock.advance(5_000)
+        ProcessLifecycleTestUtil.start() // same Activity stays visible: no new resume happens
+
+        val items = settle()
+        val views = items.named("screen_view")
+        val starts = sessionOf(items, "session_start")
+        assertEquals(2, starts.size)
+        assertEquals(2, views.size)
+        assertEquals(starts[0], views[0].sessionId)
+        assertEquals(starts[1], views[1].sessionId)
+        assertEquals(mapOf("screen" to "PlainActivity", "type" to "activity"), views[1].attributes)
+        // Order inside the new session: session_start, then the screen it opens on.
+        assertTrue(items.indexOf(items.named("session_start")[1]) < items.indexOf(views[1]))
+    }
+
+    @Test
+    fun shortBackground_sameSession_noDuplicateScreenView() {
+        val clock = FakeClock(1_700_000_000_000)
+        startCoreWith(clock, sessionTimeoutMs = 60_000)
+        ProcessLifecycleTestUtil.start()
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+        ProcessLifecycleTestUtil.stop()
+        clock.advance(1_000)
+        ProcessLifecycleTestUtil.start()
+
+        val items = settle()
+        assertEquals(1, items.named("session_start").size)
+        assertEquals(1, items.named("screen_view").size)
+    }
+
+    @Test
+    fun reset_logoutRotation_reportsVisibleScreenInNewSession_andPreviousStartsFresh() {
+        ARTracker.init(app, config)
+        ProcessLifecycleTestUtil.start()
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+        ARTracker.screen("Cart")
+
+        ARTracker.reset()
+        ARTracker.screen("Pay")
+        val items = settle()
+
+        val views = items.named("screen_view")
+        val starts = sessionOf(items, "session_start")
+        assertEquals(2, starts.size)
+        assertEquals(listOf("PlainActivity", "Cart", "Cart", "Pay"), views.map { it.attributes["screen"] })
+        // The re-report opens the new session: right session id, and no `previous` from the old one.
+        assertEquals(starts[1], views[2].sessionId)
+        assertEquals(mapOf("screen" to "Cart", "type" to "manual"), views[2].attributes)
+        // Normal tracking resumes inside the new session.
+        assertEquals(starts[1], views[3].sessionId)
+        assertEquals("Cart", views[3].attributes["previous"])
+        assertEquals(starts[0], views[0].sessionId)
+        assertEquals(starts[0], views[1].sessionId)
     }
 }
 
