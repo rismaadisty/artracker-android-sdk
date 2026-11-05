@@ -136,4 +136,129 @@ class SessionManagerTest {
         assertEquals(1, listener.starts.size)
         assertTrue(listener.ends.isEmpty())
     }
+
+    @Test
+    fun listener_canCallCurrentIdFromCallbacks_withoutStartingSpuriousSession() {
+        lateinit var m: SessionManager
+        val seenInStart = mutableListOf<String>()
+        val seenInEnd = mutableListOf<String>()
+        val starts = mutableListOf<String>()
+        val ends = mutableListOf<String>()
+        m =
+            SessionManager(
+                store,
+                clock,
+                timeout,
+                listener =
+                    object : SessionManager.Listener {
+                        override fun onSessionStart(id: String) {
+                            starts += id
+                            seenInStart += m.currentId()
+                        }
+
+                        override fun onSessionEnd(id: String, durationMs: Long) {
+                            ends += id
+                            seenInEnd += m.currentId()
+                        }
+                    },
+            )
+        val old = m.currentId()
+        clock.advance(1_000)
+        m.rotate()
+        val fresh = m.currentId()
+
+        assertNotEquals(old, fresh)
+        assertEquals(listOf(old, fresh), starts)
+        assertEquals(listOf(old), ends)
+        assertEquals(listOf(old, fresh), seenInStart)
+        assertEquals(listOf(fresh), seenInEnd)
+        assertEquals(fresh, m.currentId())
+    }
+
+    @Test
+    fun hardCap_listenerCallingCurrentId_startsExactlyOneNewSession() {
+        lateinit var m: SessionManager
+        val starts = mutableListOf<String>()
+        val ends = mutableListOf<String>()
+        m =
+            SessionManager(
+                store,
+                clock,
+                timeout,
+                listener =
+                    object : SessionManager.Listener {
+                        override fun onSessionStart(id: String) {
+                            starts += id
+                        }
+
+                        override fun onSessionEnd(id: String, durationMs: Long) {
+                            ends += id
+                            m.currentId()
+                        }
+                    },
+            )
+        m.onForeground()
+        val old = m.currentId()
+        clock.advance(86_400_000L + 1)
+        val fresh = m.currentId()
+        assertEquals(listOf(old, fresh), starts)
+        assertEquals(listOf(old), ends)
+    }
+
+    @Test
+    fun listener_isNotInvokedWhileHoldingLock() {
+        lateinit var m: SessionManager
+        val held = mutableListOf<Boolean>()
+        m =
+            SessionManager(
+                store,
+                clock,
+                timeout,
+                listener =
+                    object : SessionManager.Listener {
+                        override fun onSessionStart(id: String) {
+                            held += Thread.holdsLock(m)
+                        }
+
+                        override fun onSessionEnd(id: String, durationMs: Long) {
+                            held += Thread.holdsLock(m)
+                        }
+                    },
+            )
+        m.onForeground()
+        m.rotate()
+        m.currentId()
+        clock.advance(86_400_000L + 1)
+        m.currentId()
+        m.onBackground()
+        clock.advance(timeout + 1)
+        m.onForeground()
+        assertTrue(held.size >= 6)
+        assertTrue(held.none { it })
+    }
+
+    @Test
+    fun rotate_dispatchesEndThenStartInOrder() {
+        val order = mutableListOf<String>()
+        val m =
+            SessionManager(
+                store,
+                clock,
+                timeout,
+                listener =
+                    object : SessionManager.Listener {
+                        override fun onSessionStart(id: String) {
+                            order += "start:$id"
+                        }
+
+                        override fun onSessionEnd(id: String, durationMs: Long) {
+                            order += "end:$id"
+                        }
+                    },
+            )
+        val old = m.currentId()
+        m.rotate()
+        val fresh = m.currentId()
+        assertEquals(listOf("start:$old", "end:$old", "start:$fresh"), order)
+    }
 }

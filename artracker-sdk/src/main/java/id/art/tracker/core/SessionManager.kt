@@ -19,32 +19,50 @@ internal class SessionManager(
     private var lastPersistedActive: Long = lastActive
     private var foreground = false
 
-    /** Current session id; starts a session if none exists and rotates it past the hard cap. */
-    @Synchronized
-    fun currentId(): String {
-        val now = clock.nowMs()
-        val current = id
-        if (current == null) return start(now)
-        if (now - startedAt > maxDurationMs) {
-            end(current, now - startedAt)
-            return start(now)
-        }
-        if (foreground) touch(now)
-        return current
+    private sealed class Event {
+        class Start(val id: String) : Event()
+
+        class End(val id: String, val durationMs: Long) : Event()
     }
 
-    @Synchronized
+    /** Current session id; starts a session if none exists and rotates it past the hard cap. */
+    fun currentId(): String {
+        val events = ArrayList<Event>(2)
+        val result =
+            synchronized(this) {
+                val now = clock.nowMs()
+                val current = id
+                when {
+                    current == null -> start(now, events)
+                    now - startedAt > maxDurationMs -> {
+                        end(current, now - startedAt, events)
+                        start(now, events)
+                    }
+                    else -> {
+                        if (foreground) touch(now)
+                        current
+                    }
+                }
+            }
+        dispatch(events)
+        return result
+    }
+
     fun onForeground() {
-        val now = clock.nowMs()
-        val current = id
-        if (current != null && now - lastActive > timeoutMs) {
-            end(current, lastActive - startedAt)
-            start(now)
-        } else if (current == null) {
-            start(now)
+        val events = ArrayList<Event>(2)
+        synchronized(this) {
+            val now = clock.nowMs()
+            val current = id
+            if (current != null && now - lastActive > timeoutMs) {
+                end(current, lastActive - startedAt, events)
+                start(now, events)
+            } else if (current == null) {
+                start(now, events)
+            }
+            foreground = true
+            touch(now, force = true)
         }
-        foreground = true
-        touch(now, force = true)
+        dispatch(events)
     }
 
     @Synchronized
@@ -53,14 +71,28 @@ internal class SessionManager(
         if (id != null) touch(clock.nowMs(), force = true)
     }
 
-    @Synchronized
     fun rotate() {
-        val now = clock.nowMs()
-        id?.let { end(it, now - startedAt) }
-        start(now)
+        val events = ArrayList<Event>(2)
+        synchronized(this) {
+            val now = clock.nowMs()
+            id?.let { end(it, now - startedAt, events) }
+            start(now, events)
+        }
+        dispatch(events)
     }
 
-    private fun start(now: Long): String {
+    // State transitions are applied atomically under the lock; the listener is only invoked afterwards
+    // (outside the lock, in order) so callbacks may call back into this manager or take other locks.
+    private fun dispatch(events: List<Event>) {
+        for (e in events) {
+            when (e) {
+                is Event.Start -> listener.onSessionStart(e.id)
+                is Event.End -> listener.onSessionEnd(e.id, e.durationMs)
+            }
+        }
+    }
+
+    private fun start(now: Long, events: MutableList<Event>): String {
         val fresh = UuidV7.generate(now)
         id = fresh
         startedAt = now
@@ -69,14 +101,14 @@ internal class SessionManager(
         store.putString(KEY_ID, fresh)
         store.putLong(KEY_STARTED_AT, now)
         store.putLong(KEY_LAST_ACTIVE, now)
-        listener.onSessionStart(fresh)
+        events += Event.Start(fresh)
         return fresh
     }
 
-    private fun end(endedId: String, durationMs: Long) {
+    private fun end(endedId: String, durationMs: Long, events: MutableList<Event>) {
         id = null
         store.putString(KEY_ID, null)
-        listener.onSessionEnd(endedId, durationMs.coerceAtLeast(0L))
+        events += Event.End(endedId, durationMs.coerceAtLeast(0L))
     }
 
     /** Persisting is throttled so a process killed mid-foreground still has a recent activity mark. */
