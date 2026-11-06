@@ -1,6 +1,6 @@
 # Technical Architecture Plan — `artracker-sdk` (Android)
 
-> Status: **Disetujui** (Q1–Q5, lihat §13) — 2026-11-05. Implementasi SDK sampai Task 25 selesai (lihat §14); pengukuran performa di perangkat dan fase rilis (Fase 7) belum dikerjakan.
+> Status: **Disetujui** (Q1–Q5, lihat §13) — 2026-11-05. Implementasi SDK sampai Task 26 selesai (lihat §14); pengukuran performa di perangkat, E2E ke backend, dan uji instrumentasi belum dijalankan. Penyimpangan implementasi dari dokumen ini ada di bagian terakhir ("Deviations from this document").
 > Implementation plan: `docs/superpowers/plans/2026-11-05-artracker-android-sdk.md`.
 > Sumber requirement: issue [`tiofani03/artracker#12`](https://github.com/tiofani03/artracker/issues/12) (bagian Android).
 > Kontrak backend ditelusuri langsung dari `artracker/backend/internal/{handler,ingest,auth}` dan diselaraskan
@@ -441,7 +441,8 @@ CREATE INDEX idx_items_pending ON items(batch_id, priority, created_at);
 > **Status (2026-11-06):** Fase 0–5 selesai di JVM/Robolectric (kecuali dua item di bawah yang belum dijalankan); sample app (Fase 6) dan audit fuzz selesai.
 > **Belum dijalankan/diukur** (butuh emulator, perangkat, atau Docker, yang tidak tersedia saat Task 25): tes instrumentasi crash offline,
 > pemutaran di `rrweb-player`, Macrobenchmark/Perfetto (walk ≤8 ms, CPU background <1%, `init` ≤2 ms), dan E2E ke backend lokal
-> (`docs/e2e-manual-test.md`). Ukuran AAR rilis terukur: 393323 byte (`PERF.md`). Fase 7 (rilis) belum dikerjakan.
+> (`docs/e2e-manual-test.md`). Ukuran AAR rilis terukur: 394693 byte (`PERF.md`).
+> Fase 7: konfigurasi publikasi, README, dan CHANGELOG selesai (Task 26, `0.1.0`); publikasi ke repositori publik dan E2E belum dikerjakan.
 
 
 ### Fase 0 — Fondasi
@@ -486,6 +487,53 @@ CREATE INDEX idx_items_pending ON items(batch_id, priority, created_at);
 - [x] Audit: tidak ada exception SDK yang lolos ke app (fuzz API publik) — `PublicApiFuzzTest` (1000 iterasi, seed tetap): 3 bug ditemukan dan diperbaiki (pipeline mati oleh `Error`, `Number` non-JSON, surrogate tunggal)
 
 ### Fase 7 — Rilis
-- [ ] `maven-publish` (groupId `id.art.tracker`, artifact `artracker-android`), sources + javadoc jar
-- [ ] README integrasi (Gradle, init, OkHttp, masking, ProGuard), CHANGELOG
-- [ ] E2E ke backend lokal; perbarui snippet landing page bila nama API berubah (Q1)
+- [x] `maven-publish` (groupId `id.art.tracker`, artifact `artracker-android`), sources + javadoc jar — hanya `publishToMavenLocal` yang diuji; repositori remote dan kredensial sengaja tidak dikonfigurasi (placeholder terdokumentasi di `build.gradle.kts`); metadata POM (lisensi, developer, SCM) masih `TODO(owner)`
+- [x] README integrasi (Gradle, init, OkHttp, masking, ProGuard), CHANGELOG (`artracker-sdk/CHANGELOG.md`)
+- [ ] E2E ke backend lokal *(belum: butuh Docker + emulator; checklist di `docs/e2e-manual-test.md`)*
+- [ ] Perbarui snippet landing page bila nama API berubah (Q1) *(di luar repo ini)*
+
+---
+
+## Deviations from this document (as implemented)
+
+Hal-hal berikut berbeda dari teks di atas (atau melengkapinya) setelah implementasi. Sumber: ledger Task 0–25 dan kode.
+
+**Struktur & build**
+- **Namespace/package (Q2)**: `android.namespace` modul SDK `id.art.tracker.sdk` hanya untuk `R`/`BuildConfig`; seluruh kode tetap di `id.art.tracker`. Akibatnya `R.id.artracker_mask` adalah `id.art.tracker.sdk.R.id`.
+- **Penomoran Task**: Task 4 dikerjakan sebelum Task 3 (`ARTrackerConfig` butuh `TelemetryItem`/`BeforeSend`). Hanya mengubah urutan.
+- **R2 (Kotlin/AGP 9)**: build berjalan dengan Kotlin built-in AGP 9.0.1 (2.2.10) sementara plugin `kotlin.compose` di catalog masih `2.0.21`; sample app memakai versi `coreKtx 1.17.0`, `lifecycle 2.9.4`, `activityCompose 1.11.0` (diturunkan karena versi asli butuh AGP 9.1+/compileSdk 37).
+- **Batcher**: tidak ada kelas `Batcher`; batching ada di `ItemQueue.claimBatch` (sudah tercatat di Fase 2).
+- **Javadoc jar**: dibuat oleh Dokka 1.4.32 bawaan AGP (butuh jaringan sekali untuk mengunduhnya); artefak `0.1.0` memuat `.aar`, `.pom`, `.module`, `-sources.jar`, `-javadoc.jar`.
+- **Consumer rules**: tidak ada `-keep` untuk `ARTracker`/`ARTrackerConfig*` (dipanggil langsung oleh host, jadi tetap bisa di-shrink); yang di-keep hanya `@ARTrackerScreenName` (dibaca lewat refleksi), nama `FlushWorker`, kelas pemisah untuk library opsional, dan konstruktor interceptor (`allowshrinking`).
+
+**Transport & core**
+- **`ItemQueue.insert` mengembalikan `Boolean`** (false bila ditolak/gagal), supaya pipeline tahu bahwa item crash/replay tidak tersimpan.
+- **`ItemQueue.clear()`** ditambahkan: `optOut(true)` juga menghapus antrean yang tertunda (paritas web SDK), bukan hanya berhenti merekam.
+- **`Backoff` stateless**: `reset()` no-op; `Flusher` memegang penghitung kegagalan beruntun dan memanggil `delayFor(attempt)`. `Retry-After` hanya format delta-detik, dibatasi 1 jam; 3xx/1xx yang tak terpetakan diperlakukan sebagai retry.
+- **`EventPipeline.flushNow()`** (non-blocking, terurut setelah item yang sudah di-enqueue; `requestFlush()` adalah alias): flush latar belakang/eksplisit mem-persist grup/channel yang tertunda lebih dulu supaya `app_background`/`session_end` tidak terlambat.
+- **Dispatch listener `SessionManager` setelah lock dilepas** (transisi state atomik di dalam lock, callback sesudahnya, berurutan).
+- **Loop flush menangkap `Throwable`** (bukan hanya `Exception`): `Error` dari `Flusher.step` tidak lagi mematikan pengiriman; `FlushWorker` mengembalikan `Result.retry()`.
+- **Kill-switch** `401` menyimpan keadaan di prefs `artracker_transport` yang sama dengan kunci API publik untuk `FlushWorker`.
+
+**Telemetry**
+- **Item crash melewati pipeline** (§8.1): ditulis sinkron lalu dipulihkan saat launch berikutnya; karena itu `beforeSend` dan redaksi berbasis key tidak berlaku (hanya redaksi pola nilai), dan data breadcrumb tidak di-scrub per key.
+- **`ExitInfoCollector`** melaporkan semua exit yang disimpan OS (sampai ~16) pada `init` pertama setelah instal, termasuk yang terjadi sebelum SDK dipasang; trace native-crash API 31+ adalah tombstone protobuf.
+- **Interceptor**: `req_bytes`/`res_bytes` dari `Content-Length` saja; `captureHeaders` dicadangkan dan diabaikan; pengabaian host endpoint SDK membandingkan host dan port efektif.
+
+**Privacy**
+- **`AttributeRedactor`**: nomor kartu yang lolos Luhn diganti `**** **** **** NNNN` (paritas perilaku web SDK; 4 digit terakhir dipertahankan), bukan `[redacted]` penuh.
+- **Aturan input sensitif** (numerik/telepon/autofill) berlaku untuk **view apa pun**, bukan hanya `EditText` (fail-closed); sebuah view dianggap input bila `EditText`, `onCheckIsTextEditor()`, atau `TextView` dengan `inputType != 0`. Tag string `artracker-mask`/`artracker-unmask` tidak peka huruf besar/kecil; hint autofill `newPassword` ikut dianggap sensitif.
+- **`artrackerUnmask()`** (View dan Compose) menimpa mask yang diwarisi untuk **seluruh subtree** node itu (bukan hanya node itu), sehingga unmask di dalam kontainer yang di-mask membuka kembali subtree-nya.
+- **Compose**: tidak ada semantics input-type, jadi aturan numerik/telepon/autofill tidak ada padanannya di Compose (hanya `Password`, `maskAllInputs`, `Modifier.artrackerMask()`).
+
+**Replay**
+- **Kedalaman JSON**: `Json.MAX_DEPTH = 32` terlalu dangkal untuk pohon wireframe, jadi item `replay_chunk` di-encode dengan `Json.REPLAY_MAX_DEPTH = 256`. Hanya item `session` bernama `replay_chunk` (`isReplayChunk()`) yang melewati redaksi atribut dan mendapat batas itu; event pengguna yang meminjam nama itu tidak. `priority()` memakai `isReplayChunk()` yang sama.
+- **`ReplayHref`**: `href` `android://<screen>` dibangun dari nama layar yang disuplai host dan disanitasi (scrub URL, masking id di path, batas 200 karakter), karena chunk replay tidak melewati lapis 2. Deteksi pergantian layar memakai kunci mentah di memori (bukan href yang sudah disanitasi).
+- **`ComposeWalker`**: `ReflectiveSemanticsAccess` tidak memakai refleksi sama sekali; ia menautkan langsung ke `ViewRootForTest` (API internal Compose) dan dibungkus try/catch dengan fallback blok placeholder. Di-instansiasi hanya di balik `ClassAvailability.compose`.
+- **`stopReplay()`** mematikan perekaman juga untuk sesi berikutnya sampai `startReplay()` dipanggil.
+- **Snapshot terlalu besar** dipangkas (`oversized`); perubahan berikutnya bisa tidak sinkron sampai full snapshot berikutnya. `seq` chunk mulai dari 0 lagi pada tiap proses.
+- **Setelah kill-switch `401` kedaluwarsa**, perekaman tidak otomatis dilanjutkan selama aplikasi tetap di foreground (belum diperbaiki).
+
+**Pengujian**
+- Fuzz API publik (`PublicApiFuzzTest`, 1000 iterasi) menemukan dan memperbaiki 3 bug (pipeline mati oleh `Error`, `Number` non-JSON, surrogate tunggal yang tertulis sebagai JSON tidak valid; sekarang U+FFFD).
+- Belum ada tes instrumentasi, E2E, atau pengukuran performa (butuh emulator/Docker); lihat `PERF.md` dan `docs/e2e-manual-test.md`.

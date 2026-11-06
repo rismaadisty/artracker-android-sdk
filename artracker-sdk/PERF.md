@@ -118,11 +118,11 @@ Measured on 2026-11-06 with `./gradlew :artracker-sdk:assembleRelease` and `ls -
 
 | Artifact | Bytes |
 | --- | --- |
-| `artracker-sdk-release.aar` | **393323** (about 384 KiB) |
+| `artracker-sdk-release.aar` | **393323** (about 384 KiB) at the time of Task 25; **394693** (about 385 KiB) re-measured at the 0.1.0 publishing step (Task 26; classes.jar inside is now 415874) |
 | `classes.jar` inside it (uncompressed) | 415102 |
 
-The AAR is not minified (library modules ship the compiled classes; the host app's R8 shrinks it). The size is to be
-copied into the CHANGELOG at release time (Fase 7: no CHANGELOG exists yet).
+The AAR is not minified (library modules ship the compiled classes; the host app's R8 shrinks it). The 0.1.0 size is recorded in
+`artracker-sdk/CHANGELOG.md`.
 
 ## 5. Method count (optional, NOT MEASURED)
 

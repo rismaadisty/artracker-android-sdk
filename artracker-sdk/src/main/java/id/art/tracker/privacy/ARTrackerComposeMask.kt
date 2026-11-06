@@ -19,7 +19,8 @@ public fun Modifier.artrackerMask(): Modifier =
 
 /**
  * Opts this composable out of masking in session replay, overriding `maskAllInputs` and `maskAllText`.
- * Password fields are always masked regardless. Applies to this node only, not to its descendants.
+ * Password fields are always masked regardless. It also resets the masking inherited from a masked ancestor for this
+ * node's whole subtree, so use it inside a masked container only on purpose.
  */
 public fun Modifier.artrackerUnmask(): Modifier =
     semantics(mergeDescendants = false) { this[ARTrackerMaskKey] = false }
