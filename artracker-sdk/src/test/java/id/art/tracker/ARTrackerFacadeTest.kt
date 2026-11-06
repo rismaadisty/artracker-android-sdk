@@ -123,6 +123,53 @@ class ARTrackerFacadeTest {
     }
 
     @Test
+    fun invalidConfig_isWarnedOnce_evenWithoutDebug_andNeverWithTheKey() {
+        server.start()
+        ShadowLog.clear()
+        val secret = "art_live_SHORTSECRETKEY"
+        ARTracker.init(context, config(apiKey = secret, debug = false))
+
+        assertFalse(ARTracker.isInitialized())
+        val warnings = ShadowLog.getLogsForTag("ARTracker").filter { it.type == android.util.Log.WARN }.map { it.msg }
+        assertEquals(warnings.toString(), 1, warnings.size)
+        assertTrue(warnings.toString(), warnings.single().startsWith("invalid configuration: apiKey length"))
+        for (entry in ShadowLog.getLogs()) {
+            assertFalse("key leaked: ${entry.msg}", entry.msg.contains("SHORTSECRET"))
+            assertTrue("no throwable expected", entry.throwable == null)
+        }
+    }
+
+    @Test
+    fun invalidConfig_wrongEndpointWithRealLookingKey_isWarnedAtReleaseLevel_withoutTheKey() {
+        val realLooking = "art_live_" + "Zk3Q9xT7mB2vL5nR8cW1yH4jD6fG0sPaUeXoIqNtKbMw"
+        ShadowLog.clear()
+        ARTracker.init(
+            context,
+            ARTrackerConfig(endpoint = "ftp://sdk-test.invalid", apiKey = realLooking, environment = "test", debug = false),
+        )
+
+        assertFalse(ARTracker.isInitialized())
+        val warnings = ShadowLog.getLogsForTag("ARTracker").filter { it.type == android.util.Log.WARN }.map { it.msg }
+        assertEquals(warnings.toString(), listOf("invalid configuration: endpoint must start with http:// or https://"), warnings)
+        for (entry in ShadowLog.getLogs()) {
+            assertFalse("key leaked: ${entry.msg}", entry.msg.contains("Zk3Q9x") || entry.msg.contains(realLooking))
+            assertTrue("no throwable expected", entry.throwable == null)
+        }
+    }
+
+    @Test
+    fun invalidConfig_withControlCharactersInTheKey_isWarnedWithoutTheKey() {
+        server.start()
+        ShadowLog.clear()
+        ARTracker.init(context, config(apiKey = "art_live_" + "a".repeat(40) + "\r\nX-Injected: LEAKME", debug = false))
+
+        assertFalse(ARTracker.isInitialized())
+        val text = ShadowLog.getLogsForTag("ARTracker").joinToString("\n") { it.msg }
+        assertTrue(text, text.contains("control characters"))
+        assertFalse(text, text.contains("LEAKME") || text.contains("aaaa"))
+    }
+
+    @Test
     fun init_logsItsSynchronousCost_onlyInDebug() {
         server.start()
         ARTracker.init(context, config(debug = false))

@@ -3,6 +3,7 @@ package id.art.tracker
 import android.app.Application
 import android.content.Context
 import android.os.Looper
+import android.util.Log
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.Clock
@@ -14,8 +15,9 @@ import java.util.concurrent.atomic.AtomicLong
  * Public entry point of the ARTracker SDK.
  *
  * - Call [init] once from `Application.onCreate()`.
- * - Every function is safe to call from any thread, never throws and never blocks on I/O. Before [init] (or after
- *   an invalid configuration) they are no-ops; while the SDK is disabled (user opt-out, or the server rejected the
+ * - Every tracking function is safe to call from any thread, never throws and does no disk or network I/O on the
+ *   calling thread (the one exception is [init], see there; [diagnostics] reads the database). Before [init] (or
+ *   after an invalid configuration) they are no-ops; while the SDK is disabled (user opt-out, or the server rejected the
  *   API key) tracking calls are no-ops too.
  */
 public object ARTracker {
@@ -23,10 +25,14 @@ public object ARTracker {
     private val lastNotInitializedWarningMs = AtomicLong(0)
 
     /**
-     * Initialises the SDK. Cheap on the calling thread: it validates the config, builds the object graph and
-     * starts the first session. Opening the database, purging old items and the first flush happen in the
-     * background. A second call is ignored; an invalid [config] is reported through the debug log and leaves the
-     * SDK uninitialised.
+     * Initialises the SDK. The synchronous part runs on the calling thread (normally main) and is **not** free of
+     * disk I/O: besides validating the config and building the object graph it reads three small SharedPreferences
+     * files (session, identity, transport config) when the core is constructed. That is a disk load on first use,
+     * so StrictMode may report a disk read, and its cost on a real device has not been measured (see PERF.md), so
+     * the 2 ms budget of ARCHITECTURE 4.1 is a target, not a verified figure. Opening the database, purging old
+     * items and the first flush happen in the background. A second call is ignored. An invalid [config] leaves the
+     * SDK uninitialised; every validation error is logged once at warning level (logcat tag `ARTracker`) whatever
+     * `debug` is, and the API key is never part of a message.
      */
     @JvmStatic
     public fun init(context: Context, config: ARTrackerConfig) {
@@ -168,8 +174,9 @@ public object ARTracker {
             val startNs = if (SdkLog.enabled) System.nanoTime() else 0L
             val errors = config.validate()
             if (errors.isNotEmpty()) {
-                // The messages describe the problem only; the API key itself is never logged.
-                errors.forEach { SdkLog.w("invalid configuration: $it") }
+                // Always logged, whatever `debug` says: a typo'd key must not mean total silence in a release build.
+                // The messages describe the problem only; the API key itself is never part of them.
+                errors.forEach { runCatching { Log.w("ARTracker", "invalid configuration: $it") } }
                 return
             }
             val app = context.applicationContext as? Application
