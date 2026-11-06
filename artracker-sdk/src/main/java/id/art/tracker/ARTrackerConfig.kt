@@ -68,7 +68,12 @@ public class PrivacyConfig @JvmOverloads constructor(
     public val sensitiveViewClasses: Set<Class<out View>> = emptySet(),
 )
 
-/** Network capture settings. */
+/**
+ * Network capture settings used by `ARTrackerOkHttpInterceptor`.
+ *
+ * [captureHeaders] is reserved: headers are never captured today, whatever its value.
+ * [ignoreHosts] are matched exactly against the request host, ignoring case.
+ */
 public class NetworkConfig @JvmOverloads constructor(
     public val captureHeaders: Boolean = false,
     public val ignoreHosts: Set<String> = emptySet(),
