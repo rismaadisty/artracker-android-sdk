@@ -8,15 +8,23 @@ internal value class RawJson(val json: String)
 
 /** Minimal JSON encoder (no org.json / JsonWriter dependency). */
 internal object Json {
+    /** Default nesting limit for every item: deeper containers are written as the string `"[max_depth]"`. */
     const val MAX_DEPTH = 32
 
-    fun encode(value: Any?): String = StringBuilder().also { write(value, it) }.toString()
+    /**
+     * Limit for `replay_chunk` attributes only: rrweb snapshots nest about two JSON levels per wireframe level
+     * (walker depth 50, Compose hosts add up to 50 more) plus the event/chunk wrappers. It still bounds cycles.
+     */
+    const val REPLAY_MAX_DEPTH = 256
 
-    fun write(value: Any?, out: Appendable) {
-        writeValue(value, out, 0)
+    fun encode(value: Any?, maxDepth: Int = MAX_DEPTH): String =
+        StringBuilder().also { write(value, it, maxDepth) }.toString()
+
+    fun write(value: Any?, out: Appendable, maxDepth: Int = MAX_DEPTH) {
+        writeValue(value, out, 0, maxDepth)
     }
 
-    private fun writeValue(value: Any?, out: Appendable, depth: Int) {
+    private fun writeValue(value: Any?, out: Appendable, depth: Int, maxDepth: Int) {
         when (value) {
             null -> out.append("null")
             is Boolean -> out.append(value.toString())
@@ -28,7 +36,7 @@ internal object Json {
             is Enum<*> -> writeString(value.name, out)
             is RawJson -> out.append(value.json)
             is Date -> writeString(Iso8601.format(value.time), out)
-            else -> writeContainer(value, out, depth)
+            else -> writeContainer(value, out, depth, maxDepth)
         }
     }
 
@@ -36,8 +44,8 @@ internal object Json {
         out.append(if (invalid) "null" else value.toString())
     }
 
-    private fun writeContainer(value: Any, out: Appendable, depth: Int) {
-        if (depth >= MAX_DEPTH) {
+    private fun writeContainer(value: Any, out: Appendable, depth: Int, maxDepth: Int) {
+        if (depth >= maxDepth) {
             writeString("[max_depth]", out)
             return
         }
@@ -50,31 +58,31 @@ internal object Json {
                     first = false
                     writeString(k.toString(), out)
                     out.append(':')
-                    writeValue(v, out, depth + 1)
+                    writeValue(v, out, depth + 1, maxDepth)
                 }
                 out.append('}')
             }
-            is Iterable<*> -> writeSequence(value.iterator(), out, depth)
-            is Array<*> -> writeSequence(value.iterator(), out, depth)
-            is IntArray -> writeSequence(value.iterator(), out, depth)
-            is LongArray -> writeSequence(value.iterator(), out, depth)
-            is DoubleArray -> writeSequence(value.iterator(), out, depth)
-            is FloatArray -> writeSequence(value.iterator(), out, depth)
-            is ShortArray -> writeSequence(value.iterator(), out, depth)
-            is ByteArray -> writeSequence(value.iterator(), out, depth)
-            is BooleanArray -> writeSequence(value.iterator(), out, depth)
-            is CharArray -> writeSequence(value.iterator(), out, depth)
+            is Iterable<*> -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is Array<*> -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is IntArray -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is LongArray -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is DoubleArray -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is FloatArray -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is ShortArray -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is ByteArray -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is BooleanArray -> writeSequence(value.iterator(), out, depth, maxDepth)
+            is CharArray -> writeSequence(value.iterator(), out, depth, maxDepth)
             else -> writeString(value.toString(), out)
         }
     }
 
-    private fun writeSequence(it: Iterator<*>, out: Appendable, depth: Int) {
+    private fun writeSequence(it: Iterator<*>, out: Appendable, depth: Int, maxDepth: Int) {
         out.append('[')
         var first = true
         while (it.hasNext()) {
             if (!first) out.append(',')
             first = false
-            writeValue(it.next(), out, depth + 1)
+            writeValue(it.next(), out, depth + 1, maxDepth)
         }
         out.append(']')
     }

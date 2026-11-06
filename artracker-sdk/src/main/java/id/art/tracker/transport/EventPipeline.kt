@@ -6,6 +6,7 @@ import id.art.tracker.TelemetryItem
 import id.art.tracker.core.Clock
 import id.art.tracker.core.SdkLog
 import id.art.tracker.privacy.AttributeRedactor
+import id.art.tracker.isReplayChunk
 import id.art.tracker.priority
 import id.art.tracker.toJson
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,7 +34,8 @@ import kotlinx.coroutines.withContext
  *
  * - [enqueue] only does a `trySend` into a bounded channel (capacity 1000, oldest dropped on overflow), so the
  *   caller is never blocked and nothing here throws.
- * - One consumer coroutine runs `beforeSend`, the attribute redactor (except for `replay_chunk`) and builds the
+ * - One consumer coroutine runs `beforeSend`, the attribute redactor (except for the SDK's `replay_chunk` session
+ *   items, see `isReplayChunk`) and builds the
  *   [StoredItem]s, which it persists in groups of up to [GROUP_SIZE] or [GROUP_WINDOW_MS] (whichever is first),
  *   as a single `queue.insert(list)`. A group holding a priority-0 item (crash/fatal) is persisted at once.
  * - A second coroutine performs flushes. A flush is requested right after persisting a priority-0 item or when
@@ -314,7 +316,7 @@ internal class EventPipeline(
                     original
                 }
             }
-            val safe = if (item.name == REPLAY_CHUNK) {
+            val safe = if (item.isReplayChunk()) {
                 item
             } else {
                 item.copy(attributes = AttributeRedactor.redact(item.attributes))
@@ -374,6 +376,5 @@ internal class EventPipeline(
         const val GROUP_SIZE = 20
         const val GROUP_WINDOW_MS = 1_000L
         const val FLUSH_PENDING_THRESHOLD = 50
-        const val REPLAY_CHUNK = "replay_chunk"
     }
 }

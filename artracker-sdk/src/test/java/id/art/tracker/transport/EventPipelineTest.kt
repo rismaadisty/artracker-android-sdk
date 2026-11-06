@@ -150,7 +150,7 @@ class EventPipelineTest {
     @Test
     fun replayChunk_skipsRedactor() = runTest {
         val p = pipeline()
-        val chunk = factory.event("replay_chunk", mapOf("data" to "a@b.com"))
+        val chunk = factory.session("replay_chunk", mapOf("data" to "a@b.com"))
         val other = factory.event("other", mapOf("data" to "a@b.com"))
         p.enqueue(chunk)
         p.enqueue(other)
@@ -159,6 +159,16 @@ class EventPipelineTest {
         assertTrue(payloadOf(chunk.id).contains("a@b.com"))
         assertEquals(3, queue.stored.first { it.id == chunk.id }.priority)
         assertFalse(payloadOf(other.id).contains("a@b.com"))
+    }
+
+    @Test
+    fun eventBorrowingReplayChunkName_isStillRedacted() = runTest {
+        val p = pipeline()
+        val fake = factory.event("replay_chunk", mapOf("data" to "a@b.com"))
+        p.enqueue(fake)
+        p.awaitIdle()
+
+        assertFalse(payloadOf(fake.id).contains("a@b.com"))
     }
 
     @Test
