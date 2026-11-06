@@ -105,18 +105,22 @@ public object ARTracker {
         withCore("optOut") { it.optOut(enabled) }
     }
 
-    /** Starts session replay recording. Not implemented yet. */
+    /**
+     * Starts session replay recording for this process, regardless of `ReplayConfig.enabled` and the sample rate
+     * (still never while the user opted out). Safe from any thread: the work happens on the main thread.
+     */
     @JvmStatic
     public fun startReplay() {
-        // TODO(Task 23): ReplayController.start()
-        withCore("startReplay") { }
+        withCore("startReplay") { it.startReplay() }
     }
 
-    /** Stops session replay recording. Not implemented yet. */
+    /**
+     * Stops session replay recording: what was recorded is sent, and nothing more is recorded until [startReplay]
+     * (also across new sessions). Safe from any thread.
+     */
     @JvmStatic
     public fun stopReplay() {
-        // TODO(Task 23): ReplayController.stop()
-        withCore("stopReplay") { }
+        withCore("stopReplay") { it.stopReplay() }
     }
 
     /** True after a successful [init]. */

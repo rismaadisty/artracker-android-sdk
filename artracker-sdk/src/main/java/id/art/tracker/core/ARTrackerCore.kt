@@ -1,5 +1,6 @@
 package id.art.tracker.core
 
+import android.app.Activity
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +15,8 @@ import id.art.tracker.lifecycle.AppLifecycleObserver
 import id.art.tracker.lifecycle.NavTracker
 import id.art.tracker.lifecycle.ScreenTracker
 import id.art.tracker.privacy.AttributeRedactor
+import id.art.tracker.replay.ReplayController
+import id.art.tracker.replay.ReplayControllerFactory
 import id.art.tracker.telemetry.Breadcrumbs
 import id.art.tracker.telemetry.CrashHandler
 import id.art.tracker.telemetry.CrashItemBuilder
@@ -32,6 +35,7 @@ import id.art.tracker.transport.PayloadEncoder
 import id.art.tracker.transport.TransportConfigStore
 import id.art.tracker.transport.WorkManagerScheduler
 import java.io.File
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +59,9 @@ import kotlinx.coroutines.launch
 internal class ARTrackerCore(
     val app: Application,
     val config: ARTrackerConfig,
-    private val clock: Clock = Clock.SYSTEM,
+    val clock: Clock = Clock.SYSTEM,
+    /** Builds the replay controller (tests inject one); must not link Compose types. */
+    private val replayFactory: (ARTrackerCore, Handler) -> ReplayController = ReplayControllerFactory::create,
 ) {
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
@@ -107,6 +113,8 @@ internal class ARTrackerCore(
                 // The screen still on display belongs to this new session too (no-op for the very first one).
                 screens.onSessionStarted(sessionItems)
             }
+            // Replay sampling is per session: re-evaluated (and a full snapshot forced) for the new id.
+            runCatching { replay?.onSessionStarted() }
         }
 
         override fun onSessionEnd(id: String, durationMs: Long) {
@@ -141,10 +149,32 @@ internal class ARTrackerCore(
         items,
         onScreenChanged = { previous, current ->
             breadcrumbs.add("screen", current, if (previous != null) mapOf("previous" to previous) else emptyMap())
+            replay?.onScreenChanged() // only posts to the main thread
         },
     )
 
-    private val activityTracker = ActivityTracker(screens, listener = null) // TODO(Task 23): replay window listener
+    /** Session replay; created in [start] when enabled, or lazily by [startReplay]. */
+    @Volatile
+    private var replay: ReplayController? = null
+    private val replayLock = Any()
+
+    /** The resumed Activity (main thread), handed to a replay controller that is created later. */
+    @Volatile
+    private var resumedActivity: WeakReference<Activity>? = null
+
+    private val windowListener = object : ActivityTracker.WindowListener {
+        override fun onActivityResumed(a: Activity) {
+            resumedActivity = WeakReference(a)
+            replay?.onActivityResumed(a)
+        }
+
+        override fun onActivityPaused(a: Activity) {
+            if (resumedActivity?.get() === a) resumedActivity = null
+            replay?.onActivityPaused(a)
+        }
+    }
+
+    private val activityTracker = ActivityTracker(screens, windowListener)
     private val navTracker = NavTracker(screens)
 
     /** Hooks of [ProcessLifecycleOwner]; added on the main thread (see [registerProcessObserver]). */
@@ -214,8 +244,31 @@ internal class ARTrackerCore(
             if (leftoverItems) pipeline.flushNow()
         }
         app.registerActivityLifecycleCallbacks(activityTracker)
+        // Before the process observer: the foreground it replays then finds the controller in place.
+        if (config.replay.enabled) ensureReplay()?.start(manual = false)
         registerProcessObserver()
     }
+
+    /** The replay controller, created once (cheap: no view or Compose access happens here). */
+    private fun ensureReplay(): ReplayController? {
+        replay?.let { return it }
+        return synchronized(replayLock) {
+            replay ?: runCatching { replayFactory(this, mainHandler) }
+                .onFailure { SdkLog.w("session replay unavailable", it) }
+                .getOrNull()
+                ?.also { created ->
+                    replay = created
+                    resumedActivity?.get()?.let(created::onActivityResumed)
+                }
+        }
+    }
+
+    /** Test/diagnostic view of the replay controller (null until enabled or started). */
+    @VisibleForTesting
+    internal val replayController: ReplayController? get() = replay
+
+    /** True between the process' ON_START and ON_STOP. */
+    val isForeground: Boolean get() = foreground
 
     /**
      * `LifecycleRegistry` of the process owner only accepts calls on the main thread, so off the main thread the
@@ -381,6 +434,17 @@ internal class ARTrackerCore(
         pipeline.flushNow()
     }
 
+    /** `ARTracker.startReplay()`: records regardless of `replay.enabled` and sampling (never while disabled). */
+    fun startReplay() {
+        if (isDisabled()) return
+        ensureReplay()?.start(manual = true)
+    }
+
+    /** `ARTracker.stopReplay()`: flushes and stops recording until the next [startReplay]. */
+    fun stopReplay() {
+        replay?.stop()
+    }
+
     /** Logout: forgets the user and starts a new session. Works while disabled (clearing is always safe). */
     fun reset() {
         endedSessionUserId = identity.userId
@@ -404,6 +468,7 @@ internal class ARTrackerCore(
      */
     fun optOut(enabled: Boolean) {
         killSwitch.applyOptedOut(enabled)
+        runCatching { replay?.onDisabledChanged() }
         if (enabled) {
             pipeline.stopTimer()
             pipeline.discardAll()
@@ -441,6 +506,7 @@ internal class ARTrackerCore(
         foreground = true
         // May rotate the session after a long background: that emits session_end/session_start via the listener.
         session.onForeground()
+        runCatching { replay?.onAppForeground() } // checks the kill-switch itself
         if (isDisabled()) return
         pipeline.startTimer()
         emit(items.event("app_foreground"))
@@ -448,6 +514,8 @@ internal class ARTrackerCore(
 
     internal fun onBackground() {
         foreground = false
+        // Stops capture, unwraps windows and flushes the open replay chunk: nothing replay-related runs in background.
+        runCatching { replay?.onAppBackground() }
         val active = !isDisabled()
         if (active) emit(items.event("app_background"))
         pipeline.stopTimer()
@@ -487,6 +555,7 @@ internal class ARTrackerCore(
         runCatching { app.unregisterActivityLifecycleCallbacks(activityTracker) }
         runCatching { activityTracker.detachAll() }
         runCatching { navTracker.clear() }
+        runCatching { replay?.shutdown() }
         onMain { ProcessLifecycleOwner.get().lifecycle.removeObserver(processObserver) }
         runCatching { pipeline.stopTimer() }
         runCatching { crashHandler?.uninstall() }
