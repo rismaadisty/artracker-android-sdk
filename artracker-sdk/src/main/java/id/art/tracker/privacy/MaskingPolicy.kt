@@ -13,7 +13,7 @@ internal enum class MaskDecision { NONE, MASK, BLOCK }
  * then explicit mask / masked parent / sensitive class, then the default input/text rules.
  * Fails closed: any exception while evaluating the rules yields [MaskDecision.MASK].
  */
-internal class MaskingPolicy(private val config: PrivacyConfig) {
+internal class MaskingPolicy(internal val config: PrivacyConfig) {
 
     fun forView(view: View, parentMasked: Boolean): MaskDecision = try {
         decide(view, parentMasked)

@@ -13,6 +13,9 @@
 -keep,allowshrinking,allowobfuscation class id.art.tracker.lifecycle.FragmentSupport { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.lifecycle.FragmentTracker { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.lifecycle.NavBinder { *; }
+-keep,allowshrinking,allowobfuscation class id.art.tracker.replay.capture.ComposeWalker { *; }
+-keep,allowshrinking,allowobfuscation class id.art.tracker.replay.capture.ReflectiveSemanticsAccess { *; }
+-keep,allowshrinking,allowobfuscation class id.art.tracker.privacy.ComposeMaskRules { *; }
 
 # Hosts add the interceptor by name; only its public no-arg constructor is part of the contract.
 -keep class id.art.tracker.telemetry.okhttp.ARTrackerOkHttpInterceptor { public <init>(); }
