@@ -24,11 +24,12 @@ Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artr
 1. Open the app, go to Login and press *Log in*, go to Payment and press *Pay now*, then open Diagnostics and press *Track event*, *Log WARN*, *HTTP 200*, *HTTP 404*, *HTTP timeout (3 s)*, *Flush*.
 2. Query: `GET /api/v1/projects/:id/events?kind=all&limit=50` with the **dashboard login JWT**:
    `Authorization: Bearer <access token>`. This is a dashboard endpoint: the `art_live_...` ingest key (the
-   `X-Artracker-Key` header) is rejected there, so do not reuse it. To get the token, log in to the dashboard in a
-   browser, open the developer tools, and copy the access token: either from the `Authorization: Bearer ...` request
-   header of any `/api/v1/...` call in the Network tab, or from the login response (`POST /api/v1/auth/login`, if your
-   backend version uses that route; check the Network tab for the actual path), or from the browser storage where the
-   dashboard keeps it (Application tab). Tokens expire; log in again if you get `401`.
+   `X-Artracker-Key` header) is rejected there, so do not reuse it. The backend has OAuth login only (there is no
+   password login route). To get the token: log in to the dashboard through OAuth, open the browser dev tools, and copy
+   the access token from the `Authorization: Bearer ...` header of any dashboard API request in the Network tab.
+   Alternatively, `POST /api/v1/auth/refresh`, sent with the refresh cookie that the OAuth callback set (the callback
+   itself only sets the cookie and redirects to `/dashboard`), returns JSON with `access_token` and `expires_at`. Access
+   tokens expire; copy a fresh one if you get `401`.
    ```sh
    curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:<port>/api/v1/projects/<id>/events?kind=all&limit=50"
    ```

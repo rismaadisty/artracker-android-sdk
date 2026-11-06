@@ -17,6 +17,11 @@ fail or merge the isolated holder classes. Temporary change, not committed:
 grep -E "^id\.art\.tracker\.(lifecycle\.(FragmentSupport|NavBinder|FragmentTracker)|replay\.capture\.(ComposeWalker|ReflectiveSemanticsAccess)|privacy\.(ComposeMaskRules|ComposeMaskRulesKt)) ->" app/build/outputs/mapping/release/mapping.txt
 ```
 
+The minified runs were done with the temporary local edits above (never committed; `git checkout app/build.gradle.kts
+app/proguard-rules.pro` reverts them). To reproduce: apply the edits with
+`sed -i '' 's/isMinifyEnabled = false/isMinifyEnabled = true/' app/build.gradle.kts` and append the three `-print*` lines to
+`app/proguard-rules.pro`, then run `./gradlew :app:assembleRelease`.
+
 Result: `BUILD SUCCESSFUL`; every holder above is a separate, renamed class in `mapping.txt`; `@ARTrackerScreenName` and
 `FlushWorker` keep their names; unused public API (`ARTrackerConfig$Builder`) is removed, so the public API is
 shrinkable. The app was **not run** (no emulator), so "the minified app still sends events" is NOT verified.

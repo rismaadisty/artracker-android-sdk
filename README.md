@@ -61,6 +61,25 @@ Release notes: [`artracker-sdk/CHANGELOG.md`](artracker-sdk/CHANGELOG.md).
 
 ## Quick start
 
+Imports used by the samples below (all in the AAR; Compose, OkHttp and Navigation types come from your own app):
+
+```kotlin
+import id.art.tracker.ARTracker
+import id.art.tracker.ARTrackerConfig
+import id.art.tracker.LogLevel
+import id.art.tracker.NetworkConfig
+import id.art.tracker.PrivacyConfig
+import id.art.tracker.ReplayConfig
+import id.art.tracker.lifecycle.ARTrackerScreenName
+import id.art.tracker.privacy.artrackerMask      // View.artrackerMask() and Modifier.artrackerMask()
+import id.art.tracker.privacy.artrackerUnmask    // View.artrackerUnmask() and Modifier.artrackerUnmask()
+import id.art.tracker.telemetry.okhttp.ARTrackerOkHttpInterceptor
+```
+
+From Java the extensions are static methods on the file facades `id.art.tracker.privacy.ARTrackerMask`
+(`ARTrackerMask.artrackerMask(view)`) and `id.art.tracker.privacy.ARTrackerComposeMask`
+(`ARTrackerComposeMask.artrackerMask(modifier)`).
+
 Initialise once in `Application.onCreate()`:
 
 ```kotlin
@@ -148,7 +167,8 @@ of the SDK: your app must provide it.
 ## Masking
 
 Privacy is enforced inside the replay walker: text is replaced by `*` (same length, at most 32) **before** it is
-stored, so the original string never enters a replay snapshot. Attributes of events, logs and breadcrumbs go through a
+stored, so for masked nodes the original string never enters a replay snapshot (see the limitations below for what
+is not masked). Attributes of events, logs and breadcrumbs go through a
 second layer, the redactor (see "Privacy model").
 
 Defaults:
@@ -207,7 +227,8 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
 - **Crash**: an uncaught-exception handler is installed at `init` and always calls the previous handler (Crashlytics
   and similar). It writes the crash to a file synchronously (atomic rename, no SQLite, no network); the next launch
   turns it into a `log` item (`fatal`, name `crash`) with the highest priority, and it is never evicted.
-- **ANR / native crash**: API 30+, read from `ApplicationExitInfo` and sent as `fatal` `anr` / `native_crash`.
+- **ANR / native crash / low-memory kill**: API 30+, read from `ApplicationExitInfo` and sent as `fatal` `anr` /
+  `native_crash`, and `warn` `low_memory_kill`.
 - **Offline**: items are persisted in SQLite (`artracker.db`) up to 5 MB or 5000 rows (replay chunks are evicted first,
   crash items never) and dropped after 7 days. Batches are at most 50 items or 128 KB, gzip-compressed. Foreground flush
   every 10 s; when the app goes to background one WorkManager job (`CONNECTED` constraint) drains the queue.
@@ -226,6 +247,7 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
 | Replay | `session` | `replay_chunk` | at most 24 KB |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |
+| Low-memory kill (API 30+) | `log` | `warn`, name `low_memory_kill` | from `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
 | HTTP | `log` | `info`/`warn`/`error`, name `http_request` | |
 | `log()` | `log` | per level | |
@@ -277,9 +299,11 @@ Read these before shipping to production.
 - `Throwable` messages and the OS ANR description are only value-pattern redacted; do not put personal data in them.
 - Card numbers that pass the Luhn check are redacted to `**** **** **** NNNN` (the last four digits are kept, same as
   the web SDK); emails, JWTs and `Bearer` tokens are replaced entirely.
-- Backups: the file `artracker_transport` (SharedPreferences) holds the public API key copy used by the WorkManager
-  worker and the kill-switch state. If you do not want it in cloud backups / device transfer, exclude it in your
-  `backup_rules.xml` / `data_extraction_rules.xml`. Item data is in `artracker.db` and `filesDir/artracker/`.
+- Backups: by default Android cloud backup and device transfer copy the app's data. For ARTracker that is the
+  SharedPreferences file `artracker_transport` (a copy of the public API key for the WorkManager worker, and the
+  kill-switch state), the database `artracker.db` (queued, not yet sent items) and `filesDir/artracker/` (crash files
+  that were not sent yet). Exclude them in your `backup_rules.xml` / `data_extraction_rules.xml` unless you want queued
+  telemetry to follow the user to a new device.
 
 **Replay**
 
@@ -317,10 +341,9 @@ Last full run (2026-11-06): `:artracker-sdk:testDebugUnitTest` 621 tests in 58 c
 (includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 4 tests, 0 failures; `:app:assembleDebug`
 and an R8-minified `:app:assembleRelease` succeed.
 
-Note: with a real `artracker.key` in `local.properties`, `SampleApplicationBlankKeyTest` skips its two tests and
-`SampleApplicationInitTest` fails during Robolectric start-up (`FileSystemAlreadyExistsException` in Robolectric's native
-runtime loader, a second sandbox at SDK level 35). This was reproduced on the commit before Task 26, so it is not
-caused by the publishing changes. The counts above were taken with the `artracker.*` lines removed from `local.properties`.
+The sample-app tests do not depend on `local.properties`: they use a test `Application` that never initialises the SDK,
+one Robolectric SDK level, and explicit arguments, so `:app:testDebugUnitTest` passes with or without `artracker.*`
+entries (4 tests either way).
 
 Not covered by automated tests: anything that needs a device (see the status box), and E2E against a real backend.
 
