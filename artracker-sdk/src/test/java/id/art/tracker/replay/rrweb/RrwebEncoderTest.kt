@@ -130,10 +130,21 @@ class RrwebEncoderTest {
 
     @Test
     fun fullSnapshot_maskedTextStaysMasked() {
-        val snap = encoder.fullSnapshot(root(label(2, "****", masked = true)), 0L)
-        assertEquals(listOf("****"), textsOf(snap))
+        val tree = root(
+            label(2, "****", masked = true),
+            Wireframe(3, 0, 0, 10, 10, WireframeType.INPUT, text = "*******", masked = true),
+            Wireframe(4, 0, 0, 10, 10, WireframeType.WEB, masked = true),
+            Wireframe(5, 0, 0, 10, 10, WireframeType.CONTAINER, summarized = true),
+        )
+        val snap = encoder.fullSnapshot(tree, 0L)
+        // Every textContent in the output is exactly a wireframe text or a fixed label, nothing else.
+        assertEquals(listOf("****", "*******", "[blocked]", "[\u2026]"), textsOf(snap))
         assertEquals("true", (elementFor(snap, 2)["attributes"] as Map<*, *>)["data-artracker-masked"])
-        assertFalse(Json.encode(snap).contains("secret"))
+        // Also no text-like attribute values: only style / data-artracker-* attributes exist.
+        for (node in allNodes(snap).filter { it["type"] == 2 }) {
+            val keys = (node["attributes"] as Map<String, Any?>).keys
+            assertTrue(keys.toString(), keys.all { it == "style" || it.startsWith("data-artracker-") })
+        }
     }
 
     @Test
@@ -375,5 +386,226 @@ class RrwebEncoderTest {
         )
         val allowed = setOf("****", "[blocked]", "visible", "[…]")
         assertTrue(textsOf(encoder.fullSnapshot(tree, 0L)).all { it in allowed })
+    }
+
+    @Test
+    fun mutation_addedChildUsesFinalGeometryOfMovedParent() {
+        val prev = root(box(2, 10, 10, 100, 100))
+        val next = root(box(2, 30, 40, 100, 100, box(3, 35, 45, 5, 5)))
+        val snap = encoder.fullSnapshot(prev, 0L)
+        val data = encoder.mutation(WireframeDiffer.diff(prev, next), 1L)!!.map("data")
+        val childStyle = style(data.list("adds").single().map("node"))
+        assertTrue(childStyle, childStyle.contains("left:5px;top:5px;"))
+        val attrs = data.list("attributes").single()
+        assertEquals(elementFor(snap, 2)["id"], attrs["id"])
+        val parentStyle = (attrs["attributes"] as Map<String, Any?>)["style"] as String
+        assertTrue(parentStyle, parentStyle.contains("left:30px;top:40px;"))
+    }
+
+    @Test
+    fun mutation_addedGrandchildWhenGrandparentMovesAndParentStaysInScreenSpace() {
+        // Grandparent moves (0,0)->(50,50); parent stays at screen (20,20), so its relative offset changes too.
+        val prev = root(box(2, 0, 0, 200, 200, box(3, 20, 20, 100, 100)))
+        val next = root(box(2, 50, 50, 200, 200, box(3, 20, 20, 100, 100, box(4, 25, 27, 5, 5))))
+        val snap = encoder.fullSnapshot(prev, 0L)
+        val data = encoder.mutation(WireframeDiffer.diff(prev, next), 1L)!!.map("data")
+        val grandchild = data.list("adds").single()
+        assertEquals(elementFor(snap, 3)["id"], grandchild["parentId"])
+        assertTrue(style(grandchild.map("node")), style(grandchild.map("node")).contains("left:5px;top:7px;"))
+        val byId = data.list("attributes").associate { it["id"] to (it["attributes"] as Map<String, Any?>)["style"] as String }
+        assertTrue(byId.getValue(elementFor(snap, 2)["id"]).contains("left:50px;top:50px;"))
+        assertTrue(byId.getValue(elementFor(snap, 3)["id"]).contains("left:-30px;top:-30px;"))
+    }
+
+    @Test
+    fun mutation_addedGrandchildWhenGrandparentAndParentMoveTogether() {
+        // Stale-geometry discriminator: the parent's absolute position changes (but not its relative one).
+        val prev = root(box(2, 0, 0, 200, 200, box(3, 20, 20, 100, 100)))
+        val next = root(box(2, 50, 50, 200, 200, box(3, 70, 70, 100, 100, box(4, 75, 77, 5, 5))))
+        val snap = encoder.fullSnapshot(prev, 0L)
+        val data = encoder.mutation(WireframeDiffer.diff(prev, next), 1L)!!.map("data")
+        val grandchild = data.list("adds").single()
+        assertEquals(elementFor(snap, 3)["id"], grandchild["parentId"])
+        assertTrue(style(grandchild.map("node")), style(grandchild.map("node")).contains("left:5px;top:7px;"))
+        assertEquals(listOf(elementFor(snap, 2)["id"]), data.list("attributes").map { it["id"] })
+    }
+
+    // ---- mutation applied to the snapshot DOM must equal a fresh snapshot of the next frame ----
+
+    private class DomNode(
+        var id: Int,
+        val kind: Int,
+        val tagName: String?,
+        val attrs: MutableMap<String, Any?>,
+        var text: String?,
+        val children: MutableList<DomNode> = ArrayList(),
+    )
+
+    private class Dom(snapshot: Map<String, Any?>) {
+        val byId = HashMap<Int, DomNode>()
+        val parentOf = HashMap<Int, DomNode>()
+        val document: DomNode = build(snapshot.map("data").map("node"))
+
+        private fun Map<String, Any?>.map(key: String) = this[key] as Map<String, Any?>
+
+        fun build(m: Map<String, Any?>): DomNode {
+            val node = DomNode(
+                m["id"] as Int, m["type"] as Int, m["tagName"] as String?,
+                ((m["attributes"] as? Map<String, Any?>) ?: emptyMap()).toMutableMap(), m["textContent"] as String?,
+            )
+            assertFalse("duplicate node id ${node.id}", byId.containsKey(node.id))
+            byId[node.id] = node
+            for (c in (m["childNodes"] as? List<Map<String, Any?>>).orEmpty()) {
+                val child = build(c)
+                node.children.add(child)
+                parentOf[child.id] = node
+            }
+            return node
+        }
+
+        private fun detach(node: DomNode) {
+            byId.remove(node.id)
+            node.children.forEach(::detach)
+            parentOf.remove(node.id)
+        }
+
+        /** rrweb order: texts, attributes, removes, adds (per the replayer's applyMutation). */
+        fun apply(event: Map<String, Any?>) {
+            val data = event["data"] as Map<String, Any?>
+            for (t in data["texts"] as List<Map<String, Any?>>) {
+                byId.getValue(t["id"] as Int).text = t["value"] as String
+            }
+            for (a in data["attributes"] as List<Map<String, Any?>>) {
+                val node = byId.getValue(a["id"] as Int)
+                for ((k, v) in a["attributes"] as Map<String, Any?>) if (v == null) node.attrs.remove(k) else node.attrs[k] = v
+            }
+            for (r in data["removes"] as List<Map<String, Any?>>) {
+                val node = byId.getValue(r["id"] as Int)
+                val parent = parentOf.getValue(node.id)
+                assertEquals("remove parentId", r["parentId"], parent.id)
+                parent.children.remove(node)
+                detach(node)
+            }
+            for (a in data["adds"] as List<Map<String, Any?>>) {
+                val parent = byId.getValue(a["parentId"] as Int)
+                val node = build(a["node"] as Map<String, Any?>)
+                parentOf[node.id] = parent
+                val nextId = a["nextId"] as Int?
+                if (nextId == null) {
+                    parent.children.add(node)
+                } else {
+                    val idx = parent.children.indexOfFirst { it.id == nextId }
+                    assertTrue("nextId $nextId must be a child of ${parent.id}", idx >= 0)
+                    parent.children.add(idx, node)
+                }
+            }
+        }
+
+        /** Structure + attributes + text, with node ids stripped. */
+        fun normalized(node: DomNode = document): Any =
+            mapOf(
+                "kind" to node.kind, "tag" to node.tagName, "attrs" to node.attrs.toMap(), "text" to node.text,
+                "children" to node.children.map { normalized(it) },
+            )
+    }
+
+    private fun assertMutationEqualsSnapshot(prev: Wireframe, next: Wireframe) {
+        val enc = RrwebEncoder()
+        val dom = Dom(enc.fullSnapshot(prev, 0L))
+        val event = enc.mutation(WireframeDiffer.diff(prev, next), 1L)
+        if (event != null) dom.apply(event)
+        val expected = Dom(RrwebEncoder().fullSnapshot(next, 0L))
+        assertEquals(expected.normalized(), dom.normalized())
+        // The encoder must also keep working on the NEXT diff after this mutation (state stayed in sync).
+        val again = enc.mutation(WireframeDiffer.diff(next, next.copy()), 2L)
+        assertNull(again)
+    }
+
+    @Test
+    fun applied_textChange() = assertMutationEqualsSnapshot(
+        root(label(2, "a"), box(3, 0, 0, 10, 10, label(4, "b"))),
+        root(label(2, "a2"), box(3, 0, 0, 10, 10, label(4, "b2"))),
+    )
+
+    @Test
+    fun applied_addAndRemove() = assertMutationEqualsSnapshot(
+        root(box(2), box(3, 0, 0, 10, 10, label(5, "x")), box(4)),
+        root(box(2), box(6, 1, 2, 10, 10, label(7, "y")), box(4), box(8)),
+    )
+
+    @Test
+    fun applied_addInTheMiddleAndAtStart() = assertMutationEqualsSnapshot(
+        root(box(2), box(4)),
+        root(box(5), box(2), box(3, 0, 0, 10, 10, box(6)), box(4)),
+    )
+
+    @Test
+    fun applied_reorder() = assertMutationEqualsSnapshot(
+        root(box(2), label(3, "t"), box(4), box(5)),
+        root(box(5), box(2), box(4), label(3, "t")),
+    )
+
+    @Test
+    fun applied_reorderWithAddAndRemove() = assertMutationEqualsSnapshot(
+        root(box(2), box(3), box(4), box(5)),
+        root(box(4), box(6), box(2), box(5)),
+    )
+
+    @Test
+    fun applied_movedParentWithAddedChild() = assertMutationEqualsSnapshot(
+        root(box(2, 10, 10, 100, 100)),
+        root(box(2, 30, 40, 100, 100, box(3, 35, 45, 5, 5))),
+    )
+
+    @Test
+    fun applied_movedParentWithFollowingAndStationaryChildren() = assertMutationEqualsSnapshot(
+        root(box(2, 10, 10, 100, 100, box(3, 12, 14, 5, 5), box(4, 20, 20, 5, 5))),
+        root(box(2, 30, 40, 100, 100, box(3, 32, 44, 5, 5), box(4, 20, 20, 5, 5), box(5, 31, 41, 3, 3))),
+    )
+
+    @Test
+    fun applied_movedGrandparentWithAddedGrandchild() = assertMutationEqualsSnapshot(
+        root(box(2, 0, 0, 200, 200, box(3, 20, 20, 100, 100))),
+        root(box(2, 50, 50, 200, 200, box(3, 20, 20, 100, 100, box(4, 25, 27, 5, 5)))),
+    )
+
+    @Test
+    fun applied_movedGrandparentAndParentWithAddedGrandchild() = assertMutationEqualsSnapshot(
+        root(box(2, 0, 0, 200, 200, box(3, 20, 20, 100, 100))),
+        root(box(2, 50, 50, 200, 200, box(3, 70, 70, 100, 100, box(4, 75, 77, 5, 5)))),
+    )
+
+    @Test
+    fun applied_movedSubtreeToAnotherParent() = assertMutationEqualsSnapshot(
+        root(box(2, 10, 10, 100, 100, box(5, 12, 12, 10, 10, label(6, "m"))), box(3, 200, 200, 100, 100)),
+        root(box(2, 10, 10, 100, 100), box(3, 200, 200, 100, 100, box(5, 205, 206, 10, 10, label(6, "m")))),
+    )
+
+    @Test
+    fun applied_maskedAndStyleChanges() = assertMutationEqualsSnapshot(
+        root(box(2), label(3, "a")),
+        root(box(2).copy(masked = true, alpha = 0.5f, background = 0xFF123456.toInt()), label(3, "a").copy(textColor = 5, textSizeSp = 12f)),
+    )
+
+    @Test
+    fun applied_rootReplaced() = assertMutationEqualsSnapshot(
+        box(1, 0, 0, 360, 640, label(2, "a")),
+        box(9, 0, 0, 360, 640, label(2, "a")),
+    )
+
+    @Test
+    fun applied_chainOfFramesStaysInSync() {
+        val frames = listOf(
+            root(box(2, 10, 10, 100, 100, label(3, "a")), box(4)),
+            root(box(2, 30, 40, 100, 100, label(3, "a"), box(5, 33, 44, 4, 4)), box(4)),
+            root(box(4), box(2, 30, 40, 100, 100, label(3, "b"), box(5, 33, 44, 4, 4))),
+            root(box(4, 0, 0, 100, 50, box(2, 30, 40, 100, 100, box(5, 36, 46, 4, 4))), box(6, 1, 1, 2, 2)),
+        )
+        val enc = RrwebEncoder()
+        val dom = Dom(enc.fullSnapshot(frames[0], 0L))
+        for (i in 1 until frames.size) {
+            enc.mutation(WireframeDiffer.diff(frames[i - 1], frames[i]), i.toLong())?.let { dom.apply(it) }
+            assertEquals("frame $i", Dom(RrwebEncoder().fullSnapshot(frames[i], 0L)).normalized(), dom.normalized())
+        }
     }
 }

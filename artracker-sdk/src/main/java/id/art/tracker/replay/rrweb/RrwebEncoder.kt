@@ -89,18 +89,8 @@ internal class RrwebEncoder {
             removes.add(mapOf("parentId" to parentNode, "id" to st.nodeId))
             drop(id)
         }
-        val adds = ArrayList<Map<String, Any?>>()
-        diff.adds.forEachIndexed { i, (parentWf, node) ->
-            val parentNode = parentNodeId(parentWf) ?: return@forEachIndexed
-            val (px, py) = absOf(parentWf) ?: return@forEachIndexed
-            val nextId = diff.addBefore.getOrNull(i)?.let { states[it]?.nodeId }
-            adds.add(mapOf("parentId" to parentNode, "nextId" to nextId, "node" to serialize(node, parentWf, px, py)))
-        }
-        val texts = ArrayList<Map<String, Any?>>()
-        for ((id, value) in diff.texts) {
-            val textId = states[id]?.textId ?: continue
-            texts.add(mapOf("id" to textId, "value" to value))
-        }
+        // Geometry state must be final (ancestors first: updates are pre-order) before new nodes are
+        // positioned relative to their parents, so this runs before the adds are serialized.
         val attributes = ArrayList<Map<String, Any?>>()
         for (w in diff.updates) {
             val st = states[w.id] ?: continue
@@ -113,6 +103,18 @@ internal class RrwebEncoder {
             for (k in st.attrs.keys) if (k !in fresh) changed[k] = null
             st.attrs = fresh
             if (changed.isNotEmpty()) attributes.add(mapOf("id" to st.nodeId, "attributes" to changed))
+        }
+        val adds = ArrayList<Map<String, Any?>>()
+        diff.adds.forEachIndexed { i, (parentWf, node) ->
+            val parentNode = parentNodeId(parentWf) ?: return@forEachIndexed
+            val (px, py) = absOf(parentWf) ?: return@forEachIndexed
+            val nextId = diff.addBefore.getOrNull(i)?.let { states[it]?.nodeId }
+            adds.add(mapOf("parentId" to parentNode, "nextId" to nextId, "node" to serialize(node, parentWf, px, py)))
+        }
+        val texts = ArrayList<Map<String, Any?>>()
+        for ((id, value) in diff.texts) {
+            val textId = states[id]?.textId ?: continue
+            texts.add(mapOf("id" to textId, "value" to value))
         }
         if (removes.isEmpty() && adds.isEmpty() && texts.isEmpty() && attributes.isEmpty()) return null
         return mapOf(
