@@ -438,46 +438,52 @@ CREATE INDEX idx_items_pending ON items(batch_id, priority, created_at);
 
 ## 14. Checklist Implementasi
 
+> **Status (2026-11-06):** Fase 0–5 selesai di JVM/Robolectric (kecuali dua item di bawah yang belum dijalankan); sample app (Fase 6) dan audit fuzz selesai.
+> **Belum dijalankan/diukur** (butuh emulator, perangkat, atau Docker, yang tidak tersedia saat Task 25): tes instrumentasi crash offline,
+> pemutaran di `rrweb-player`, Macrobenchmark/Perfetto (walk ≤8 ms, CPU background <1%, `init` ≤2 ms), dan E2E ke backend lokal
+> (`docs/e2e-manual-test.md`). Ukuran AAR rilis terukur: 393323 byte (`PERF.md`). Fase 7 (rilis) belum dikerjakan.
+
+
 ### Fase 0 — Fondasi
-- [ ] Buat modul `:artracker-sdk` (`com.android.library`), daftarkan di `settings.gradle.kts`, catalog, `explicitApi()`, `consumer-rules.pro`
-- [ ] Library `namespace = "id.art.tracker.sdk"`, package Kotlin `id.art.tracker` (Q2); `app` bergantung pada `:artracker-sdk` tanpa mengubah namespace app
-- [ ] Verifikasi build AGP 9 + Kotlin (R2); siapkan unit test + Robolectric
+- [x] Buat modul `:artracker-sdk` (`com.android.library`), daftarkan di `settings.gradle.kts`, catalog, `explicitApi()`, `consumer-rules.pro`
+- [x] Library `namespace = "id.art.tracker.sdk"`, package Kotlin `id.art.tracker` (Q2); `app` bergantung pada `:artracker-sdk` tanpa mengubah namespace app
+- [x] Verifikasi build AGP 9 + Kotlin (R2); siapkan unit test + Robolectric
 
 ### Fase 1 — Core & API
-- [ ] `ARTrackerConfig` (+ Java builder, validasi key `art_live_`), `ARTracker` facade no-op-safe
-- [ ] UUIDv7, `ItemFactory`, `DeviceContext`, `SessionManager`, `IdentityStore`, `KillSwitch`
-- [ ] `AppLifecycleObserver`, `ActivityTracker`, `FragmentTracker`, `trackNavController`, `screen()`
+- [x] `ARTrackerConfig` (+ Java builder, validasi key `art_live_`), `ARTracker` facade no-op-safe
+- [x] UUIDv7, `ItemFactory`, `DeviceContext`, `SessionManager`, `IdentityStore`, `KillSwitch`
+- [x] `AppLifecycleObserver`, `ActivityTracker`, `FragmentTracker`, `trackNavController`, `screen()`
 
 ### Fase 2 — Transport & Offline
-- [ ] `EventStore` (SQLite, prioritas, eviction, reset batch yatim)
-- [ ] `EventPipeline` (Channel → redaksi → persist), `Batcher`, `PayloadEncoder` (stream gzip)
-- [ ] `IngestClient` + tabel reaksi status + `Backoff` (Retry-After)
-- [ ] `FlushWorker` (WorkManager, constraint `CONNECTED`) + config tersimpan untuk worker
-- [ ] Tes kontrak `MockWebServer`
+- [x] `EventStore` (SQLite, prioritas, eviction, reset batch yatim)
+- [x] `EventPipeline` (Channel → redaksi → persist), `Batcher`, `PayloadEncoder` (stream gzip) — batching ada di `ItemQueue.claimBatch` (tidak ada kelas `Batcher` terpisah)
+- [x] `IngestClient` + tabel reaksi status + `Backoff` (Retry-After)
+- [x] `FlushWorker` (WorkManager, constraint `CONNECTED`) + config tersimpan untuk worker
+- [x] Tes kontrak `MockWebServer`
 
 ### Fase 3 — Telemetry
-- [ ] `CrashHandler` + `CrashStore` (atomik, chain), konversi saat launch berikutnya
-- [ ] `ExitInfoCollector` (API 30+)
-- [ ] `Breadcrumbs`, `captureException`, `log()`, dedup fingerprint
-- [ ] `ARTrackerOkHttpInterceptor` (compileOnly)
-- [ ] Tes instrumentasi crash offline → relaunch (acceptance criteria #2)
+- [x] `CrashHandler` + `CrashStore` (atomik, chain), konversi saat launch berikutnya
+- [x] `ExitInfoCollector` (API 30+)
+- [x] `Breadcrumbs`, `captureException`, `log()`, dedup fingerprint
+- [x] `ARTrackerOkHttpInterceptor` (compileOnly)
+- [ ] Tes instrumentasi crash offline → relaunch (acceptance criteria #2) *(belum: butuh emulator; hanya ada tes JVM `CrashRecoveryTest`)*
 
 ### Fase 4 — Privacy Engine
-- [ ] `MaskingPolicy`, `ViewMaskRules` (inputType, autofill, tag, kelas), `ComposeMaskRules`
-- [ ] `artrackerMask()`/`artrackerUnmask()` untuk View & Compose, resource id tag
-- [ ] `AttributeRedactor` (port korpus PII dari web SDK)
+- [x] `MaskingPolicy`, `ViewMaskRules` (inputType, autofill, tag, kelas), `ComposeMaskRules`
+- [x] `artrackerMask()`/`artrackerUnmask()` untuk View & Compose, resource id tag
+- [x] `AttributeRedactor` (port korpus PII dari web SDK)
 
 ### Fase 5 — Replay
-- [ ] `RootViewLocator`, `ViewWalker`, `ComposeWalker` (dengan fallback)
-- [ ] `FrameScheduler` (dirty flag, throttle, watchdog, stop di background)
-- [ ] `WireframeDiffer`, `RrwebEncoder`, `ReplayChunker`, sampling
-- [ ] `TouchRecorder` (Window.Callback wrapper)
-- [ ] Validasi pemutaran chunk di `rrweb-player`
+- [x] `RootViewLocator`, `ViewWalker`, `ComposeWalker` (dengan fallback)
+- [x] `FrameScheduler` (dirty flag, throttle, watchdog, stop di background)
+- [x] `WireframeDiffer`, `RrwebEncoder`, `ReplayChunker`, sampling
+- [x] `TouchRecorder` (Window.Callback wrapper)
+- [ ] Validasi pemutaran chunk di `rrweb-player` *(belum diputar: struktur sudah divalidasi dengan `tools/replay-viewer/validate-chunks.mjs`; buka `tools/replay-viewer/index.html` untuk memutar)*
 
 ### Fase 6 — Sample App & Pengerasan
-- [ ] Layar demo (§10.5) + panel debug
-- [ ] Macrobenchmark & Perfetto: walk ≤8 ms/frame, CPU background <1% (acceptance criteria #1)
-- [ ] Audit: tidak ada exception SDK yang lolos ke app (fuzz API publik)
+- [x] Layar demo (§10.5) + panel debug — layar Login/Payment/Feed/Legacy/Diagnostics; panel debug = `DiagnosticsScreen`
+- [ ] Macrobenchmark & Perfetto: walk ≤8 ms/frame, CPU background <1% (acceptance criteria #1) *(belum diukur: butuh emulator/perangkat; prosedur dan tabel hasil di `PERF.md`)*
+- [x] Audit: tidak ada exception SDK yang lolos ke app (fuzz API publik) — `PublicApiFuzzTest` (1000 iterasi, seed tetap): 3 bug ditemukan dan diperbaiki (pipeline mati oleh `Error`, `Number` non-JSON, surrogate tunggal)
 
 ### Fase 7 — Rilis
 - [ ] `maven-publish` (groupId `id.art.tracker`, artifact `artracker-android`), sources + javadoc jar
