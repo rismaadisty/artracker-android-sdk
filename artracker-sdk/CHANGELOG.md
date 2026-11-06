@@ -31,8 +31,8 @@ on a device, emulator or against a backend**: see "Verification status" and the 
 ### Artifact
 
 - Coordinates `id.art.tracker:artracker-android:0.1.0`, `minSdk 24`.
-- Release AAR size, measured on 2026-11-06 with `./gradlew :artracker-sdk:assembleRelease`: **394693 bytes**
-  (about 385 KiB), not minified (`artracker-sdk/PERF.md` section 4 has the earlier 393323-byte measurement).
+- Release AAR size, measured on 2026-11-06 with `./gradlew :artracker-sdk:assembleRelease`: **398621 bytes**
+  (about 389 KiB), not minified (`artracker-sdk/PERF.md` section 4 has the same figure).
 - Runtime dependencies in the POM: `kotlin-stdlib`, `kotlinx-coroutines-android`, `androidx.work:work-runtime-ktx`,
   `androidx.lifecycle:lifecycle-process`, `androidx.core:core-ktx`. OkHttp, Compose, Fragment and Navigation are not
   dependencies.
@@ -51,7 +51,9 @@ on a device, emulator or against a backend**: see "Verification status" and the 
 See "Known limitations & privacy notes" in the README. Most important: the `art_live_` key is public; `artrackerUnmask()`
 inside a masked container re-exposes its subtree; crash items bypass `beforeSend` and key-based redaction; popup windows
 do not inherit anchor masking; replay chunk `seq` restarts per process; multi-process apps are unsupported; Compose
-capture was tested on 1.7.x only.
+capture was tested on 1.7.x only; replay text of views that are not masked is not value-redacted; the envelope
+`app_version` is the version at send time; `TelemetryItem` and `Diagnostics` are data classes (0.x, no binary compatibility
+guarantee).
 
 ### Publishing TODO(owner)
 

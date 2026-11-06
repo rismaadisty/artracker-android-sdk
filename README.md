@@ -8,11 +8,11 @@ Version `0.1.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 >
 > | Area | State |
 > | --- | --- |
-> | Unit tests (JVM + Robolectric) | **Verified**: 621 SDK tests (58 classes) + 4 sample-app tests, 0 failures (see "Tests" below) |
+> | Unit tests (JVM + Robolectric) | **Verified**: 654 SDK tests (60 classes) + 5 sample-app tests, 0 failures (see "Tests" below) |
 > | Sample app builds (`:app:assembleDebug`, R8-minified `:app:assembleRelease`) | **Verified** |
 > | Run on a device or emulator | **NOT run.** No emulator was available. Nothing here has executed on real Android |
 > | End to end against the backend | **NOT run.** Checklist: [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md) |
-> | Performance (`init` <= 2 ms, replay walk p95 <= 8 ms, background CPU < 1 %) | **NOT measured.** Procedure: [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). Only the AAR size is measured |
+> | Performance (`init` <= 2 ms, replay walk p95 <= 8 ms, background CPU < 1 %) | **NOT measured.** Procedure: [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). Only the AAR size is measured (398621 bytes, release, not minified) |
 > | Playback of replay chunks in `rrweb-player` | **NOT verified.** Structure only (`validate-chunks.mjs`); see [`tools/replay-viewer`](tools/replay-viewer) |
 > | Instrumented tests (offline crash then relaunch, Compose walker on device) | **NOT written/run** |
 > | R8 with the consumer rules | Sample app minified build and a stand-alone R8 run without the optional libraries: **verified to succeed**. A minified app **executed** on a device, or a real AGP app without those libraries: **NOT run** (see "ProGuard / R8") |
@@ -102,25 +102,27 @@ class MyApp : Application() {
 
 Java callers can use `new ARTrackerConfig.Builder(endpoint, apiKey).replay(...).build()`.
 
-`init` is cheap on the calling thread (validates, builds the object graph, starts the session); opening the database,
-purging old items and the first flush run in the background. A second `init` is ignored. An invalid config leaves the
-SDK uninitialised and every other call a no-op (set `debug = true` to see why in logcat, tag `ARTracker`; the key is
-never logged).
+`init` runs a small synchronous part on the calling thread: it validates the config, builds the object graph and
+starts the session, which **reads three small SharedPreferences files** (session, identity, transport config; a disk
+load on first use, so StrictMode may report a disk read; not measured on a device). Opening the database, purging old
+items and the first flush run in the background. A second `init` is ignored. An invalid config leaves the
+SDK uninitialised and every other call a no-op; each validation error is logged once at warning level (logcat, tag
+`ARTracker`) whatever `debug` is, and the key is never logged.
 
 ### `ARTrackerConfig`
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
 | `endpoint` | required | Must start with `http://` or `https://`. Cleartext needs your own network security config |
-| `apiKey` | required | Must start with `art_live_`, 32 to 128 characters. `art_sec_` keys are rejected |
+| `apiKey` | required | Must start with `art_live_`, 32 to 128 characters, no control characters. `art_sec_` keys are rejected |
 | `environment` | `"production"` | Sent in the envelope `context.environment` |
 | `appVersion` | `null` | Falls back to the app's `versionName` |
 | `debug` | `false` | SDK logs to logcat (tag `ARTracker`) |
-| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0)` | `framesPerSecond` is clamped to 0.5..4.0 |
+| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0)` | `framesPerSecond` is clamped to 0.5..4.0; NaN or infinity is rejected |
 | `privacy` | `PrivacyConfig(maskAllInputs = true, maskAllText = false, sensitiveViewClasses = emptySet())` | See "Masking" |
 | `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false)` | Used by the OkHttp interceptor. `captureHeaders` is reserved: headers are never captured |
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
-| `sessionTimeoutMs` | `1_800_000` | Idle timeout (30 min); a session never lasts more than 24 h |
+| `sessionTimeoutMs` | `1_800_000` | Idle timeout (30 min), minimum 1000; a session never lasts more than 24 h |
 | `beforeSend` | `null` | `BeforeSend { item -> item }`: modify an item, or return `null` to drop it. Runs before the item is queued |
 
 ## API
@@ -296,7 +298,13 @@ Read these before shipping to production.
 - Popup and dropdown windows (spinners, `PopupWindow`, menus) are separate window roots and do **not** inherit the
   masking of the view they are anchored to.
 - WebView content is never captured (the block is drawn, the DOM is invisible to the View hierarchy).
-- `Throwable` messages and the OS ANR description are only value-pattern redacted; do not put personal data in them.
+- What is redacted, exactly. Items sent through the pipeline (`track`, `log`, `captureException`, `screen`, HTTP
+  records, `ApplicationExitInfo` items) pass `beforeSend`, then **by key** (attribute keys such as `password`, `token`,
+  `cookie`: value replaced) and **by value pattern** (email, Luhn card, JWT, `Bearer`: in attribute values and also in the
+  item `name` and `message`, so a `log` message, a `track` name or an ANR description is covered). Crash items are the
+  exception: they skip `beforeSend` and key-based redaction, and only their message, stack trace header lines,
+  screen and breadcrumbs get the value patterns. Value patterns are pattern matching only; do not put personal data in
+  names, messages or exception messages.
 - Card numbers that pass the Luhn check are redacted to `**** **** **** NNNN` (the last four digits are kept, same as
   the web SDK); emails, JWTs and `Bearer` tokens are replaced entirely.
 - Backups: by default Android cloud backup and device transfer copy the app's data. For ARTracker that is the
@@ -323,13 +331,23 @@ Read these before shipping to production.
 - **Multi-process apps are not supported**: call `init` in the main process only; the crash/ExitInfo files, the SQLite
   queue and the WorkManager job assume one process.
 - On the very first `init` after install, `ApplicationExitInfo` may report exits that happened **before** the SDK was
-  installed (up to the 16 the OS keeps); they are sent as fatal and can skew ANR rate once.
+  installed (only those of the last 7 days, up to the 16 the OS keeps); they are sent as fatal and can skew ANR rate once.
 - `diagnostics()` reads the database: never call it on the main thread.
 - `NetworkConfig.captureHeaders` is reserved and ignored. `sampleRate = 0` on the interceptor still records `http`
   breadcrumbs. Cancelled calls are reported as errors.
 - Native-crash traces on API 31+ are protobuf tombstones and are of no use in the item; the ANR trace is kept (16 KB).
-- The first `init` reads three SharedPreferences files on the calling thread; the cost was not measured on a device
-  (see `PERF.md`).
+- The first `init` reads three SharedPreferences files on the calling thread (a disk load, visible to StrictMode); the
+  cost was not measured on a device (see `PERF.md`), so the `init` <= 2 ms budget is unverified.
+- Replay text of views that are **not masked** is not value-redacted: an email address or phone number shown in a plain
+  `TextView` or Compose `Text` appears verbatim in the replay unless the view is masked (`maskAllText`, a sensitive
+  class or the Compose mask modifier). The web SDK redacts that text; the Android SDK does not.
+- The envelope `context.app_version` is the version at SEND time. Crash and ExitInfo items that are sent after an app
+  upgrade are therefore attributed to the newer version by the backend; the item attribute `app_version` is the correct
+  one.
+- Every resumed Fragment is reported as a screen, including NavHost containers, dialogs and headless fragments, so
+  `screen_view` can be noisier than the visible screens.
+- `TelemetryItem` and `Diagnostics` are public data classes. The API is 0.x: binary compatibility between versions is
+  not guaranteed.
 
 ## Tests
 
@@ -337,13 +355,13 @@ Read these before shipping to production.
 ./gradlew :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug
 ```
 
-Last full run (2026-11-06): `:artracker-sdk:testDebugUnitTest` 621 tests in 58 classes, 0 failures, 0 skipped
-(includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 4 tests, 0 failures; `:app:assembleDebug`
+Last full run (2026-11-06): `:artracker-sdk:testDebugUnitTest` 654 tests in 60 classes, 0 failures, 0 skipped
+(includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 5 tests, 0 failures; `:app:assembleDebug`
 and an R8-minified `:app:assembleRelease` succeed.
 
 The sample-app tests do not depend on `local.properties`: they use a test `Application` that never initialises the SDK,
 one Robolectric SDK level, and explicit arguments, so `:app:testDebugUnitTest` passes with or without `artracker.*`
-entries (4 tests either way).
+entries (5 tests either way).
 
 Not covered by automated tests: anything that needs a device (see the status box), and E2E against a real backend.
 

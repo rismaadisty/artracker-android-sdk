@@ -138,7 +138,7 @@ artracker-sdk/src/main/java/id/art/tracker/
 
 ### 4.1 Inisialisasi
 
-- `ARTracker.init()` dipanggil dari `Application.onCreate()`. Bagian sinkron di main thread **≤2 ms**: validasi config, membuat `ARTrackerCore`, memasang `CrashHandler` (harus sedini mungkin) dan `ActivityLifecycleCallbacks`.
+- `ARTracker.init()` dipanggil dari `Application.onCreate()`. Bagian sinkron di thread pemanggil (target **≤2 ms**, belum terukur di perangkat): validasi config, membaca tiga file `SharedPreferences` kecil (`artracker_session`, identitas, `artracker_transport`; pemuatan disk saat pertama kali, StrictMode dapat melaporkannya), membuat `ARTrackerCore`, memasang `CrashHandler` (harus sedini mungkin) dan `ActivityLifecycleCallbacks`.
 - Bagian berat di worker: membuka SQLite, membaca crash file dari sesi lalu, `ExitInfoCollector`, flush awal.
 - Idempoten: pemanggilan kedua diabaikan dengan warning.
 - Tidak memakai `ContentProvider`/App Startup untuk auto-init, karena API key harus diberikan secara eksplisit.
@@ -441,7 +441,7 @@ CREATE INDEX idx_items_pending ON items(batch_id, priority, created_at);
 > **Status (2026-11-06):** Fase 0–5 selesai di JVM/Robolectric (kecuali dua item di bawah yang belum dijalankan); sample app (Fase 6) dan audit fuzz selesai.
 > **Belum dijalankan/diukur** (butuh emulator, perangkat, atau Docker, yang tidak tersedia saat Task 25): tes instrumentasi crash offline,
 > pemutaran di `rrweb-player`, Macrobenchmark/Perfetto (walk ≤8 ms, CPU background <1%, `init` ≤2 ms), dan E2E ke backend lokal
-> (`docs/e2e-manual-test.md`). Ukuran AAR rilis terukur: 394693 byte (`PERF.md`).
+> (`docs/e2e-manual-test.md`). Ukuran AAR rilis terukur: 398621 byte (`PERF.md`).
 > Fase 7: konfigurasi publikasi, README, dan CHANGELOG selesai (Task 26, `0.1.0`); publikasi ke repositori publik dan E2E belum dikerjakan.
 
 
