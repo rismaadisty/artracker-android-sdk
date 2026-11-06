@@ -13,10 +13,11 @@ import id.art.tracker.privacy.UrlScrubber
  *    navigation routes, and a resolved route id identifies a record/user just like a URL path id does;
  * 3. every character outside `[A-Za-z0-9._-/:]` replaced with `_`: always a valid URL path, readable in the
  *    player UI (percent-encoding would show `%20`/`%5B`), and it neutralises the `[redacted]` markers' brackets;
- * 4. capped at [MAX_LENGTH] characters; blank -> `unknown`.
+ * 4. capped at [MAX_LENGTH] characters; a result without any letter or digit (blank, or a non-Latin name such as
+ *    `首页` that became only `_`) -> `unknown`.
  *
- * Pure and deterministic: the same screen always yields the same href, so "href changed" still means
- * "screen changed".
+ * Pure and deterministic, but LOSSY: distinct screens can share an href, so screen changes must be detected on the
+ * raw name (the replay controller does), never on this value.
  */
 internal object ReplayHref {
     private const val PREFIX = "android://"
@@ -31,7 +32,7 @@ internal object ReplayHref {
         val safe = buildString(masked.length) {
             for (c in masked) append(if (isAllowed(c)) c else '_')
         }.take(MAX_LENGTH)
-        return PREFIX + safe.ifBlank { UNKNOWN }
+        return PREFIX + if (safe.any { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' }) safe else UNKNOWN
     }
 
     private fun isAllowed(c: Char): Boolean =

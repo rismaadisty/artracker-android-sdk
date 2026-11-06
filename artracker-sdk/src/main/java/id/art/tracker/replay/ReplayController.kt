@@ -50,7 +50,7 @@ import kotlinx.coroutines.launch
  *   crosses threads as is. Frames use latest-frame-wins: at most one waits; a newer frame replaces it, and then the
  *   next processed frame is a full snapshot.
  *
- * Output: Meta + FullSnapshot at the first frame, on screen (href) or size change, every [CHECKOUT_MS], after a
+ * Output: Meta + FullSnapshot at the first frame, on screen change (raw name, kept in memory only) or size change, every [CHECKOUT_MS], after a
  * dropped frame, after a session change or a restart; otherwise a Mutation when the diff is not empty. Chunks are
  * enqueued as `session`/`replay_chunk` items stamped with the session they were recorded in, every
  * [FLUSH_INTERVAL_MS], at 20 KB, and when recording stops.
@@ -75,7 +75,13 @@ internal class ReplayController(
 
     private class Frame(
         val root: Wireframe,
+        /** Sanitized; the only form of the screen name that is ever emitted (in Meta). */
         val href: String,
+        /**
+         * RAW screen name, in memory only and never emitted: screen changes are detected on it because the
+         * sanitized [href] is lossy (non-ASCII names, masked path ids and the length cap can collapse screens).
+         */
+        val screenKey: String,
         val width: Int,
         val height: Int,
         val ts: Long,
@@ -115,6 +121,7 @@ internal class ReplayController(
     // region processing-context state
     private var base: Wireframe? = null
     private var baseHref: String? = null
+    private var baseScreenKey: String? = null
     private var baseWidth = 0
     private var baseHeight = 0
     private var chunkSessionId: String? = null
@@ -330,9 +337,11 @@ internal class ReplayController(
         val width = nodes.maxOf { it.x + it.width }.coerceAtLeast(0)
         val height = nodes.maxOf { it.y + it.height }.coerceAtLeast(0)
         val frameRoot = Wireframe(FRAME_ROOT_ID, 0, 0, width, height, WireframeType.CONTAINER, children = nodes)
-        // Sanitized (redacted, path ids masked, URL-safe) once here; the processor compares this same value.
-        val href = ReplayHref.of(core.screens.currentScreen)
-        val frame = Frame(frameRoot, href, width, height, core.clock.nowMs(), sessionId, forceFullNext)
+        val screen = core.screens.currentScreen
+        // Sanitized (redacted, path ids masked, URL-safe) for output; the raw name is kept only to compare screens.
+        val frame = Frame(
+            frameRoot, ReplayHref.of(screen), screen ?: "", width, height, core.clock.nowMs(), sessionId, forceFullNext,
+        )
         forceFullNext = false
         submitFrame(frame)
     }
@@ -391,6 +400,7 @@ internal class ReplayController(
             dropped ||
             chunkerDropped ||
             forceFullAfterFailure ||
+            frame.screenKey != baseScreenKey ||
             frame.href != baseHref ||
             frame.width != baseWidth ||
             frame.height != baseHeight ||
@@ -408,6 +418,7 @@ internal class ReplayController(
         }
         base = frame.root
         baseHref = frame.href
+        baseScreenKey = frame.screenKey
         baseWidth = frame.width
         baseHeight = frame.height
         emit(out, frame.sessionId)
@@ -422,6 +433,7 @@ internal class ReplayController(
     private fun resetDiffState() {
         base = null
         baseHref = null
+        baseScreenKey = null
         encoder.reset()
         chunker.consumeDropped()
         frameDropped.set(false)

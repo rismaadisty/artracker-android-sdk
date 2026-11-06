@@ -568,4 +568,64 @@ class ReplayControllerTest {
         flushChunks()
         assertEquals("android://CheckoutActivity", hrefs().last())
     }
+
+    /**
+     * Sets the screen and captures at once, BEFORE the posted screen-change callback runs: the frame then carries no
+     * forced full snapshot, so only the processor's own screen comparison can produce one.
+     */
+    private fun showScreen(name: String) {
+        ARTracker.screen(name)
+        capture()
+    }
+
+    private fun typesAfterLastFlush(before: Int) = allEvents().drop(before).map { it["type"] }
+
+    @Test
+    fun distinctNonAsciiScreens_withSameHref_stillGetFullSnapshot() {
+        startCore()
+        textActivity()
+        showScreen("首页")
+        flushChunks()
+        val before = allEvents().size
+        showScreen("设置")
+        capture() // same screen again: nothing new
+        flushChunks()
+
+        assertEquals(listOf(4, 2), typesAfterLastFlush(before))
+        assertEquals(setOf("android://unknown"), hrefs().takeLast(2).toSet())
+        assertEquals(hrefs()[hrefs().size - 2], hrefs().last())
+    }
+
+    @Test
+    fun routesDifferingOnlyInPathId_getFullSnapshot() {
+        startCore()
+        textActivity()
+        showScreen("order/123456")
+        flushChunks()
+        val before = allEvents().size
+        showScreen("order/987654")
+        flushChunks()
+
+        assertEquals(listOf(4, 2), typesAfterLastFlush(before))
+        assertEquals(listOf("android://order/:id", "android://order/:id"), hrefs().takeLast(2))
+        val json = chunks().joinToString("\n") { it.toJson() }
+        assertFalse(json.contains("123456"))
+        assertFalse(json.contains("987654"))
+    }
+
+    @Test
+    fun rawScreenKey_neverInChunk() {
+        startCore()
+        textActivity()
+        showScreen("ScreenKeyMarker-ä")
+        showScreen("ScreenKeyMarker-ö") // same sanitized href, different raw key -> full snapshot
+        capture()
+        flushChunks()
+
+        val json = chunks().joinToString("\n") { it.toJson() }
+        assertFalse(json.contains("ScreenKeyMarker-ä"))
+        assertFalse(json.contains("ScreenKeyMarker-ö"))
+        assertTrue(json.contains("android://ScreenKeyMarker-_"))
+        assertTrue(fullSnapshots() >= 2)
+    }
 }

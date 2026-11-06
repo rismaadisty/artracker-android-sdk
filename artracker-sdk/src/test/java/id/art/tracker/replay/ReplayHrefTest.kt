@@ -44,6 +44,15 @@ class ReplayHrefTest {
     }
 
     @Test
+    fun noAlphanumericLeft_becomesUnknown() {
+        assertEquals("android://unknown", ReplayHref.of("首页"))
+        assertEquals("android://unknown", ReplayHref.of("设置"))
+        assertEquals("android://unknown", ReplayHref.of("[] / :"))
+        assertEquals("android://unknown", ReplayHref.of(null))
+        assertEquals("android://_a", ReplayHref.of("首a"))
+    }
+
+    @Test
     fun blankOrHuge_isBounded() {
         assertEquals("android://unknown", ReplayHref.of(" "))
         assertTrue(ReplayHref.of("a".repeat(5_000)).length <= "android://".length + 200)
