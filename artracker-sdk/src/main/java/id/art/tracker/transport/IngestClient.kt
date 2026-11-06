@@ -22,7 +22,15 @@ internal class IngestClient(
         .getOrNull()
         ?.takeIf { it.protocol == "http" || it.protocol == "https" }
 
+    // Defence in depth behind ARTrackerConfig.validate(): a key with CR/LF or any control character must never reach
+    // the HTTP stack (the JDK opens the connection before it rejects such a header).
+    private val keyUsable: Boolean = apiKey.none { it.code < 0x20 || it.code == 0x7F }
+
     override fun send(gzipBody: ByteArray): SendResult {
+        if (!keyUsable) {
+            SdkLog.w("ingest API key contains control characters; dropping batch")
+            return SendResult.Drop(0)
+        }
         val target = url ?: run {
             SdkLog.w("ingest endpoint is not a valid http(s) URL; dropping batch")
             return SendResult.Drop(0)
@@ -47,8 +55,9 @@ internal class IngestClient(
             val retryAfter = conn.getHeaderField("Retry-After")
             return map(status, retryAfter)
         } catch (e: IllegalArgumentException) {
-            // e.g. an API key containing CR/LF is rejected by setRequestProperty: can never succeed.
-            SdkLog.w("ingest request could not be built", e)
+            // e.g. an API key containing CR/LF is rejected by setRequestProperty: can never succeed. Only the class is
+            // logged: the exception message embeds the offending header value (the key).
+            SdkLog.w("ingest request could not be built (${e.javaClass.simpleName})")
             return SendResult.Drop(0)
         } catch (e: IOException) {
             return SendResult.NetworkError(e)

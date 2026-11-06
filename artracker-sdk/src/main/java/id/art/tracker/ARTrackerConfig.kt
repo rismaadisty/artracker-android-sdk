@@ -85,6 +85,8 @@ private const val KEY_PREFIX: String = "art_live_"
 private const val KEY_MIN_LENGTH: Int = 32
 private const val KEY_MAX_LENGTH: Int = 128
 private const val MIN_FLUSH_INTERVAL_MS: Long = 1_000
+private const val MIN_SESSION_TIMEOUT_MS: Long = 1_000
+private const val DEFAULT_FPS: Double = 1.0
 private const val MIN_FPS: Double = 0.5
 private const val MAX_FPS: Double = 4.0
 
@@ -100,8 +102,18 @@ internal fun ARTrackerConfig.validate(): List<String> {
     if (apiKey.length < KEY_MIN_LENGTH || apiKey.length > KEY_MAX_LENGTH) {
         errors += "apiKey length must be between $KEY_MIN_LENGTH and $KEY_MAX_LENGTH characters"
     }
+    // Never echo the key itself: the message ends up in logs. A CR/LF in a header value must not reach the HTTP stack.
+    if (apiKey.any { it.code < 0x20 || it.code == 0x7F }) {
+        errors += "apiKey must not contain control characters"
+    }
     if (flushIntervalMs < MIN_FLUSH_INTERVAL_MS) {
         errors += "flushIntervalMs must be >= $MIN_FLUSH_INTERVAL_MS"
+    }
+    if (sessionTimeoutMs < MIN_SESSION_TIMEOUT_MS) {
+        errors += "sessionTimeoutMs must be >= $MIN_SESSION_TIMEOUT_MS"
+    }
+    if (!replay.framesPerSecond.isFinite()) {
+        errors += "replay.framesPerSecond must be a finite number"
     }
     if (!(replay.sampleRate in 0.0..1.0)) {
         errors += "replay.sampleRate must be between 0.0 and 1.0"
@@ -112,5 +124,6 @@ internal fun ARTrackerConfig.validate(): List<String> {
     return errors
 }
 
-/** Frames per second clamped to the supported range 0.5..4.0. */
-internal fun ReplayConfig.effectiveFps(): Double = framesPerSecond.coerceIn(MIN_FPS, MAX_FPS)
+/** Frames per second clamped to the supported range 0.5..4.0; a non-finite value (NaN, infinity) means the default 1.0. */
+internal fun ReplayConfig.effectiveFps(): Double =
+    if (framesPerSecond.isFinite()) framesPerSecond.coerceIn(MIN_FPS, MAX_FPS) else DEFAULT_FPS

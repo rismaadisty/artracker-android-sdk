@@ -377,4 +377,47 @@ class FrameSchedulerTest {
         assertEquals(2.0, s.currentFps, 0.0)
         s.stop()
     }
+
+    // --- hardening: a non-finite or non-positive baseFps must never produce a 1 ms main-thread tick loop ---
+
+    @Test
+    fun nonFiniteOrNonPositiveBaseFps_isClampedAndNeverTicksFasterThan250ms() {
+        val expected = mapOf(
+            Double.NaN to 1.0,
+            0.0 to 0.5,
+            -1.0 to 0.5,
+            Double.NEGATIVE_INFINITY to 1.0,
+            Double.POSITIVE_INFINITY to 1.0,
+            100.0 to 4.0,
+        )
+        for ((bad, fps) in expected) {
+            captures = 0
+            val s = scheduler(baseFps = bad)
+            assertEquals("baseFps $bad", fps, s.currentFps, 0.0)
+            s.start()
+            s.markDirty()
+            advance(249)
+            assertEquals("baseFps $bad ticked before 250 ms", 0, captures)
+            // Over 2 s at most 8 ticks may run (4 fps); a 1 ms loop would run thousands.
+            repeat(2_000) { if (it % 100 == 0) s.markDirty(); advance(1) }
+            assertTrue("baseFps $bad: $captures captures", captures <= 9)
+            s.stop()
+        }
+    }
+
+    @Test
+    fun slowDown_fromAClampedBase_neverProducesNaN() {
+        val s = scheduler(baseFps = Double.NaN, budgetMs = 8)
+        captureAction = { throw IllegalStateException("boom") }
+        s.start()
+        repeat(12) { s.markDirty(); advance(1_000) }
+        assertTrue("fps ${s.currentFps}", s.currentFps in 0.5..1.0)
+        assertFalse(s.currentFps.isNaN())
+        // Recovery restores the (clamped) base fps, not NaN.
+        captureAction = {}
+        clock.advance(31_000)
+        advance(2_000)
+        assertEquals(1.0, s.currentFps, 0.0)
+        s.stop()
+    }
 }

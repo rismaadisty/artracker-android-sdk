@@ -11,6 +11,7 @@ import java.util.WeakHashMap
  * Rate control for replay frame capture (ARCHITECTURE section 6.3).
  *
  * - `OnDrawListener` callbacks only flip a dirty flag; no work or allocation happens per draw.
+ * - [requestedFps] outside 0.5..4.0 (or non-finite) is clamped (NaN/Infinity -> 1.0).
  * - Every `1000 / currentFps` ms a tick runs [capture] only if the flag is dirty.
  * - [requestSoon] schedules ONE extra capture (after ACTION_UP / screen change), regardless of dirty.
  * - Watchdog: [budgetMs] exceeded on [SLOW_STREAK] consecutive captures (or [capture] throwing that many
@@ -28,10 +29,17 @@ import java.util.WeakHashMap
 internal class FrameScheduler(
     private val handler: Handler,
     private val clock: Clock,
-    private val baseFps: Double,
+    requestedFps: Double,
     private val budgetMs: Long = 8,
     private val capture: () -> Unit,
 ) {
+    /**
+     * The configured rate forced into [MIN_FPS]..[MAX_FPS]: NaN means 1.0, +-Infinity too, anything else is clamped.
+     * Without it a NaN or 0 would give a 1 ms tick loop on the main thread (and `maxOf(.., NaN)` never recovers).
+     */
+    private val baseFps: Double =
+        if (requestedFps.isFinite()) requestedFps.coerceIn(MIN_FPS, MAX_FPS) else DEFAULT_FPS
+
     /** Current fps; lowered by the watchdog, restored to [baseFps] after [RECOVERY_MS]. */
     var currentFps: Double = baseFps
         private set
@@ -179,6 +187,8 @@ internal class FrameScheduler(
     private companion object {
         const val SLOW_STREAK = 3
         const val MIN_FPS = 0.5
+        const val MAX_FPS = 4.0
+        const val DEFAULT_FPS = 1.0
         const val RECOVERY_MS = 30_000L
     }
 }
