@@ -7,6 +7,7 @@ import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
 import android.webkit.WebView
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.VideoView
 import id.art.tracker.sdk.R
@@ -23,9 +24,9 @@ internal object ViewMaskRules {
         InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD,
     )
 
-    // View.AUTOFILL_HINT_* values (API 26; SMS OTP is API 28). Literals keep minSdk 24 safe.
+    // View.AUTOFILL_HINT_* values (API 26, e.g. AUTOFILL_HINT_NEW_PASSWORD; SMS OTP is API 28). Literals keep minSdk 24 safe.
     private val SENSITIVE_AUTOFILL_HINTS = setOf(
-        "password", "creditCardNumber", "creditCardSecurityCode",
+        "password", "newPassword", "creditCardNumber", "creditCardSecurityCode",
         "phone", "emailAddress", "postalAddress", "smsOTPCode",
     )
     private const val CREDIT_CARD_EXPIRATION_PREFIX = "creditCardExpiration"
@@ -51,11 +52,22 @@ internal object ViewMaskRules {
     /** `true` = mask, `false` = unmask, `null` = no explicit setting. The resource-id tag wins over the string tag. */
     fun explicitMask(v: View): Boolean? {
         (v.getTag(R.id.artracker_mask) as? Boolean)?.let { return it }
-        return when ((v.tag as? String)?.trim()) {
-            TAG_MASK -> true
-            TAG_UNMASK -> false
+        val tag = (v.tag as? String)?.trim() ?: return null
+        return when {
+            tag.equals(TAG_MASK, ignoreCase = true) -> true
+            tag.equals(TAG_UNMASK, ignoreCase = true) -> false
             else -> null
         }
+    }
+
+    /**
+     * True for anything that accepts text input, not just [android.widget.EditText]: a text editor
+     * per the framework, or a [TextView] with an input type. Fails closed (true) if the view throws.
+     */
+    fun isInput(v: View): Boolean = try {
+        v is EditText || v.onCheckIsTextEditor() || (v is TextView && v.inputType != 0)
+    } catch (_: Throwable) {
+        true
     }
 
     fun isBlocked(v: View): Boolean {

@@ -190,6 +190,63 @@ class ViewMaskRulesTest {
     }
 
     @Test
+    fun plainTextViewEditor_masked_underDefaultConfig() {
+        val number = TextView(context).apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        assertEquals(MaskDecision.MASK, defaultPolicy.forView(number, parentMasked = false))
+        val text = TextView(context).apply { inputType = InputType.TYPE_CLASS_TEXT }
+        assertTrue(ViewMaskRules.isInput(text))
+        assertEquals(MaskDecision.MASK, defaultPolicy.forView(text, parentMasked = false))
+        val hinted = TextView(context).apply { setAutofillHints("creditCardNumber") }
+        assertEquals(MaskDecision.MASK, defaultPolicy.forView(hinted, parentMasked = false))
+    }
+
+    @Test
+    fun plainTextView_withoutInputTypeOrHints_notMasked() {
+        val tv = TextView(context)
+        assertFalse(ViewMaskRules.isInput(tv))
+        assertEquals(MaskDecision.NONE, defaultPolicy.forView(tv, parentMasked = false))
+    }
+
+    @Test
+    fun plainTextViewPhone_masked_evenWhenMaskAllInputsFalse() {
+        val phone = TextView(context).apply { inputType = InputType.TYPE_CLASS_PHONE }
+        assertEquals(MaskDecision.MASK, relaxedPolicy.forView(phone, parentMasked = false))
+        val text = TextView(context).apply { inputType = InputType.TYPE_CLASS_TEXT }
+        assertEquals(MaskDecision.NONE, relaxedPolicy.forView(text, parentMasked = false))
+    }
+
+    @Test
+    fun stringTags_caseInsensitiveAndTrimmed() {
+        assertEquals(true, ViewMaskRules.explicitMask(TextView(context).apply { tag = "Artracker-Mask " }))
+        assertEquals(true, ViewMaskRules.explicitMask(TextView(context).apply { tag = "ARTRACKER-MASK" }))
+        assertEquals(false, ViewMaskRules.explicitMask(TextView(context).apply { tag = " Artracker-UNMASK" }))
+        assertEquals(MaskDecision.MASK, defaultPolicy.forView(TextView(context).apply { tag = "Artracker-Mask " }, false))
+    }
+
+    @Test
+    fun newPasswordAutofillHint_masked() {
+        val v = edit().apply { setAutofillHints("newPassword") }
+        assertTrue(ViewMaskRules.isSensitiveInput(v))
+        assertEquals(MaskDecision.MASK, relaxedPolicy.forView(v, parentMasked = false))
+    }
+
+    @Test
+    fun passwordWithFlags_masked() {
+        val visible = edit(
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+        ).apply { transformationMethod = null }
+        assertTrue(ViewMaskRules.isPassword(visible))
+        val multi = edit(
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_VARIATION_PASSWORD,
+        )
+            .apply { transformationMethod = null }
+        assertTrue(ViewMaskRules.isPassword(multi))
+        assertEquals(MaskDecision.MASK, relaxedPolicy.forView(visible, parentMasked = false))
+        assertEquals(MaskDecision.MASK, relaxedPolicy.forView(multi, parentMasked = false))
+    }
+
+    @Test
     fun wireframeDebugString_containsAllFieldsIncludingChildren() {
         val child = Wireframe(2, 1, 2, 3, 4, WireframeType.TEXT, text = "child-text", masked = false)
         val root = Wireframe(

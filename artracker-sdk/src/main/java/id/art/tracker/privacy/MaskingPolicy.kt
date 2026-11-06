@@ -1,7 +1,6 @@
 package id.art.tracker.privacy
 
 import android.view.View
-import android.widget.EditText
 import android.widget.TextView
 import id.art.tracker.PrivacyConfig
 import kotlin.math.min
@@ -28,9 +27,9 @@ internal class MaskingPolicy(private val config: PrivacyConfig) {
         val explicit = ViewMaskRules.explicitMask(view)
         if (explicit == false) return MaskDecision.NONE
         if (explicit == true || parentMasked || isSensitiveClass(view)) return MaskDecision.MASK
-        if (view is EditText && (config.maskAllInputs || ViewMaskRules.isSensitiveInput(view))) {
-            return MaskDecision.MASK
-        }
+        // Sensitive input class/autofill hints apply to any view (fail closed); maskAllInputs to any input.
+        if (ViewMaskRules.isSensitiveInput(view)) return MaskDecision.MASK
+        if (config.maskAllInputs && ViewMaskRules.isInput(view)) return MaskDecision.MASK
         if (config.maskAllText && view is TextView) return MaskDecision.MASK
         return MaskDecision.NONE
     }
