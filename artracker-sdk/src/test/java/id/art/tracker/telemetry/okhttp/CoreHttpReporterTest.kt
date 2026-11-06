@@ -214,7 +214,7 @@ class CoreHttpReporterTest {
         ARTracker.init(
             app,
             ARTrackerConfig(
-                endpoint = "https://api.example.com",
+                endpoint = "https://api.sdk-test.invalid",
                 apiKey = "art_live_" + "a".repeat(43),
                 environment = "test",
                 appVersion = "1.0",
@@ -223,10 +223,10 @@ class CoreHttpReporterTest {
         )
         val reporter = CoreHttpReporter()
 
-        reporter.report(record(200).copy(url = "https://api.example.com/v1/x", host = "api.example.com"))
-        reporter.report(record(200).copy(url = "https://API.example.com:443/v1/y", host = "api.example.com"))
-        reporter.report(record(200).copy(url = "http://api.example.com/v1/z", host = "api.example.com"))
-        reporter.report(record(200).copy(url = "https://api.example.com:8443/v1/w", host = "api.example.com"))
+        reporter.report(record(200).copy(url = "https://api.sdk-test.invalid/v1/x", host = "api.sdk-test.invalid"))
+        reporter.report(record(200).copy(url = "https://API.sdk-test.invalid:443/v1/y", host = "api.sdk-test.invalid"))
+        reporter.report(record(200).copy(url = "http://api.sdk-test.invalid/v1/z", host = "api.sdk-test.invalid"))
+        reporter.report(record(200).copy(url = "https://api.sdk-test.invalid:8443/v1/w", host = "api.sdk-test.invalid"))
 
         assertEquals(
             listOf("GET /v1/z -> 200", "GET /v1/w -> 200"),
