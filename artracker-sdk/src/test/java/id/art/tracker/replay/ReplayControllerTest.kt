@@ -519,4 +519,53 @@ class ReplayControllerTest {
         idle()
         assertTrue(controller().isRunning)
     }
+
+    private fun hrefs() = allEvents().filter { it["type"] == 4 }.map { (it["data"] as Map<String, Any?>)["href"] as String }
+
+    @Test
+    fun screenNameWithEmail_neverInChunk() {
+        startCore()
+        textActivity()
+        ARTracker.screen("Profile john@doe.com")
+        idle(200)
+        capture()
+        capture() // same screen again: same href, no extra full snapshot
+        flushChunks()
+
+        val json = chunks().joinToString("\n") { it.toJson() }
+        assertFalse(json.contains("john@doe.com"))
+        assertFalse(json.contains("john"))
+        assertTrue(json.contains("public text"))
+        assertEquals(1, hrefs().distinct().count { it.startsWith("android://Profile") })
+        // The pending first frame was replaced before processing, so one full snapshot for Profile; the second
+        // capture of the same screen compares equal hrefs and adds no snapshot.
+        assertEquals(1, fullSnapshots())
+    }
+
+    @Test
+    fun screenNameWithJwt_neverInChunk() {
+        startCore()
+        textActivity()
+        val jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlMTIz"
+        ARTracker.screen("Detail $jwt")
+        idle(200)
+        capture()
+        flushChunks()
+
+        val json = chunks().joinToString("\n") { it.toJson() }
+        assertFalse(json.contains("eyJhbGciOiJIUzI1NiJ9"))
+        assertFalse(json.contains("c2lnbmF0dXJlMTIz"))
+        assertTrue(hrefs().last().startsWith("android://Detail"))
+    }
+
+    @Test
+    fun plainScreenName_isKeptAsIs() {
+        startCore()
+        textActivity()
+        ARTracker.screen("CheckoutActivity")
+        idle(200)
+        capture()
+        flushChunks()
+        assertEquals("android://CheckoutActivity", hrefs().last())
+    }
 }

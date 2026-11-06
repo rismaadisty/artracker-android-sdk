@@ -84,4 +84,12 @@ class ItemFactoryTest {
         assertEquals(3, f.session("replay_chunk").priority())
         assertEquals(2, f.log(LogLevel.INFO, "info", null).priority())
     }
+
+    @Test
+    fun priority_onlyTheSdkReplayChunkIsLowest() {
+        val f = factory()
+        assertEquals(3, f.session("replay_chunk").priority())
+        // A user event borrowing the name is an ordinary event, not evicted first.
+        assertEquals(2, f.event("replay_chunk").priority())
+    }
 }

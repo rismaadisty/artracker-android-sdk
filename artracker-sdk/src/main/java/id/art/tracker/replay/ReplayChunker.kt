@@ -83,8 +83,12 @@ internal class ReplayChunker(
         return Entry(event, bytes, (event["timestamp"] as? Number)?.toLong())
     }
 
+    /**
+     * Measured with the NEXT chunk's seq: the open chunk may be closed before this event is appended, and a seq
+     * crossing a digit boundary (9 -> 10) widens the wrapper by one byte.
+     */
     private fun fitsAlone(entry: Entry, isFull: Boolean): Boolean =
-        wrapperSize(entry.ts, entry.ts, isFull, oversized = true) + entry.bytes <= maxBytes
+        wrapperSize(entry.ts, entry.ts, isFull, oversized = true, seq = nextSeq + 1) + entry.bytes <= maxBytes
 
     private fun sizeWith(entry: Entry, isFull: Boolean, oversized: Boolean): Int {
         val (start, end) = range(entry.ts)
@@ -110,8 +114,8 @@ internal class ReplayChunker(
     }
 
     /** Size of the chunk attributes with an empty events list. */
-    private fun wrapperSize(start: Long?, end: Long?, full: Boolean, oversized: Boolean): Int =
-        utf8Size(Json.encode(attributes(nextSeq, start, end, full, oversized, emptyList()), Json.REPLAY_MAX_DEPTH))
+    private fun wrapperSize(start: Long?, end: Long?, full: Boolean, oversized: Boolean, seq: Int = nextSeq): Int =
+        utf8Size(Json.encode(attributes(seq, start, end, full, oversized, emptyList()), Json.REPLAY_MAX_DEPTH))
 
     private fun attributes(
         seq: Int,

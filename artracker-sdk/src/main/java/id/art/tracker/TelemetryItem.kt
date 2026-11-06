@@ -59,6 +59,6 @@ internal fun TelemetryItem.isReplayChunk(): Boolean = type == ItemType.SESSION &
 internal fun TelemetryItem.priority(): Int = when {
     level == LogLevel.FATAL -> 0
     level == LogLevel.ERROR -> 1
-    name == "replay_chunk" -> 3
+    isReplayChunk() -> 3
     else -> 2
 }

@@ -214,4 +214,58 @@ class ReplayChunkerTest {
         assertEquals(bytes(last), chunker.lastChunkBytes)
         assertTrue(checked > 5)
     }
+
+    /** A mutation adding a subtree whose deepest level carries [textBytes] of text (trimmable). */
+    private fun addMutation(ts: Long, textBytes: Int): Map<String, Any?> = mapOf(
+        "type" to 3,
+        "data" to mapOf(
+            "source" to 0, "texts" to emptyList<Any?>(), "attributes" to emptyList<Any?>(), "removes" to emptyList<Any?>(),
+            "adds" to listOf(
+                mapOf(
+                    "parentId" to 4, "nextId" to null,
+                    "node" to mapOf(
+                        "type" to 2, "tagName" to "div", "attributes" to emptyMap<String, Any?>(), "id" to 50,
+                        "childNodes" to listOf(
+                            mapOf(
+                                "type" to 2, "tagName" to "span", "attributes" to emptyMap<String, Any?>(), "id" to 51,
+                                "childNodes" to listOf(mapOf("type" to 3, "textContent" to "z".repeat(textBytes), "id" to 52)),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        "timestamp" to ts,
+    )
+
+    @Test
+    fun trimmedEvent_atSeqDigitBoundary_neverExceedsLimit() {
+        val ts = 5L
+        val event = addMutation(ts, 3_000)
+        // Probe the event as trimmed by one level (same result for any limit between its size and the original's).
+        val probe = ReplayChunker(maxBytes = 2_000, flushAtBytes = 2_000)
+        val trimmed = events((probe.add(event, false) + probe.drain()).single()).single()
+        assertEquals(true, trimmed["oversized"])
+        val trimmedBytes = Json.encode(trimmed, Json.REPLAY_MAX_DEPTH - 2).toByteArray().size
+        val wrapperSeq9 = Json.encode(
+            linkedMapOf(
+                "seq" to 9, "start" to ts, "end" to ts, "full_snapshot" to false, "platform" to "android",
+                "oversized" to true, "events" to emptyList<Any?>(),
+            ),
+            Json.REPLAY_MAX_DEPTH,
+        ).toByteArray().size
+        // The trimmed event fits EXACTLY in a chunk numbered 9, but would be one byte over in chunk 10.
+        val max = wrapperSeq9 + trimmedBytes
+        val chunker = ReplayChunker(maxBytes = max, flushAtBytes = max)
+        val out = ArrayList<Map<String, Any?>>()
+        repeat(9) {
+            out += chunker.add(mutation(ts, 1), false)
+            out += chunker.drain()
+        }
+        out += chunker.add(mutation(ts, 1), false) // open chunk has seq 9
+        out += chunker.add(event, false) // closes chunk 9; the event lands in chunk 10
+        out += chunker.drain()
+        assertEquals(listOf(9, 10), out.drop(9).map { (it["seq"] as Number).toInt() }.distinct().take(2))
+        for (chunk in out) assertTrue("seq ${chunk["seq"]}: ${bytes(chunk)} > $max", bytes(chunk) <= max)
+    }
 }

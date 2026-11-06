@@ -56,7 +56,8 @@ import kotlinx.coroutines.launch
  * [FLUSH_INTERVAL_MS], at 20 KB, and when recording stops.
  *
  * Privacy: the only text in the output comes from the walker (already masked) and the encoder's fixed labels; the
- * controller adds only the `href` (`android://<screen>`, scrubbed by the encoder) and never reads view text itself.
+ * controller adds only the `href`, built by [ReplayHref] (redacted, path ids masked, URL-safe), and never reads view
+ * text itself.
  *
  * Memory: the last processed [Wireframe] (diff base), one pending frame and the open chunk.
  */
@@ -329,8 +330,9 @@ internal class ReplayController(
         val width = nodes.maxOf { it.x + it.width }.coerceAtLeast(0)
         val height = nodes.maxOf { it.y + it.height }.coerceAtLeast(0)
         val frameRoot = Wireframe(FRAME_ROOT_ID, 0, 0, width, height, WireframeType.CONTAINER, children = nodes)
-        val screen = core.screens.currentScreen ?: UNKNOWN_SCREEN
-        val frame = Frame(frameRoot, "android://$screen", width, height, core.clock.nowMs(), sessionId, forceFullNext)
+        // Sanitized (redacted, path ids masked, URL-safe) once here; the processor compares this same value.
+        val href = ReplayHref.of(core.screens.currentScreen)
+        val frame = Frame(frameRoot, href, width, height, core.clock.nowMs(), sessionId, forceFullNext)
         forceFullNext = false
         submitFrame(frame)
     }
@@ -464,7 +466,6 @@ internal class ReplayController(
         const val FLUSH_INTERVAL_MS: Long = 5_000
         const val CHECKOUT_MS: Long = 120_000
         private const val FRAME_ROOT_ID = Int.MIN_VALUE
-        private const val UNKNOWN_SCREEN = "unknown"
 
         /** Wires a [FrameScheduler] whose capture callback is the new controller's [captureFrame]. */
         fun create(
