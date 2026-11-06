@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -76,5 +77,22 @@ class PublicApiHostileValuesTest {
             override fun toString(): String = "Node(next=$next)"
         }
         persistedAfter { ARTracker.track("hostile", mapOf("v" to Node())) }
+    }
+
+    @Test
+    fun numberSubclassPrintingNaN_isStoredAsValidJson() {
+        val number = object : Number() {
+            override fun toByte(): Byte = 0
+            override fun toDouble(): Double = Double.NaN
+            override fun toFloat(): Float = Float.NaN
+            override fun toInt(): Int = 0
+            override fun toLong(): Long = 0
+            override fun toShort(): Short = 0
+            override fun toString(): String = "NaN"
+        }
+        val items = persistedAfter { ARTracker.track("hostile", mapOf("v" to number, "ok" to 1)) }
+        val attrs = items.first { it.getString("name") == "hostile" }.getJSONObject("attributes")
+        assertEquals(1, attrs.getInt("ok"))
+        assertEquals("NaN", attrs.getString("v"))
     }
 }

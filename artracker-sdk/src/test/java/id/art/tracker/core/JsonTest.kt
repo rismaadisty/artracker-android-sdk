@@ -17,6 +17,23 @@ class JsonTest {
     }
 
     @Test
+    fun otherNumberTypes_areWrittenAsNumbersOnlyWhenTheirTextIsJson() {
+        fun number(text: String) = object : Number() {
+            override fun toByte(): Byte = 0
+            override fun toDouble(): Double = 0.0
+            override fun toFloat(): Float = 0f
+            override fun toInt(): Int = 0
+            override fun toLong(): Long = 0
+            override fun toShort(): Short = 0
+            override fun toString(): String = text
+        }
+        assertEquals("[7,-0.5,1.5E10,0]", Json.encode(listOf(java.util.concurrent.atomic.AtomicInteger(7), number("-0.5"), number("1.5E10"), number("0"))))
+        listOf("NaN", "Infinity", "-Infinity", "", "01", "1.", ".5", "+1", "0x10", "1e", "--1", "1 2").forEach {
+            assertEquals("[\"$it\"]", Json.encode(listOf(number(it))))
+        }
+    }
+
+    @Test
     fun nestedMapAndList() {
         assertEquals("{\"a\":[1,true,null]}", Json.encode(mapOf("a" to listOf(1, true, null))))
     }
