@@ -20,6 +20,7 @@ import id.art.tracker.telemetry.CrashItemBuilder
 import id.art.tracker.telemetry.CrashRecovery
 import id.art.tracker.telemetry.CrashStore
 import id.art.tracker.telemetry.ErrorDeduper
+import id.art.tracker.telemetry.ExitInfoCollector
 import id.art.tracker.telemetry.Stacktrace
 import id.art.tracker.transport.Backoff
 import id.art.tracker.transport.EventPipeline
@@ -238,9 +239,9 @@ internal class ARTrackerCore(
     private var lifecycleStopped = false
 
     /**
-     * Extension point that runs on [scope] after queue maintenance and with [pipeline] ready: recovers the crash
-     * files of earlier runs into the queue (the caller flushes right away when anything was recovered, through
-     * [leftoverItems]). TODO(Task 16): collect ApplicationExitInfo.
+     * Runs on [scope] after queue maintenance and with [pipeline] ready: recovers the crash files of earlier runs
+     * into the queue, then reports the ANR / native crash / low-memory exits of earlier processes (API 30+).
+     * Either one finding something sets [leftoverItems], so the caller flushes right away.
      */
     internal fun onBackgroundInit() {
         crashStore.prepare()
@@ -250,9 +251,29 @@ internal class ARTrackerCore(
         if (killSwitch.optedOut) {
             // The user opted out after the crash: nothing recorded earlier may be sent.
             crashStore.pending().forEach(crashStore::delete)
+            collectExitInfo()
             return
         }
         if (CrashRecovery.recover(crashStore, queue) > 0) leftoverItems = true
+        collectExitInfo()
+    }
+
+    /**
+     * Exit reasons go through the normal pipeline (beforeSend, redaction, the attribute budget). While the SDK is
+     * disabled nothing is emitted, but the processed timestamp still advances so those exits are not reported
+     * after a later opt-in.
+     */
+    private fun collectExitInfo() {
+        runCatching {
+            val collector = ExitInfoCollector(app, transportPrefs, items)
+            if (isDisabled()) {
+                collector.markProcessed()
+                return@runCatching
+            }
+            val exits = collector.collect()
+            exits.forEach(::emit)
+            if (exits.isNotEmpty()) leftoverItems = true
+        }.onFailure { SdkLog.w("collecting exit reasons failed", it) }
     }
 
     /** Runs inside the crash handler: lock-free reads only, no coroutines, database or network. */
