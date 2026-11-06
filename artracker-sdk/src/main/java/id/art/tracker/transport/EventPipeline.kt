@@ -126,8 +126,12 @@ internal class EventPipeline(
                     delay(flushIntervalMs)
                     try {
                         if (queue.pendingCount() > 0) triggerFlush()
-                    } catch (e: Exception) {
-                        SdkLog.w("flush timer tick failed", e)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        // Everything but cancellation, Errors included: a dead timer would stop foreground sending
+                        // until the process restarts. The next tick simply tries again (one attempt per tick).
+                        SdkLog.w("flush timer tick failed (${e.javaClass.simpleName})")
                     }
                 }
             }
@@ -365,8 +369,15 @@ internal class EventPipeline(
                 withContext(flushContext) { flusher.flushAll() }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                SdkLog.w("flush failed", e)
+            } catch (e: Throwable) {
+                // Everything but cancellation, Errors included. Flusher rethrows Errors (OutOfMemoryError while
+                // gzipping, StackOverflowError, NoClassDefFoundError) but only after releasing the claimed batch,
+                // so nothing is lost; letting one escape would end this loop and, with nothing to restart it,
+                // silently stop all foreground sending until the process restarts. A dead SDK is worse than a
+                // failed attempt. No hot loop: the loop goes back to waiting for the NEXT signal (persist of an
+                // urgent/50th item, the timer tick, flush()), so a permanent failure costs one attempt per trigger.
+                // Class name only: the message may carry payload fragments.
+                SdkLog.w("flush failed (${e.javaClass.simpleName})")
             } finally {
                 progress.update { it.copy(flushes = it.flushes - 1) }
             }

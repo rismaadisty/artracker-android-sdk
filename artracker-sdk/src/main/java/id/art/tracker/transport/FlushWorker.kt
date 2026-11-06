@@ -7,6 +7,7 @@ import id.art.tracker.core.Clock
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SdkLog
 import id.art.tracker.core.SharedPrefsStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -28,11 +29,20 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
     override suspend fun doWork(): Result {
         // Flusher blocks its thread on HTTP, so never run it on the default (CPU) dispatcher.
         return withContext(Dispatchers.IO) {
-            val registered = FlusherRegistry.current
-            if (registered != null) {
-                flush(registered)
-            } else {
-                runStandalone()
+            try {
+                val registered = FlusherRegistry.current
+                if (registered != null) {
+                    flush(registered)
+                } else {
+                    runStandalone()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // Flusher rethrows Errors (OutOfMemoryError, NoClassDefFoundError, ...) after releasing its batch.
+                // Let WorkManager retry with its own backoff instead of failing the work or crashing the process.
+                SdkLog.w("background flush failed (${e.javaClass.simpleName})")
+                Result.retry()
             }
         }
     }

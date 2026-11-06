@@ -190,6 +190,139 @@ class EventPipelineTest {
         assertEquals(listOf(good.id, later.id), queue.stored.map { it.id })
     }
 
+    // region Errors in the flush loop and the timer (Flusher rethrows Errors after releasing its batch)
+
+    private fun flusherWith(
+        encoder: PayloadEncoder = PayloadEncoder { mapOf("environment" to "test") },
+        q: ItemQueue = queue,
+        send: Sender,
+    ) = Flusher(q, encoder, send, killSwitch, clock, Backoff(), BackgroundScheduler { })
+
+    private val acceptAndRecord = Sender { body ->
+        val json = GZIPInputStream(ByteArrayInputStream(body)).use { String(it.readBytes(), Charsets.UTF_8) }
+        val items = JSONObject(json).getJSONArray("items")
+        requests += (0 until items.length()).map { items.getJSONObject(it).getString("id") }
+        SendResult.Accepted
+    }
+
+    @Test
+    fun flushLoop_survivesAnOutOfMemoryError_batchReleased_laterFlushDelivers() = runTest {
+        var calls = 0
+        val p = EventPipeline(
+            backgroundScope, queue,
+            flusherWith { body -> if (calls++ == 0) throw OutOfMemoryError("gzip") else acceptAndRecord.send(body) },
+            clock, null, 10_000L,
+        )
+        val item = factory.event("a")
+        p.enqueue(item)
+        p.flushNow()
+        p.awaitIdle() // returns: the flush counter is balanced even though the flush threw an Error
+
+        assertEquals(1, calls)
+        assertEquals("batch released, not lost", 1, queue.pendingCount())
+        assertEquals(0, queue.delegate.inFlightCount())
+
+        p.flushNow()
+        p.awaitIdle()
+        assertEquals(listOf(listOf(item.id)), requests)
+        assertEquals(0, queue.pendingCount())
+    }
+
+    @Test
+    fun flushLoop_survivesALinkageErrorFromTheEncoder() = runTest {
+        var encoderCalls = 0
+        val encoder = PayloadEncoder {
+            if (encoderCalls++ == 0) throw NoClassDefFoundError("java/util/zip/GZIPOutputStream")
+            mapOf("environment" to "test")
+        }
+        val p = EventPipeline(backgroundScope, queue, flusherWith(encoder, send = acceptAndRecord), clock, null, 10_000L)
+        val item = factory.event("a")
+        p.enqueue(item)
+        p.flushNow()
+        p.awaitIdle()
+        assertEquals(1, queue.pendingCount())
+        assertEquals(0, queue.delegate.inFlightCount())
+
+        p.flushNow()
+        p.awaitIdle()
+        assertEquals(listOf(listOf(item.id)), requests)
+    }
+
+    @Test
+    fun permanentlyThrowingSender_noBusyLoop_oneAttemptPerTick_awaitIdleReturns() = runTest {
+        var calls = 0
+        val p = EventPipeline(
+            backgroundScope, queue, flusherWith { calls++; throw StackOverflowError() }, clock, null, 10_000L,
+        )
+        p.enqueue(factory.event("a"))
+        p.awaitIdle()
+        p.startTimer()
+
+        advanceTimeBy(100_000)
+        runCurrent()
+        assertTrue("attempts=$calls over 10 ticks", calls in 1..10)
+        assertEquals("every tick finds the item again, none is lost", 1, queue.pendingCount())
+        p.awaitIdle()
+    }
+
+    /** Throws an Error from pendingCount() while [failures] > 0. */
+    private class ThrowingCountQueue(val delegate: RecordingQueue) : ItemQueue by delegate {
+        var failures = 0
+
+        override fun pendingCount(): Int {
+            if (failures > 0) {
+                failures--
+                throw StackOverflowError()
+            }
+            return delegate.pendingCount()
+        }
+    }
+
+    @Test
+    fun timer_survivesAnErrorFromTheQueue() = runTest {
+        val q = ThrowingCountQueue(queue)
+        val p = EventPipeline(backgroundScope, q, flusherWith(q = q, send = acceptAndRecord), clock, null, 10_000L)
+        val item = factory.event("a")
+        p.enqueue(item)
+        p.awaitIdle()
+        q.failures = 1
+        p.startTimer()
+
+        advanceTimeBy(10_001) // first tick: pendingCount() throws an Error
+        runCurrent()
+        assertTrue(requests.isEmpty())
+        advanceTimeBy(10_000) // second tick: the timer is still alive and flushes
+        runCurrent()
+        p.awaitIdle()
+        assertEquals(listOf(listOf(item.id)), requests)
+    }
+
+    @Test
+    fun cancellingTheScope_stopsTheLoops_andAwaitIdleReturns() = runTest {
+        val job = Job()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + job)
+        var sends = 0
+        val p = EventPipeline(
+            scope, queue,
+            flusherWith { body -> sends++; job.cancel(); acceptAndRecord.send(body) },
+            clock, null, 10_000L,
+        )
+        p.startTimer()
+        p.enqueue(factory.event("a"))
+        p.flushNow()
+        runCurrent()
+        p.awaitIdle()
+        runCurrent()
+
+        assertTrue("loops must end on cancellation", job.children.toList().all { it.isCompleted })
+        assertEquals(1, sends)
+        advanceTimeBy(60_000) // nothing is left running
+        runCurrent()
+        assertEquals(1, sends)
+    }
+
+    // endregion
+
     @Test
     fun fatal_triggersImmediateFlush() = runTest {
         val p = pipeline()

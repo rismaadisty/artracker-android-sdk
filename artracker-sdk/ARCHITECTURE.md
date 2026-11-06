@@ -1,6 +1,6 @@
 # Technical Architecture Plan — `artracker-sdk` (Android)
 
-> Status: **Disetujui** (Q1–Q5, lihat §13) — 2026-11-05. Belum ada kode yang ditulis.
+> Status: **Disetujui** (Q1–Q5, lihat §13) — 2026-11-05. Implementasi SDK sampai Task 25 selesai (lihat §14); pengukuran performa di perangkat dan fase rilis (Fase 7) belum dikerjakan.
 > Implementation plan: `docs/superpowers/plans/2026-11-05-artracker-android-sdk.md`.
 > Sumber requirement: issue [`tiofani03/artracker#12`](https://github.com/tiofani03/artracker/issues/12) (bagian Android).
 > Kontrak backend ditelusuri langsung dari `artracker/backend/internal/{handler,ingest,auth}` dan diselaraskan

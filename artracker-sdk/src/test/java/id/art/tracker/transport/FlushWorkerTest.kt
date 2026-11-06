@@ -119,6 +119,18 @@ class FlushWorkerTest {
     }
 
     @Test
+    fun worker_flusherThrowsAnError_retriesAndKeepsTheItems() {
+        val clock = FakeClock(1_700_000_000_000L)
+        val queue = FakeQueue()
+        queue.insert(listOf(StoredItem("a", 2, 1L, "{\"id\":\"a\"}")))
+        FlusherRegistry.current = flusher(queue, clock) { throw OutOfMemoryError("gzip") }
+
+        assertEquals(ListenableWorker.Result.retry(), doWork())
+        assertEquals(1, queue.pendingCount())
+        assertEquals(0, queue.inFlightCount())
+    }
+
+    @Test
     fun worker_paused_retries() {
         val clock = FakeClock(1_700_000_000_000L)
         val queue = FakeQueue()
