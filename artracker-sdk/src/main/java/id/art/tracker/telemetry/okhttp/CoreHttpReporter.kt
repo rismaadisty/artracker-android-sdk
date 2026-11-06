@@ -12,7 +12,7 @@ import java.util.concurrent.ThreadLocalRandom
  * Default [HttpReporter]: applies the `NetworkConfig` policy and hands the result to the running core.
  *
  * Does nothing when the SDK is not initialized or is disabled (opt-out / 401 kill-switch). Requests to an
- * ignored host and to the SDK's own endpoint host are dropped entirely (no item, no breadcrumb). Every other
+ * ignored host and to the SDK's own endpoint (host and port) are dropped entirely (no item, no breadcrumb). Every other
  * request leaves an `http` breadcrumb, even when sampling or `captureOnlyErrors` keeps it out of the queue:
  * breadcrumbs are never sent on their own, only attached to a later crash or error.
  *
@@ -30,7 +30,7 @@ internal class CoreHttpReporter(
             val network = core.config.network
             val host = record.host.lowercase(Locale.ROOT)
             if (network.ignoreHosts.any { it.lowercase(Locale.ROOT) == host }) return
-            if (host == endpointHost(core.config.endpoint)) return
+            if (isSdkEndpoint(record, core.config.endpoint)) return
 
             val message = "${record.method} ${pathOf(record.url)} -> ${record.status ?: "error"}"
             val breadcrumbData = LinkedHashMap<String, Any?>(3)
@@ -60,8 +60,19 @@ internal class CoreHttpReporter(
 
     private fun sampled(rate: Double): Boolean = rate >= 1.0 || (rate > 0.0 && random() < rate)
 
-    private fun endpointHost(endpoint: String): String? =
-        runCatching { URI(endpoint).host?.lowercase(Locale.ROOT) }.getOrNull()
+    /** Same host (ignoring case) and same effective port; a port left out means 80 for http, 443 for https. */
+    private fun isSdkEndpoint(record: HttpRecord, endpoint: String): Boolean = runCatching {
+        val sdk = authorityOf(endpoint) ?: return@runCatching false
+        sdk == authorityOf(record.url)
+    }.getOrDefault(false)
+
+    /** `host:port` in lower case, or null when [url] has no usable host. */
+    private fun authorityOf(url: String): String? {
+        val uri = URI(url)
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return null
+        val port = if (uri.port != -1) uri.port else if (uri.scheme.equals("https", ignoreCase = true)) 443 else 80
+        return "$host:$port"
+    }
 
     internal companion object {
         private const val MAX_ERROR = 200

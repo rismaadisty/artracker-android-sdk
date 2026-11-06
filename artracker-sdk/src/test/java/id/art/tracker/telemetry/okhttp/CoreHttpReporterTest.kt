@@ -190,19 +190,55 @@ class CoreHttpReporterTest {
     }
 
     @Test
-    fun sdkEndpointHost_notReported() {
+    fun sdkEndpoint_sameHostAndPort_notReported() {
         init(endpointHost = "127.0.0.1")
 
-        call(appUrl("/hello"))
+        // The app server is the one at the endpoint's port: same host + same port.
+        val url = HttpUrl.Builder().scheme("http").host("127.0.0.1").port(sdkServer.port).encodedPath("/x").build()
+        call(url)
 
         assertTrue(settle().isEmpty())
+    }
+
+    @Test
+    fun sdkEndpoint_sameHostDifferentPort_isReported() {
+        init(endpointHost = "127.0.0.1")
+
+        call(appUrl("/hello")) // 127.0.0.1 but the app server's port
+
+        assertEquals(listOf("GET /hello -> 200"), settle().map { it.message })
+    }
+
+    @Test
+    fun sdkEndpoint_impliedPortFromScheme_isIgnored() {
+        ARTracker.init(
+            app,
+            ARTrackerConfig(
+                endpoint = "https://api.example.com",
+                apiKey = "art_live_" + "a".repeat(43),
+                environment = "test",
+                appVersion = "1.0",
+                beforeSend = BeforeSend { it.also(seen::add) },
+            ),
+        )
+        val reporter = CoreHttpReporter()
+
+        reporter.report(record(200).copy(url = "https://api.example.com/v1/x", host = "api.example.com"))
+        reporter.report(record(200).copy(url = "https://API.example.com:443/v1/y", host = "api.example.com"))
+        reporter.report(record(200).copy(url = "http://api.example.com/v1/z", host = "api.example.com"))
+        reporter.report(record(200).copy(url = "https://api.example.com:8443/v1/w", host = "api.example.com"))
+
+        assertEquals(
+            listOf("GET /v1/z -> 200", "GET /v1/w -> 200"),
+            settle().map { it.message },
+        )
     }
 
     @Test
     fun sdkEndpointHost_matchIsCaseInsensitive() {
         init(endpointHost = "LocalHost")
 
-        call(appUrl("/hello", host = "localhost"))
+        call(HttpUrl.Builder().scheme("http").host("localhost").port(sdkServer.port).encodedPath("/hello").build())
 
         assertTrue(settle().isEmpty())
     }
