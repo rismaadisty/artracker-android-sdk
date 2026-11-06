@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
+import id.art.tracker.core.Clock
 import id.art.tracker.core.ItemFactory
 import id.art.tracker.core.KeyValueStore
 import id.art.tracker.core.SdkLog
@@ -19,8 +20,9 @@ import java.io.InputStream
  * `REASON_LOW_MEMORY` -> `low_memory_kill` (`warn`). `REASON_CRASH` (a Java crash) is skipped on purpose:
  * [CrashHandler] already covers it, with a better stack trace.
  *
- * Only entries newer than the last processed one are looked at; that timestamp is kept in [store] under
- * [KEY_LAST_TS] and advances over every entry seen, ignored reasons included. Entries of every process of the
+ * Only entries newer than the last processed one (and not older than 7 days: the first run after an install or a
+ * long gap must not replay history) are reported; that timestamp is kept in [store] under
+ * [KEY_LAST_TS] and advances over every entry seen, ignored and too-old reasons included. Entries of every process of the
  * package are kept (multi-process apps), each tagged with a `process_name` attribute.
  *
  * Attribution: an exit belongs to a PREVIOUS process, so the items carry the CURRENT session id (the old one is
@@ -32,6 +34,7 @@ internal class ExitInfoCollector(
     private val context: Context,
     private val store: KeyValueStore,
     private val items: ItemFactory,
+    private val clock: Clock = Clock.SYSTEM,
 ) {
     /** Builds the items for the exits not seen yet and remembers them as processed. */
     fun collect(): List<TelemetryItem> = process(emit = true)
@@ -58,10 +61,11 @@ internal class ExitInfoCollector(
     private fun read(emit: Boolean): List<TelemetryItem> {
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return emptyList()
         val last = store.getLong(KEY_LAST_TS, 0L)
-        val fresh = manager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
-            .filter { it.timestamp > last }
-            .sortedBy { it.timestamp }
-        if (fresh.isEmpty()) return emptyList()
+        val all = manager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
+        if (all.isEmpty()) return emptyList()
+        // First run (or a long gap): only the last week is worth reporting; older entries are still marked processed.
+        val threshold = maxOf(last, clock.nowMs() - MAX_AGE_MS)
+        val fresh = all.filter { it.timestamp > threshold }.sortedBy { it.timestamp }
 
         val result = ArrayList<TelemetryItem>()
         if (emit) {
@@ -73,7 +77,9 @@ internal class ExitInfoCollector(
             }
         }
         // Persisted before the caller enqueues: at most once, a kill in between loses the report but never repeats it.
-        store.putLong(KEY_LAST_TS, fresh.maxOf { it.timestamp })
+        // The maximum is taken over EVERY entry seen (too old ones included) and never moves backwards.
+        val newest = all.maxOf { it.timestamp }
+        if (newest > last) store.putLong(KEY_LAST_TS, newest)
         return result
     }
 
@@ -128,5 +134,6 @@ internal class ExitInfoCollector(
     internal companion object {
         const val KEY_LAST_TS = "exitinfo_last_ts"
         const val MAX_TRACE_BYTES = 16 * 1024
+        const val MAX_AGE_MS = 7 * 24 * 3_600_000L
     }
 }

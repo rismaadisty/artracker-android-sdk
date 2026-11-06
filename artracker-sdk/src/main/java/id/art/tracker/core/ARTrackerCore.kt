@@ -318,7 +318,7 @@ internal class ARTrackerCore(
      */
     private fun collectExitInfo() {
         runCatching {
-            val collector = ExitInfoCollector(app, transportPrefs, items)
+            val collector = ExitInfoCollector(app, transportPrefs, items, clock)
             if (isDisabled()) {
                 collector.markProcessed()
                 return@runCatching

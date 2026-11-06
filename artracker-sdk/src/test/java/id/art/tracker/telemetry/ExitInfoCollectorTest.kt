@@ -10,6 +10,7 @@ import id.art.tracker.LogLevel
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.Clock
 import id.art.tracker.core.ItemFactory
+import id.art.tracker.core.Iso8601
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SharedPrefsStore
 import id.art.tracker.testutil.FakeClock
@@ -45,10 +46,10 @@ import org.robolectric.shadows.ShadowActivityManager.ApplicationExitInfoBuilder
 @Config(sdk = [30])
 class ExitInfoCollectorTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
-    private val clock = FakeClock(1_800_000_000_000)
+    private val clock = FakeClock(1_700_000_100_000)
     private val store = InMemoryStore()
     private val items = ItemFactory(clock, { "current-session" }, { null })
-    private val collector get() = ExitInfoCollector(context, store, items)
+    private val collector get() = ExitInfoCollector(context, store, items, clock)
     private val activityManager get() = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
 
     private fun addExit(
@@ -215,6 +216,51 @@ class ExitInfoCollectorTest {
         assertTrue(collector.collect().isEmpty())
     }
 
+    @Test
+    fun exitOlderThanSevenDays_isSkippedButMarkedProcessed() {
+        val eightDays = clock.nowMs() - 8 * 86_400_000L
+        addExit(ApplicationExitInfo.REASON_ANR, eightDays)
+
+        assertTrue(collector.collect().isEmpty())
+
+        assertEquals("the old entry is remembered as processed", eightDays, store.getLong("exitinfo_last_ts", 0))
+    }
+
+    @Test
+    fun exitFromYesterday_isReported_andOldOnesNextToItAreNot() {
+        val oneDay = clock.nowMs() - 86_400_000L
+        val eightDays = clock.nowMs() - 8 * 86_400_000L
+        addExit(ApplicationExitInfo.REASON_ANR, eightDays)
+        addExit(ApplicationExitInfo.REASON_CRASH_NATIVE, oneDay)
+
+        val result = collector.collect()
+
+        assertEquals(listOf("native_crash"), result.map { it.name })
+        assertEquals(oneDay, store.getLong("exitinfo_last_ts", 0))
+        assertTrue("nothing is reported twice", collector.collect().isEmpty())
+    }
+
+    @Test
+    fun sevenDayWindow_doesNotMoveTheStoredTimestampBackwards() {
+        val recent = clock.nowMs() - 1_000
+        store.putLong("exitinfo_last_ts", recent)
+        addExit(ApplicationExitInfo.REASON_ANR, clock.nowMs() - 9 * 86_400_000L)
+
+        assertTrue(collector.collect().isEmpty())
+
+        assertEquals(recent, store.getLong("exitinfo_last_ts", 0))
+    }
+
+    @Test
+    fun markProcessed_alsoCoversEntriesOlderThanTheWindow() {
+        val old = clock.nowMs() - 30 * 86_400_000L
+        addExit(ApplicationExitInfo.REASON_ANR, old)
+
+        collector.markProcessed()
+
+        assertEquals(old, store.getLong("exitinfo_last_ts", 0))
+    }
+
     // region wiring (Robolectric + MockWebServer)
 
     private val key = "art_live_" + "a".repeat(43)
@@ -266,9 +312,10 @@ class ExitInfoCollectorTest {
 
     @Test
     fun init_sendsTheAnrOfThePreviousProcess() {
+        val exitAt = System.currentTimeMillis() - 3_600_000L
         addExit(
             ApplicationExitInfo.REASON_ANR,
-            1_700_000_000_000,
+            exitAt,
             ByteArrayInputStream("at Foo.bar(Foo.kt:1) mail jane.doe@example.com".toByteArray()),
         )
         val endpoint = startServer()
@@ -279,23 +326,24 @@ class ExitInfoCollectorTest {
         val anr = sentItems().single { it.getString("name") == "anr" }
         assertEquals("log", anr.getString("type"))
         assertEquals("fatal", anr.getString("level"))
-        assertEquals("2023-11-14T22:13:20.000Z", anr.getString("timestamp"))
+        assertEquals(Iso8601.format(exitAt), anr.getString("timestamp"))
         val attrs = anr.getJSONObject("attributes")
         assertEquals("at Foo.bar(Foo.kt:1) mail j***@example.com", attrs.getString("trace"))
-        assertEquals(1_700_000_000_000, lastTs())
+        assertEquals(exitAt, lastTs())
         assertEquals(0, ARTracker.diagnostics().pendingItems)
     }
 
     @Test
     fun optedOut_advancesTimestampWithoutItems() {
         KillSwitch(SharedPrefsStore(context, TransportConfigStore.PREFS_NAME), Clock.SYSTEM).optedOut = true
-        addExit(ApplicationExitInfo.REASON_ANR, 1_700_000_000_000)
+        val exitAt = System.currentTimeMillis() - 3_600_000L
+        addExit(ApplicationExitInfo.REASON_ANR, exitAt)
         val endpoint = startServer()
 
         ARTracker.init(context, config(endpoint))
         awaitIdle()
 
-        assertEquals(1_700_000_000_000, lastTs())
+        assertEquals(exitAt, lastTs())
         assertEquals(0, server.requestCount)
         assertEquals(0, ARTracker.diagnostics().pendingItems)
 

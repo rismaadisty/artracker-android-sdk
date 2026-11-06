@@ -27,7 +27,23 @@ internal class KillSwitch(private val store: KeyValueStore, private val clock: C
         store.putLong(KEY_OPTED_OUT, if (optedOut) 1L else 0L)
     }
 
-    fun isActive(): Boolean = optedOut || clock.nowMs() < store.getLong(KEY_DISABLED_UNTIL, 0L)
+    fun isActive(): Boolean = optedOut || trippedNow()
+
+    /**
+     * A trip lasts at most [DEFAULT_TRIP_MS]. A stored deadline further away than that was written under a different
+     * wall clock (the clock moved backwards since) or is corrupt: it counts as expired and is cleared, so a clock jump
+     * can never lock the SDK for longer than one trip.
+     */
+    private fun trippedNow(): Boolean {
+        val until = store.getLong(KEY_DISABLED_UNTIL, 0L)
+        if (until == 0L) return false
+        val remaining = until - clock.nowMs()
+        if (remaining > DEFAULT_TRIP_MS) {
+            store.putLong(KEY_DISABLED_UNTIL, 0L)
+            return false
+        }
+        return remaining > 0
+    }
 
     fun trip(durationMs: Long = DEFAULT_TRIP_MS) {
         store.putLong(KEY_DISABLED_UNTIL, clock.nowMs() + durationMs)
