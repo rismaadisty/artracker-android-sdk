@@ -519,4 +519,135 @@ class EventPipelineTest {
         p.awaitIdle()
         assertTrue(queue.stored.isEmpty())
     }
+
+    // --- name / message redaction (spec 7.2): free text outside the attributes must not leak PII ---
+
+    @Test
+    fun logMessage_isRedacted() = runTest {
+        val p = pipeline()
+        val item = factory.log(LogLevel.ERROR, "log", "payment failed for jane@doe.com")
+        p.enqueue(item)
+        p.awaitIdle()
+
+        val stored = payloadOf(item.id)
+        assertFalse(stored, stored.contains("jane@doe.com"))
+        assertEquals("payment failed for j***@doe.com", JSONObject(stored).getString("message"))
+    }
+
+    @Test
+    fun message_phoneAndEmail_areRedacted() = runTest {
+        val p = pipeline()
+        val item = factory.log(LogLevel.ERROR, "exception", "user 0812345678 / jane@doe.com not found")
+        p.enqueue(item)
+        p.awaitIdle()
+
+        val message = JSONObject(payloadOf(item.id)).getString("message")
+        assertFalse(message, message.contains("jane@doe.com"))
+        assertFalse(message, message.contains("0812345678"))
+        assertTrue(message, message.contains("5678"))
+    }
+
+    @Test
+    fun message_jwt_isReplacedByMarker() = runTest {
+        val p = pipeline()
+        val jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghij"
+        val item = factory.log(LogLevel.INFO, "log", "token $jwt used")
+        p.enqueue(item)
+        p.awaitIdle()
+
+        val message = JSONObject(payloadOf(item.id)).getString("message")
+        assertEquals("token [redacted] used", message)
+    }
+
+    @Test
+    fun eventName_isRedacted() = runTest {
+        val p = pipeline()
+        val item = factory.event("clicked jane@doe.com")
+        p.enqueue(item)
+        p.awaitIdle()
+
+        val stored = payloadOf(item.id)
+        assertFalse(stored, stored.contains("jane@doe.com"))
+        assertEquals("clicked j***@doe.com", JSONObject(stored).getString("name"))
+    }
+
+    @Test
+    fun everySdkEmittedName_isLeftUnchanged() = runTest {
+        val p = pipeline()
+        val names = listOf(
+            "session_start", "session_end", "screen_view", "app_foreground", "app_background", "\$identify", "log",
+            "exception", "http_request", "crash", "anr", "native_crash", "low_memory_kill",
+        )
+        val items = names.map { factory.event(it) }
+        items.forEach { p.enqueue(it) }
+        p.awaitIdle()
+
+        assertEquals(names, items.map { JSONObject(payloadOf(it.id)).getString("name") })
+    }
+
+    @Test
+    fun replayChunk_nameAndMessage_stayUntouched() = runTest {
+        val p = pipeline()
+        val chunk = factory.session("replay_chunk", mapOf("data" to "a@b.com"))
+        val withMessage = chunk.copy(message = "a@b.com")
+        p.enqueue(withMessage)
+        p.awaitIdle()
+
+        val json = JSONObject(payloadOf(withMessage.id))
+        assertEquals("replay_chunk", json.getString("name"))
+        assertEquals("a@b.com", json.getString("message"))
+    }
+
+    @Test
+    fun messageLimit_stillHoldsAfterRedactionLengthensTheText() = runTest {
+        val p = pipeline()
+        // "a@bc.de" -> "a***@bc.de": +3 chars each, so 4096 chars of it would grow without the second cut.
+        val item = factory.log(LogLevel.INFO, "log", "a@bc.de ".repeat(600))
+        assertEquals(4096, item.message!!.length)
+        p.enqueue(item)
+        p.awaitIdle()
+
+        val message = JSONObject(payloadOf(item.id)).getString("message")
+        assertTrue("length ${message.length}", message.length <= 4096)
+        assertFalse(message.contains(" a@bc"))
+    }
+
+    @Test
+    fun nameLimit_stillHoldsAfterRedaction() = runTest {
+        val p = pipeline()
+        val item = factory.event("a@bc.de ".repeat(40))
+        p.enqueue(item)
+        p.awaitIdle()
+
+        assertTrue(JSONObject(payloadOf(item.id)).getString("name").length <= 255)
+    }
+
+    @Test
+    fun beforeSendRunsFirst_thenNameAndMessageAreRedacted() = runTest {
+        val seenByHook = ArrayList<String?>()
+        val p = pipeline(beforeSend = BeforeSend { seenByHook += it.message; it.copy(message = "back to ${it.message}") })
+        val item = factory.log(LogLevel.INFO, "log", "jane@doe.com")
+        p.enqueue(item)
+        p.awaitIdle()
+
+        assertEquals(listOf<String?>("jane@doe.com"), seenByHook)
+        assertEquals("back to j***@doe.com", JSONObject(payloadOf(item.id)).getString("message"))
+    }
+
+    @Test
+    fun redactionFailure_onAnItemWithAMessage_dropsItWholeAndKeepsTheConsumerAlive() = runTest {
+        val p = pipeline()
+        // Name and message share the attributes' try/catch: a failure anywhere persists nothing for the item.
+        val poison = object {
+            override fun toString(): String = throw IllegalStateException("cannot stringify")
+        }
+        val bad = factory.log(LogLevel.INFO, "log", "jane@doe.com", mapOf("k" to poison))
+        val good = factory.event("good")
+        p.enqueue(bad)
+        p.enqueue(good)
+        p.awaitIdle()
+
+        assertTrue(queue.stored.none { it.id == bad.id })
+        assertTrue(queue.stored.any { it.id == good.id })
+    }
 }

@@ -43,16 +43,17 @@ internal class ItemFactory(
         )
     }
 
-    private fun String.limit(max: Int): String {
-        if (length <= max) return this
-        // Do not leave a dangling high surrogate at the cut.
-        val end = if (Character.isHighSurrogate(this[max - 1])) max - 1 else max
-        return substring(0, end)
-    }
-
     private companion object {
-        const val MAX_NAME = 255
-        const val MAX_MESSAGE = 4096
         const val MAX_ID = 128
     }
+}
+
+internal const val MAX_NAME: Int = 255
+internal const val MAX_MESSAGE: Int = 4096
+
+/** Cuts to at most [max] chars without leaving a dangling high surrogate at the cut. */
+internal fun String.limit(max: Int): String {
+    if (length <= max) return this
+    val end = if (Character.isHighSurrogate(this[max - 1])) max - 1 else max
+    return substring(0, end)
 }

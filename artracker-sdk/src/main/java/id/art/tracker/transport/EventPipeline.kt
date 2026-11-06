@@ -4,7 +4,10 @@ import androidx.annotation.VisibleForTesting
 import id.art.tracker.BeforeSend
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.Clock
+import id.art.tracker.core.MAX_MESSAGE
+import id.art.tracker.core.MAX_NAME
 import id.art.tracker.core.SdkLog
+import id.art.tracker.core.limit
 import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.isReplayChunk
 import id.art.tracker.priority
@@ -323,7 +326,14 @@ internal class EventPipeline(
             val safe = if (item.isReplayChunk()) {
                 item
             } else {
-                item.copy(attributes = AttributeRedactor.redact(item.attributes))
+                // Name and message are free text too (log(), captureException(), track(name), ExitInfo description):
+                // the same redaction as the attributes. Redaction can lengthen a string (a***@x.y), so the factory's
+                // limits are applied again. Any throw drops the whole item (fail closed), like the attributes.
+                item.copy(
+                    name = AttributeRedactor.redactString(item.name).limit(MAX_NAME),
+                    message = item.message?.let { AttributeRedactor.redactString(it).limit(MAX_MESSAGE) },
+                    attributes = AttributeRedactor.redact(item.attributes),
+                )
             }
             StoredItem(
                 id = safe.id,
