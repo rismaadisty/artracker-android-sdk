@@ -7,6 +7,7 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import androidx.test.core.app.ApplicationProvider
+import id.art.tracker.core.SdkLog
 import id.art.tracker.testutil.FakeClock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -16,6 +17,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
@@ -52,6 +54,28 @@ class FrameSchedulerTest {
         val m = ViewTreeObserver::class.java.getDeclaredMethod("dispatchOnDraw")
         m.isAccessible = true
         m.invoke(root.viewTreeObserver)
+    }
+
+    @Test
+    fun captureDuration_isLoggedOnlyInDebug() {
+        ShadowLog.clear()
+        val s = scheduler(baseFps = 1.0)
+        s.start()
+        s.markDirty()
+        advance(1_000)
+        assertEquals(1, captures)
+        assertTrue(ShadowLog.getLogsForTag("ARTracker").isEmpty())
+
+        SdkLog.enabled = true
+        try {
+            s.markDirty()
+            advance(1_000)
+            val logs = ShadowLog.getLogsForTag("ARTracker").map { it.msg }
+            assertTrue("capture duration not logged: $logs", logs.any { Regex("replay capture took \\d+ us").containsMatchIn(it) })
+        } finally {
+            SdkLog.enabled = false
+            s.stop()
+        }
     }
 
     @Test

@@ -2,6 +2,7 @@ package id.art.tracker
 
 import android.app.Application
 import android.content.Context
+import android.os.Looper
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.Clock
@@ -163,6 +164,8 @@ public object ARTracker {
                 return
             }
             SdkLog.enabled = config.debug
+            // Debug builds only: the cost of the synchronous part, for the perf measurements in PERF.md.
+            val startNs = if (SdkLog.enabled) System.nanoTime() else 0L
             val errors = config.validate()
             if (errors.isNotEmpty()) {
                 // The messages describe the problem only; the API key itself is never logged.
@@ -182,6 +185,10 @@ public object ARTracker {
                 ARTrackerCore.clear()
                 core.shutdown()
                 throw t
+            }
+            if (SdkLog.enabled) {
+                val thread = if (Looper.myLooper() == Looper.getMainLooper()) "main" else Thread.currentThread().name
+                SdkLog.d("init synchronous part took ${(System.nanoTime() - startNs) / 1_000} us on thread $thread")
             }
         }
     }

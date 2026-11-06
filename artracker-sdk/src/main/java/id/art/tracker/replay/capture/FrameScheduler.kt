@@ -143,6 +143,8 @@ internal class FrameScheduler(
     private fun runCapture() {
         dirty = false
         val startMs = clock.nowMs()
+        // Debug builds only (SdkLog.enabled is false otherwise): the capture cost for the perf measurements in PERF.md.
+        val startNs = if (SdkLog.enabled) System.nanoTime() else 0L
         try {
             capture()
         } catch (t: Throwable) {
@@ -153,6 +155,9 @@ internal class FrameScheduler(
             return
         }
         consecutiveFailures = 0
+        if (SdkLog.enabled) {
+            SdkLog.d("replay capture took ${(System.nanoTime() - startNs) / 1_000} us (budget $budgetMs ms, fps $currentFps)")
+        }
         val elapsed = clock.nowMs() - startMs
         if (elapsed > budgetMs) {
             lastSlowAtMs = clock.nowMs()

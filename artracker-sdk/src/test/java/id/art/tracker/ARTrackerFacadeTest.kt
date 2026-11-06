@@ -123,6 +123,22 @@ class ARTrackerFacadeTest {
     }
 
     @Test
+    fun init_logsItsSynchronousCost_onlyInDebug() {
+        server.start()
+        ARTracker.init(context, config(debug = false))
+        assertTrue(ShadowLog.getLogsForTag("ARTracker").isEmpty())
+
+        ARTracker.resetForTest()
+        context.deleteDatabase("artracker.db")
+        ARTracker.init(context, config(debug = true))
+        val logs = ShadowLog.getLogsForTag("ARTracker").map { it.msg }
+        assertTrue(
+            "init cost not logged: $logs",
+            logs.any { Regex("init synchronous part took \\d+ us on thread main").containsMatchIn(it) },
+        )
+    }
+
+    @Test
     fun init_isIdempotent() {
         start()
         val first = ARTrackerCore.instanceOrNull()
