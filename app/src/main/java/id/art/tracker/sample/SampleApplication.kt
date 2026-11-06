@@ -6,6 +6,6 @@ import id.art.tracker.BuildConfig
 class SampleApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        SampleApp.initTracker(this, BuildConfig.ARTRACKER_ENDPOINT, BuildConfig.ARTRACKER_KEY)
+        SampleApp.initTracker(this, BuildConfig.ARTRACKER_ENDPOINT, BuildConfig.ARTRACKER_KEY, BuildConfig.DEBUG)
     }
 }

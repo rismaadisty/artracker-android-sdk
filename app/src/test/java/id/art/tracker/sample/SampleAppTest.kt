@@ -31,19 +31,26 @@ class SampleAppTest {
     @Test
     fun initTrackerWithEmptyKeyReturnsFalse() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        assertFalse(SampleApp.initTracker(app, endpoint = "http://10.0.2.2:3000", key = ""))
+        assertFalse(SampleApp.initTracker(app, endpoint = "http://sample.sdk-test.invalid:3000", key = "", debug = false))
     }
 
     @Test
     fun initTrackerWithBlankKeyReturnsFalse() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        assertFalse(SampleApp.initTracker(app, endpoint = "", key = "   "))
+        assertFalse(SampleApp.initTracker(app, endpoint = "", key = "   ", debug = false))
+    }
+
+    @Test
+    fun configCarriesTheDebugFlagItIsGiven_neverAHardCodedTrue() {
+        val key = "art_live_" + "a".repeat(43)
+        assertFalse(SampleApp.config("http://sample.sdk-test.invalid:3000", key, debug = false).debug)
+        assertTrue(SampleApp.config("http://sample.sdk-test.invalid:3000", key, debug = true).debug)
     }
 
     @Test
     fun initTrackerWithKeyInitialisesTheSdk() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val ok = SampleApp.initTracker(app, endpoint = "http://10.0.2.2:3000", key = "art_live_" + "a".repeat(43))
+        val ok = SampleApp.initTracker(app, endpoint = "http://sample.sdk-test.invalid:3000", key = "art_live_" + "a".repeat(43), debug = false)
         assertTrue(ok)
         assertTrue(ARTracker.isInitialized())
     }
