@@ -123,6 +123,28 @@ class ReplayControllerTest {
 
     private fun controller(): ReplayController = core.replayController!!
 
+    /**
+     * Names of the SDK-owned runnables still posted on the main handler (flush tick; frame tick; one-off capture).
+     * Reads the private fields reflectively and asks the handler about each one, so unrelated posts never count.
+     */
+    private fun pendingSdkCallbacks(): List<String> {
+        fun field(owner: Any, name: String): Any {
+            val f = owner.javaClass.getDeclaredField(name)
+            f.isAccessible = true
+            return f.get(owner)!!
+        }
+        val controller = controller()
+        val scheduler = field(controller, "scheduler")
+        // hasCallbacks matches the posting Handler instance, so ask the very handlers the SDK posts through.
+        val controllerHandler = field(controller, "mainHandler") as Handler
+        val schedulerHandler = field(scheduler, "handler") as Handler
+        return listOf(
+            Triple("flush", controllerHandler, field(controller, "flushRunnable")),
+            Triple("tick", schedulerHandler, field(scheduler, "tickRunnable")),
+            Triple("soon", schedulerHandler, field(scheduler, "soonRunnable")),
+        ).filter { (_, h, r) -> h.hasCallbacks(r as Runnable) }.map { it.first }
+    }
+
     private fun idle(ms: Long = 0) {
         if (ms == 0L) shadowOf(looper).idle() else shadowOf(looper).idleFor(Duration.ofMillis(ms))
     }
@@ -294,6 +316,7 @@ class ReplayControllerTest {
         val (activity, _) = textActivity()
         capture()
         assertEquals(1, drawListenerCount(activity.window.decorView))
+        assertTrue("the probe must see the running controller's callbacks (running=${controller().isRunning})", pendingSdkCallbacks().isNotEmpty())
 
         ProcessLifecycleTestUtil.stop() // app_background
         settle()
@@ -302,7 +325,8 @@ class ReplayControllerTest {
         assertSame(activity, activity.window.callback)
         assertEquals(0, drawListenerCount(activity.window.decorView))
         assertEquals(0, dispatcher.pending)
-        assertEquals(Duration.ZERO, shadowOf(looper).nextScheduledTaskTime)
+        // Only SDK-owned callbacks: the global looper queue also holds unrelated posts (WorkManager, Robolectric).
+        assertEquals("pending SDK callbacks: ${pendingSdkCallbacks()}", emptyList<String>(), pendingSdkCallbacks())
         assertEquals(1, chunks().size) // flushed on background
         assertEquals(true, chunks().single().attributes["full_snapshot"])
 
@@ -518,6 +542,37 @@ class ReplayControllerTest {
         t.join()
         idle()
         assertTrue(controller().isRunning)
+    }
+
+    @Test
+    fun href_isComputedOncePerScreenName_notOncePerFrame() {
+        startCore()
+        textActivity()
+        val computed = ArrayList<String?>()
+        controller().hrefBuilder = { name -> computed += name; ReplayHref.of(name) }
+
+        ARTracker.screen("Profile")
+        repeat(3) { capture() }
+        assertEquals(listOf<String?>("Profile"), computed)
+
+        ARTracker.screen("Settings")
+        repeat(3) { capture() }
+        assertEquals(listOf<String?>("Profile", "Settings"), computed)
+
+        // Going back recomputes (only the LAST name is cached) and the output stays correct.
+        ARTracker.screen("Profile")
+        capture()
+        assertEquals(listOf<String?>("Profile", "Settings", "Profile"), computed)
+        flushChunks()
+        assertEquals("android://Profile", hrefs().last())
+
+        // A cached value is still the sanitized one (path ids masked), for every frame that reuses it.
+        computed.clear()
+        ARTracker.screen("order/12345")
+        repeat(2) { capture() }
+        assertEquals(listOf<String?>("order/12345"), computed)
+        flushChunks()
+        assertEquals("android://order/:id", hrefs().last())
     }
 
     private fun hrefs() = allEvents().filter { it["type"] == 4 }.map { (it["data"] as Map<String, Any?>)["href"] as String }

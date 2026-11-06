@@ -106,6 +106,15 @@ internal class ReplayController(
     private val attachedRoots = ArrayList<WeakReference<View>>()
     private val wrappedWindows = ArrayList<WeakReference<Window>>()
     private val flushRunnable = Runnable { onFlushTick() }
+
+    // Last screen name -> its sanitized href: the redactor regexes must not run on the main thread every frame.
+    private var hrefScreen: String? = null
+    private var hrefValue: String? = null
+    private var hrefCached = false
+
+    /** Builds the href for a raw screen name; replaced by tests to count invocations. */
+    @VisibleForTesting
+    internal var hrefBuilder: (String?) -> String = ReplayHref::of
     // endregion
 
     // region hand-off between the threads
@@ -340,10 +349,20 @@ internal class ReplayController(
         val screen = core.screens.currentScreen
         // Sanitized (redacted, path ids masked, URL-safe) for output; the raw name is kept only to compare screens.
         val frame = Frame(
-            frameRoot, ReplayHref.of(screen), screen ?: "", width, height, core.clock.nowMs(), sessionId, forceFullNext,
+            frameRoot, hrefFor(screen), screen ?: "", width, height, core.clock.nowMs(), sessionId, forceFullNext,
         )
         forceFullNext = false
         submitFrame(frame)
+    }
+
+    /** [ReplayHref.of] memoised for the most recent raw name (main thread only). */
+    private fun hrefFor(screen: String?): String {
+        if (hrefCached && hrefScreen == screen) return hrefValue!!
+        val href = hrefBuilder(screen)
+        hrefScreen = screen
+        hrefValue = href
+        hrefCached = true
+        return href
     }
 
     private fun onTouch(kind: TouchKind, rawX: Float, rawY: Float, density: Float) {
