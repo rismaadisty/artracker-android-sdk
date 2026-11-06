@@ -279,7 +279,7 @@ internal class EventPipeline(
                                 accept(next)
                             } catch (e: CancellationException) {
                                 throw e
-                            } catch (e: Exception) {
+                            } catch (e: Throwable) {
                                 SdkLog.w("pipeline step failed", e)
                             }
                         }
@@ -294,8 +294,8 @@ internal class EventPipeline(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                // Never let one bad item or a failing store kill the consumer.
+            } catch (e: Throwable) {
+                // Never let one bad item or a failing store kill the consumer (Errors included).
                 SdkLog.w("pipeline step failed", e)
             }
         }
@@ -330,7 +330,9 @@ internal class EventPipeline(
             )
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Throwable, not Exception: a hostile attribute value (toString() that throws an Error or overflows the
+            // stack) must cost one item, never the consumer coroutine (which would silently end all recording).
             SdkLog.w("dropping item that could not be processed (${e.javaClass.simpleName})")
             null
         }
