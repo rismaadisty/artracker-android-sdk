@@ -130,9 +130,16 @@ internal object Json {
         out.append(']')
     }
 
+    /**
+     * Unpaired surrogates are written as U+FFFD: they are not valid text (the UTF-8 body would turn them into `?`),
+     * and SQLite's UTF-16 to UTF-8 conversion pairs a lone high surrogate with the NEXT unit, which would swallow the
+     * closing quote of the string and corrupt the stored payload.
+     */
     private fun writeString(s: String, out: Appendable) {
         out.append('"')
-        for (c in s) {
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
             when {
                 c == '"' -> out.append("\\\"")
                 c == '\\' -> out.append("\\\\")
@@ -141,15 +148,27 @@ internal object Json {
                 c == '\t' -> out.append("\\t")
                 c == '\b' -> out.append("\\b")
                 c == '\u000C' -> out.append("\\f")
-                c < ' ' || c == ' ' || c == ' ' -> {
+                c < ' ' || c == '\u2028' || c == '\u2029' -> {
                     out.append("\\u")
                     val h = Integer.toHexString(c.code)
-                    for (i in h.length until 4) out.append('0')
+                    for (k in h.length until 4) out.append('0')
                     out.append(h)
                 }
+                Character.isHighSurrogate(c) -> {
+                    if (i + 1 < s.length && Character.isLowSurrogate(s[i + 1])) {
+                        out.append(c).append(s[i + 1])
+                        i++
+                    } else {
+                        out.append(REPLACEMENT)
+                    }
+                }
+                Character.isLowSurrogate(c) -> out.append(REPLACEMENT)
                 else -> out.append(c)
             }
+            i++
         }
         out.append('"')
     }
+
+    private const val REPLACEMENT = '\uFFFD'
 }

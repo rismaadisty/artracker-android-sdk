@@ -34,6 +34,13 @@ class JsonTest {
     }
 
     @Test
+    fun unpairedSurrogates_becomeReplacementCharacters_pairsSurvive() {
+        assertEquals("\"a\uFFFDb\uFFFDc\uFFFD\"", Json.encode("a\ud800b\udc00c\ud800"))
+        assertEquals("\"\ud83d\ude00\uFFFD\"", Json.encode("\ud83d\ude00\udc00"))
+        assertEquals("\"\uFFFD\ud83d\ude00\"", Json.encode("\ud800\ud83d\ude00"))
+    }
+
+    @Test
     fun nestedMapAndList() {
         assertEquals("{\"a\":[1,true,null]}", Json.encode(mapOf("a" to listOf(1, true, null))))
     }

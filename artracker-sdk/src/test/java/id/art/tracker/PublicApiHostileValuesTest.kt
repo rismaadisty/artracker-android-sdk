@@ -95,4 +95,21 @@ class PublicApiHostileValuesTest {
         assertEquals(1, attrs.getInt("ok"))
         assertEquals("NaN", attrs.getString("v"))
     }
+
+    @Test
+    fun loneSurrogates_doNotCorruptTheStoredPayload() {
+        // SQLite converts UTF-16 to UTF-8 by pairing a high surrogate with whatever unit follows it, which here is
+        // the closing quote of the JSON string.
+        val items = persistedAfter {
+            ARTracker.log(LogLevel.INFO, "\ud800", mapOf("\udc00" to "x\ud800", "k" to "\ud800y"))
+            ARTracker.track("name\ud800")
+            ARTracker.track("emoji", mapOf("e" to "\ud83d\ude00"))
+        }
+        val log = items.first { it.getString("name") == "log" }
+        assertEquals("\uFFFD", log.getString("message"))
+        assertEquals("x\uFFFD", log.getJSONObject("attributes").getString("\uFFFD"))
+        assertEquals("\uFFFDy", log.getJSONObject("attributes").getString("k"))
+        assertTrue(items.any { it.getString("name") == "name\uFFFD" })
+        assertEquals("\ud83d\ude00", items.first { it.getString("name") == "emoji" }.getJSONObject("attributes").getString("e"))
+    }
 }
