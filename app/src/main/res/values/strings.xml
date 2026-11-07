@@ -101,4 +101,16 @@
     <string name="lab_identity_as">Identify sebagai %1$s</string>
     <string name="lab_identity_reset">Reset (logout)</string>
     <string name="lab_identity_reset_desc">Melupakan user dan memulai sesi baru.</string>
+    <string name="lab_privacy">Privasi &amp; masking</string>
+    <string name="lab_privacy_desc">Semua kasus masking dengan ekspektasi dan keterbatasan terdokumentasi, plus uji redaksi atribut.</string>
+    <string name="lab_privacy_effective">Pengaturan berlaku: maskAllInputs=%1$b, maskAllText=%2$b (butuh restart untuk mengubah).</string>
+    <string name="lab_privacy_redaction">Redaksi atribut (data palsu)</string>
+    <string name="lab_privacy_send_keys">Kirim kunci sensitif</string>
+    <string name="lab_privacy_send_keys_desc">track dengan kunci password dan token: nilai harus diganti.</string>
+    <string name="lab_privacy_send_values">Kirim nilai sensitif</string>
+    <string name="lab_privacy_send_values_desc">Email, kartu Luhn, JWT, dan Bearer palsu: harus diredaksi.</string>
+    <string name="lab_privacy_send_name">Nama event berisi email</string>
+    <string name="lab_privacy_send_name_desc">Nama event juga diredaksi oleh SDK.</string>
+    <string name="lab_privacy_export">Ekspor chunk replay</string>
+    <string name="lab_privacy_export_desc">Menulis chunk yang dikirim SDK ke sink (sudah di-mask) untuk validate-chunks.mjs.</string>
 </resources>

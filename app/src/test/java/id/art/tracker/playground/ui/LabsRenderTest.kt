@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import id.art.tracker.playground.labs.EventLab
 import id.art.tracker.playground.labs.IdentityLab
+import id.art.tracker.playground.labs.PrivacyLab
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,5 +30,13 @@ class LabsRenderTest {
     fun identityLabRenders() {
         rule.setContent { PlaygroundTheme { IdentityLab() } }
         rule.onNodeWithText("Reset (logout)").assertExists()
+    }
+
+    @Test
+    fun privacyLabRendersEveryCase() {
+        rule.setContent { PlaygroundTheme { PrivacyLab() } }
+        rule.onNodeWithText("Compose: password").assertExists()
+        rule.onNodeWithText("WebView").assertExists()
+        rule.onNodeWithText("Kirim kunci sensitif").assertExists()
     }
 }
