@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onNodeWithText
 import id.art.tracker.playground.labs.EventLab
 import id.art.tracker.playground.labs.IdentityLab
 import id.art.tracker.playground.labs.PrivacyLab
+import id.art.tracker.playground.labs.ReplayLab
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,5 +39,12 @@ class LabsRenderTest {
         rule.onNodeWithText("Compose: password").assertExists()
         rule.onNodeWithText("WebView").assertExists()
         rule.onNodeWithText("Kirim kunci sensitif").assertExists()
+    }
+
+    @Test
+    fun replayLabRendersItsSections() {
+        rule.setContent { PlaygroundTheme { ReplayLab() } }
+        rule.onNodeWithText("Mulai replay").assertExists()
+        rule.onNodeWithText("Pohon lebar (> 2000 node)").assertExists()
     }
 }

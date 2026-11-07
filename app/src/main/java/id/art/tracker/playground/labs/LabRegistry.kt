@@ -28,6 +28,7 @@ object LabRegistry {
     val entries: List<LabEntry> = listOf(
         LabEntry("event", R.string.lab_event, R.string.lab_event_desc, LabSection.LAB, content = { EventLab() }),
         LabEntry("privacy", R.string.lab_privacy, R.string.lab_privacy_desc, LabSection.LAB, content = { PrivacyLab() }),
+        LabEntry("replay", R.string.lab_replay, R.string.lab_replay_desc, LabSection.LAB, content = { ReplayLab() }),
         LabEntry("identity", R.string.lab_identity, R.string.lab_identity_desc, LabSection.LAB, content = { IdentityLab() }),
         LabEntry("legacy_login", R.string.legacy_login, R.string.legacy_login_desc, LabSection.LEGACY, content = { LoginScreen() }),
         LabEntry("legacy_payment", R.string.legacy_payment, R.string.legacy_payment_desc, LabSection.LEGACY, content = { PaymentScreen() }),

@@ -55,10 +55,9 @@ import id.art.tracker.playground.labs.LabRegistry
 import id.art.tracker.playground.labs.LabSection
 import id.art.tracker.playground.settings.EndpointProfile
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
-import id.art.tracker.playground.status.SdkControls
+import id.art.tracker.playground.status.PlaygroundControls
 import id.art.tracker.playground.status.SdkStatus
 import id.art.tracker.playground.status.SdkStatusRepository
-import id.art.tracker.playground.status.SharedPrefsControlStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -85,7 +84,7 @@ fun PlaygroundHost() {
 
     val repo = remember {
         SdkStatusRepository(
-            controls = SdkControls(SharedPrefsControlStore(context), SharedPrefsSettingsStore(context).load()),
+            controls = PlaygroundControls.get(context),
         )
     }
     var status by remember { mutableStateOf<SdkStatus?>(null) }
