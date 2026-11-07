@@ -1,3 +1,37 @@
 <resources>
     <string name="app_name">artracker-android</string>
+
+    <!-- Tabs and screens -->
+    <string name="tab_skenario">Skenario</string>
+    <string name="tab_lab">Lab</string>
+    <string name="tab_inspector">Inspector</string>
+    <string name="tab_pengaturan">Pengaturan</string>
+    <string name="action_back">Kembali</string>
+    <string name="action_cancel">Batal</string>
+    <string name="action_continue">Lanjut</string>
+    <string name="coming_soon">Segera hadir</string>
+
+    <!-- Status strip -->
+    <string name="status_loading">Status SDK: memuat…</string>
+    <string name="status_inactive">SDK tidak aktif (konfigurasi tidak valid atau belum diinisialisasi)</string>
+    <string name="status_server_disabled">SDK dinonaktifkan server (kunci API ditolak)</string>
+    <string name="status_opted_out">opt-out aktif</string>
+    <string name="status_line">Sesi %1$s · antre %2$d · kirim %3$s · replay %4$s</string>
+    <string name="status_on">ON</string>
+    <string name="status_off">OFF</string>
+    <string name="badge_safe">%1$s · %2$s</string>
+    <string name="banner_remote">PRODUKSI — event dikirim ke server nyata: %1$s</string>
+
+    <!-- Lab list -->
+    <string name="section_legacy">Layar lama (akan digantikan lab)</string>
+    <string name="legacy_login">Login</string>
+    <string name="legacy_login_desc">Email dan password: uji masking input.</string>
+    <string name="legacy_payment">Payment</string>
+    <string name="legacy_payment_desc">Kartu, CVV dan total yang di-mask.</string>
+    <string name="legacy_feed">Feed</string>
+    <string name="legacy_feed_desc">500 baris untuk uji scroll dan diff replay.</string>
+    <string name="legacy_diagnostics">Diagnostics</string>
+    <string name="legacy_diagnostics_desc">Tombol fitur SDK dan panel diagnostics.</string>
+    <string name="legacy_xml">Legacy XML</string>
+    <string name="legacy_xml_desc">Activity + Fragment XML: uji ViewWalker dan tag mask.</string>
 </resources>

@@ -1,0 +1,191 @@
+package id.art.tracker.playground.ui
+
+import androidx.annotation.StringRes
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import id.art.tracker.ARTracker
+import id.art.tracker.R
+import id.art.tracker.playground.boot.BootState
+import id.art.tracker.playground.boot.EndpointBadge
+import id.art.tracker.playground.labs.LabRegistry
+import id.art.tracker.playground.labs.LabSection
+import id.art.tracker.playground.settings.EndpointProfile
+import id.art.tracker.playground.settings.SharedPrefsSettingsStore
+import id.art.tracker.playground.status.SdkControls
+import id.art.tracker.playground.status.SdkStatus
+import id.art.tracker.playground.status.SdkStatusRepository
+import id.art.tracker.playground.status.SharedPrefsControlStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private class Tab(val route: Route, @StringRes val label: Int, val icon: ImageVector)
+
+private val tabs = listOf(
+    Tab(Route.Skenario, R.string.tab_skenario, Icons.Filled.PlayArrow),
+    Tab(Route.Lab, R.string.tab_lab, Icons.Filled.Build),
+    Tab(Route.Inspector, R.string.tab_inspector, Icons.Filled.Search),
+    Tab(Route.Pengaturan, R.string.tab_pengaturan, Icons.Filled.Settings),
+)
+
+/** Shell: four tabs, a back button on detail screens, the always-visible status strip and a feedback snackbar. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PlaygroundHost() {
+    val context = LocalContext.current
+    val navController = rememberNavController()
+    // Records a screen_view for every destination change (no-op until ARTracker.init succeeded).
+    LaunchedEffect(navController) { ARTracker.trackNavController(navController) }
+
+    val repo = remember {
+        SdkStatusRepository(
+            controls = SdkControls(SharedPrefsControlStore(context), SharedPrefsSettingsStore(context).load()),
+        )
+    }
+    var status by remember { mutableStateOf<SdkStatus?>(null) }
+    // diagnostics() reads the database: never on the main thread.
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            status = withContext(Dispatchers.IO) { repo.poll() }
+            delay(1_000)
+        }
+    }
+
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val feedback = remember {
+        Feedback { message ->
+            scope.launch {
+                snackbar.currentSnackbarData?.dismiss()
+                snackbar.showSnackbar(message)
+            }
+        }
+    }
+
+    val resolved = BootState.resolved
+    val badge = resolved?.badge ?: EndpointBadge(EndpointProfile.SINK, "?", remote = false)
+
+    val entry by navController.currentBackStackEntryAsState()
+    val currentPath = entry?.destination?.route
+    val isTopLevel = Route.topLevel.any { it.path == currentPath } || currentPath == null
+    val detailTitle = if (currentPath == Route.LabDetail.path) {
+        LabRegistry.byId(entry?.arguments?.getString(Route.LabDetail.ARG))?.titleRes?.let { stringResource(it) }
+    } else {
+        null
+    }
+
+    CompositionLocalProvider(LocalFeedback provides feedback) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(detailTitle ?: stringResource(R.string.app_name)) },
+                    navigationIcon = {
+                        if (!isTopLevel) {
+                            IconButton(onClick = { navController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                            }
+                        }
+                    },
+                )
+            },
+            bottomBar = {
+                NavigationBar {
+                    tabs.forEach { tab ->
+                        NavigationBarItem(
+                            selected = currentPath == tab.route.path || (tab.route == Route.Lab && currentPath == Route.LabDetail.path),
+                            onClick = {
+                                navController.navigate(tab.route.path) {
+                                    popUpTo(Route.Skenario.path) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = { Icon(tab.icon, contentDescription = null) },
+                            label = { Text(stringResource(tab.label)) },
+                        )
+                    }
+                }
+            },
+            snackbarHost = { SnackbarHost(snackbar) },
+        ) { inner ->
+            Column(Modifier.padding(inner).fillMaxSize()) {
+                StatusStrip(status, badge, resolved?.notice)
+                NavHost(navController, startDestination = Route.Skenario.path, modifier = Modifier.weight(1f)) {
+                    composable(Route.Skenario.path) { ComingSoon() }
+                    composable(Route.Lab.path) { LabList(onOpen = { navController.navigate(Route.LabDetail.of(it)) }) }
+                    composable(Route.Inspector.path) { ComingSoon() }
+                    composable(Route.Pengaturan.path) { ComingSoon() }
+                    composable(Route.LabDetail.path) { backStack ->
+                        LabRegistry.byId(backStack.arguments?.getString(Route.LabDetail.ARG))?.content?.invoke()
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComingSoon() {
+    Box(Modifier.fillMaxSize()) { Text(stringResource(R.string.coming_soon), Modifier.padding(16.dp)) }
+}
+
+@Composable
+private fun LabList(onOpen: (String) -> Unit) {
+    val context = LocalContext.current
+    val legacy = LabRegistry.entries.filter { it.section == LabSection.LEGACY }
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+        item { Text(stringResource(R.string.section_legacy), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp)) }
+        items(legacy) { e ->
+            OutlinedCard(
+                onClick = { e.onOpen?.invoke(context) ?: onOpen(e.id) },
+                modifier = Modifier.padding(bottom = 8.dp).fillMaxSize(),
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(stringResource(e.titleRes), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(e.descriptionRes), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+}
