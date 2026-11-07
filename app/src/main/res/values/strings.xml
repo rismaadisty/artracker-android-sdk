@@ -180,4 +180,10 @@
     <string name="lab_session_timeout">sessionTimeoutMs efektif: %1$d ms</string>
     <string name="lab_session_advice">Untuk merotasi sesi: tekan Home, tunggu %1$d detik, lalu kembali ke app.</string>
     <string name="lab_session_history">Riwayat id sesi</string>
+    <string name="scenario_run">Jalankan</string>
+    <string name="scenario_stop">Hentikan</string>
+    <string name="scenario_step">Langkah %1$d/%2$d: %3$s</string>
+    <string name="scenario_done">Selesai</string>
+    <string name="scenario_failed">Gagal di langkah %1$d: %2$s</string>
+    <string name="scenario_cancelled">Dibatalkan</string>
 </resources>

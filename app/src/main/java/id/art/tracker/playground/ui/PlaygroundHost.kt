@@ -61,6 +61,18 @@ import id.art.tracker.playground.labs.LabSection
 import id.art.tracker.playground.settings.EndpointProfile
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 import id.art.tracker.playground.labs.CrashNote
+import id.art.tracker.playground.scenario.ActivityHolder
+import id.art.tracker.playground.scenario.AppScenarioContext
+import id.art.tracker.playground.scenario.ScenarioHost
+import id.art.tracker.playground.scenario.shop.Cart
+import id.art.tracker.playground.scenario.shop.Checkout
+import id.art.tracker.playground.scenario.shop.OnboardingScreen
+import id.art.tracker.playground.scenario.shop.PaymentResult
+import id.art.tracker.playground.scenario.shop.ProductDetail
+import id.art.tracker.playground.scenario.shop.ProductList
+import id.art.tracker.playground.scenario.shop.ShopHome
+import id.art.tracker.playground.scenario.shop.ShopRoutes
+import id.art.tracker.playground.scenario.shop.StuckScreen
 import id.art.tracker.playground.labs.SharedPrefsNoteStore
 import id.art.tracker.playground.status.PlaygroundControls
 import id.art.tracker.playground.status.PlaygroundSessions
@@ -117,6 +129,25 @@ fun PlaygroundHost() {
                 snackbar.showSnackbar(message)
             }
         }
+    }
+
+    val controls = PlaygroundControls.get(context)
+    val replayFps = remember { SharedPrefsSettingsStore(context).load().replayFps }
+    val scenarioHost = remember {
+        ScenarioHost(
+            scope = scope,
+            contextFor = { scenario, gate ->
+                AppScenarioContext(
+                    proves = scenario.proves,
+                    navigateTo = { navController.navigate(it) },
+                    activity = { ActivityHolder.resumed },
+                    replayOn = { controls.replayOn },
+                    replayFps = { replayFps },
+                    userGate = gate,
+                    notes = { feedback.show(it) },
+                )
+            },
+        )
     }
 
     val resolved = BootState.resolved
@@ -176,7 +207,15 @@ fun PlaygroundHost() {
                     }
                 }
                 NavHost(navController, startDestination = Route.Skenario.path, modifier = Modifier.weight(1f)) {
-                    composable(Route.Skenario.path) { ComingSoon() }
+                    composable(Route.Skenario.path) { ScenarioScreen(scenarioHost) }
+                    composable(ShopRoutes.HOME) { ShopHome(onGo = { navController.navigate(it) }) }
+                    composable(ShopRoutes.PRODUCTS) { ProductList(onGo = { navController.navigate(it) }) }
+                    composable(ShopRoutes.PRODUCT) { ProductDetail(onGo = { navController.navigate(it) }) }
+                    composable(ShopRoutes.CART) { Cart(onGo = { navController.navigate(it) }) }
+                    composable(ShopRoutes.CHECKOUT) { Checkout(onGo = { navController.navigate(it) }) }
+                    composable(ShopRoutes.RESULT) { PaymentResult() }
+                    composable(ShopRoutes.ONBOARDING) { OnboardingScreen(onDone = { navController.popBackStack() }) }
+                    composable(ShopRoutes.STUCK) { StuckScreen() }
                     composable(Route.Lab.path) { LabList(onOpen = { navController.navigate(Route.LabDetail.of(it)) }) }
                     composable(Route.Inspector.path) {
                         InspectorScreen(
