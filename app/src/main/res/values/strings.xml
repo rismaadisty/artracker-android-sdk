@@ -9,6 +9,7 @@
     <string name="action_back">Kembali</string>
     <string name="action_cancel">Batal</string>
     <string name="action_continue">Lanjut</string>
+    <string name="action_close">Tutup</string>
     <string name="coming_soon">Segera hadir</string>
 
     <!-- Status strip -->
@@ -156,4 +157,27 @@
     <string name="lab_queue_stop_desc">Membatalkan burst yang sedang berjalan.</string>
     <string name="lab_queue_flush">Flush</string>
     <string name="lab_queue_flush_desc">ARTracker.flush(): minta SDK mengirim antrean sekarang.</string>
+    <string name="lab_crash">Crash &amp; stabilitas</string>
+    <string name="lab_crash_desc">Crash, crash di thread latar, ANR, dan demo dedupe 15 error identik.</string>
+    <string name="lab_crash_note">Item crash melewati beforeSend dan dikirim setelah relaunch. Catatan crash terakhir ditampilkan sekali setelah app dibuka lagi.</string>
+    <string name="lab_crash_main">Crash di main thread</string>
+    <string name="lab_crash_main_desc">RuntimeException dilempar dari klik: app mati.</string>
+    <string name="lab_crash_background">Crash di background thread</string>
+    <string name="lab_crash_background_desc">Exception tak tertangani di thread lain.</string>
+    <string name="lab_crash_anr">ANR 10 s</string>
+    <string name="lab_crash_anr_desc">Memblokir main thread 10 detik (butuh API 30+ untuk dilaporkan).</string>
+    <string name="lab_crash_confirm">App akan crash. Catatan disimpan lalu app harus dibuka lagi.</string>
+    <string name="lab_crash_confirm_anr">Main thread diblokir 10 detik; sistem mungkin menawarkan menutup app.</string>
+    <string name="lab_crash_dedupe">Kirim 15 error identik</string>
+    <string name="lab_crash_dedupe_desc">SDK hanya meneruskan 10 per fingerprint per sesi.</string>
+    <string name="lab_crash_counts">Exception diterima Inspector per fingerprint: %1$s</string>
+    <string name="lab_crash_counts_unavailable">Hitungan hanya tersedia di profil SINK (profil lain hanya metadata).</string>
+    <string name="lab_crash_offline_guide">Uji crash offline: 1) pilih profil OFFLINE, 2) buat crash, 3) buka lagi app lalu pindah ke SINK dan flush; item fatal \"crash\" muncul di Inspector.</string>
+    <string name="crash_note">Crash terakhir: %1$s. Item dikirim saat launch ini; cek Inspector setelah flush.</string>
+    <string name="lab_session">Sesi</string>
+    <string name="lab_session_desc">Sesi saat ini, rotasi setelah background, reset, dan riwayat id sesi.</string>
+    <string name="lab_session_current">Sesi saat ini: %1$s</string>
+    <string name="lab_session_timeout">sessionTimeoutMs efektif: %1$d ms</string>
+    <string name="lab_session_advice">Untuk merotasi sesi: tekan Home, tunggu %1$d detik, lalu kembali ke app.</string>
+    <string name="lab_session_history">Riwayat id sesi</string>
 </resources>

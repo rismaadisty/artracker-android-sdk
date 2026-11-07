@@ -31,6 +31,8 @@ object LabRegistry {
         LabEntry("replay", R.string.lab_replay, R.string.lab_replay_desc, LabSection.LAB, content = { ReplayLab() }),
         LabEntry("network", R.string.lab_network, R.string.lab_network_desc, LabSection.LAB, content = { NetworkLab() }),
         LabEntry("queue", R.string.lab_queue, R.string.lab_queue_desc, LabSection.LAB, content = { QueueLab() }),
+        LabEntry("crash", R.string.lab_crash, R.string.lab_crash_desc, LabSection.LAB, content = { CrashLab() }),
+        LabEntry("session", R.string.lab_session, R.string.lab_session_desc, LabSection.LAB, content = { SessionLab() }),
         LabEntry("identity", R.string.lab_identity, R.string.lab_identity_desc, LabSection.LAB, content = { IdentityLab() }),
         LabEntry("legacy_login", R.string.legacy_login, R.string.legacy_login_desc, LabSection.LEGACY, content = { LoginScreen() }),
         LabEntry("legacy_payment", R.string.legacy_payment, R.string.legacy_payment_desc, LabSection.LEGACY, content = { PaymentScreen() }),

@@ -3,12 +3,14 @@ package id.art.tracker.playground.ui
 import android.app.Application
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import id.art.tracker.playground.labs.CrashLab
 import id.art.tracker.playground.labs.EventLab
 import id.art.tracker.playground.labs.IdentityLab
 import id.art.tracker.playground.labs.NetworkLab
 import id.art.tracker.playground.labs.PrivacyLab
 import id.art.tracker.playground.labs.QueueLab
 import id.art.tracker.playground.labs.ReplayLab
+import id.art.tracker.playground.labs.SessionLab
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,5 +64,20 @@ class LabsRenderTest {
         rule.setContent { PlaygroundTheme { QueueLab() } }
         rule.onNodeWithText("Burst 5000 event").assertExists()
         rule.onNodeWithText("Flush").assertExists()
+    }
+
+    @Test
+    fun crashLabRendersItsDestructiveActions() {
+        rule.setContent { PlaygroundTheme { CrashLab() } }
+        rule.onNodeWithText("Crash di main thread").assertExists()
+        rule.onNodeWithText("ANR 10 s").assertExists()
+        rule.onNodeWithText("Kirim 15 error identik").assertExists()
+    }
+
+    @Test
+    fun sessionLabRendersTheSessionControls() {
+        rule.mainClock.autoAdvance = false // the lab polls the status forever
+        rule.setContent { PlaygroundTheme { SessionLab() } }
+        rule.onNodeWithText("Reset (logout)").assertExists()
     }
 }

@@ -14,7 +14,12 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
@@ -55,7 +60,10 @@ import id.art.tracker.playground.labs.LabRegistry
 import id.art.tracker.playground.labs.LabSection
 import id.art.tracker.playground.settings.EndpointProfile
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
+import id.art.tracker.playground.labs.CrashNote
+import id.art.tracker.playground.labs.SharedPrefsNoteStore
 import id.art.tracker.playground.status.PlaygroundControls
+import id.art.tracker.playground.status.PlaygroundSessions
 import id.art.tracker.playground.status.SdkStatus
 import id.art.tracker.playground.status.SdkStatusRepository
 import kotlinx.coroutines.Dispatchers
@@ -92,9 +100,13 @@ fun PlaygroundHost() {
     LaunchedEffect(Unit) {
         while (isActive) {
             status = withContext(Dispatchers.IO) { repo.poll() }
+            PlaygroundSessions.history.observe(status?.sessionId)
             delay(1_000)
         }
     }
+
+    // Crash items are only sent after a relaunch: show the note the Crash lab left, once.
+    var crashNote by rememberSaveable { mutableStateOf(CrashNote(SharedPrefsNoteStore(context)).consume()) }
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -155,6 +167,14 @@ fun PlaygroundHost() {
         ) { inner ->
             Column(Modifier.padding(inner).fillMaxSize()) {
                 StatusStrip(status, badge, resolved?.notice)
+                crashNote?.let { note ->
+                    Card(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth()) {
+                        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.crash_note, note), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { crashNote = null }) { Text(stringResource(R.string.action_close)) }
+                        }
+                    }
+                }
                 NavHost(navController, startDestination = Route.Skenario.path, modifier = Modifier.weight(1f)) {
                     composable(Route.Skenario.path) { ComingSoon() }
                     composable(Route.Lab.path) { LabList(onOpen = { navController.navigate(Route.LabDetail.of(it)) }) }
