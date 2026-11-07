@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -191,17 +192,26 @@ private fun ComingSoon() {
 @Composable
 private fun LabList(onOpen: (String) -> Unit) {
     val context = LocalContext.current
-    val legacy = LabRegistry.entries.filter { it.section == LabSection.LEGACY }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        item { Text(stringResource(R.string.section_legacy), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp)) }
-        items(legacy) { e ->
-            OutlinedCard(
-                onClick = { e.onOpen?.invoke(context) ?: onOpen(e.id) },
-                modifier = Modifier.padding(bottom = 8.dp).fillMaxSize(),
-            ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text(stringResource(e.titleRes), style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(e.descriptionRes), style = MaterialTheme.typography.bodyMedium)
+        LabSection.values().forEach { section ->
+            val entries = LabRegistry.entries.filter { it.section == section }
+            if (entries.isEmpty()) return@forEach
+            item {
+                Text(
+                    stringResource(if (section == LabSection.LAB) R.string.section_lab else R.string.section_legacy),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+            }
+            items(entries) { e ->
+                OutlinedCard(
+                    onClick = { e.onOpen?.invoke(context) ?: onOpen(e.id) },
+                    modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(stringResource(e.titleRes), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(e.descriptionRes), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
         }

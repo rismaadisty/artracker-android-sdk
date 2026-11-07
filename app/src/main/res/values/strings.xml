@@ -72,4 +72,33 @@
     <string name="backend_confirm_title">Kirim ke server nyata?</string>
     <string name="backend_confirm_body">Event, log, dan crash dari sesi ini akan dikirim ke %1$s. Ketik KIRIM untuk melanjutkan.</string>
     <string name="backend_confirm_hint">Ketik KIRIM</string>
+    <!-- Labs -->
+    <string name="section_lab">Lab per kapabilitas</string>
+    <string name="lab_event">Event &amp; log</string>
+    <string name="lab_event_desc">track, screen manual, log 5 level, captureException, payload ekstrem.</string>
+    <string name="lab_event_section_custom">Event kustom</string>
+    <string name="lab_event_name">Nama event</string>
+    <string name="lab_event_key">Kunci</string>
+    <string name="lab_event_value">Nilai</string>
+    <string name="lab_event_add_property">Tambah properti</string>
+    <string name="lab_event_send">Kirim event</string>
+    <string name="lab_event_send_desc">ARTracker.track(nama, properti)</string>
+    <string name="lab_event_section_screen">Screen manual</string>
+    <string name="lab_event_screen_name">Nama screen</string>
+    <string name="lab_event_screen_send">Kirim screen_view manual</string>
+    <string name="lab_event_screen_desc">ARTracker.screen(nama)</string>
+    <string name="lab_event_section_logs">Log dan error</string>
+    <string name="lab_event_log">Log %1$s</string>
+    <string name="lab_event_log_desc">ARTracker.log(level, pesan)</string>
+    <string name="lab_event_capture">Capture exception</string>
+    <string name="lab_event_capture_desc">Error tertangani dengan stack trace, fingerprint, dan breadcrumb.</string>
+    <string name="lab_event_section_hostile">Payload ekstrem (data palsu)</string>
+    <string name="lab_event_hostile">Payload: %1$s</string>
+    <string name="lab_event_hostile_desc">Menguji encoder JSON dan redaktor dengan nilai yang jelas palsu.</string>
+    <string name="lab_identity">Identitas</string>
+    <string name="lab_identity_desc">identify sebagai persona dan reset (logout).</string>
+    <string name="lab_identity_section">Persona</string>
+    <string name="lab_identity_as">Identify sebagai %1$s</string>
+    <string name="lab_identity_reset">Reset (logout)</string>
+    <string name="lab_identity_reset_desc">Melupakan user dan memulai sesi baru.</string>
 </resources>

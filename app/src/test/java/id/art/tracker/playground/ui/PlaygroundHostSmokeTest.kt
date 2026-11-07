@@ -27,6 +27,7 @@ class PlaygroundHostSmokeTest {
         rule.onNodeWithText("Pengaturan").assertExists()
         rule.onNodeWithText("Lab").performClick()
         rule.mainClock.advanceTimeBy(1_000)
-        rule.onNodeWithText("Layar lama", substring = true).assertExists()
+        rule.onNodeWithText("Lab per kapabilitas").assertExists()
+        rule.onNodeWithText("Event & log").assertExists()
     }
 }

@@ -26,6 +26,8 @@ class LabEntry(
 /** Drives the Lab tab. Each lab task appends its entry here; the old demo screens live under LEGACY until Task 15. */
 object LabRegistry {
     val entries: List<LabEntry> = listOf(
+        LabEntry("event", R.string.lab_event, R.string.lab_event_desc, LabSection.LAB, content = { EventLab() }),
+        LabEntry("identity", R.string.lab_identity, R.string.lab_identity_desc, LabSection.LAB, content = { IdentityLab() }),
         LabEntry("legacy_login", R.string.legacy_login, R.string.legacy_login_desc, LabSection.LEGACY, content = { LoginScreen() }),
         LabEntry("legacy_payment", R.string.legacy_payment, R.string.legacy_payment_desc, LabSection.LEGACY, content = { PaymentScreen() }),
         LabEntry("legacy_feed", R.string.legacy_feed, R.string.legacy_feed_desc, LabSection.LEGACY, content = { FeedScreen() }),
