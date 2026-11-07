@@ -21,6 +21,7 @@ class SampleApplication : Application() {
 
         val settings = SharedPrefsSettingsStore(this).load()
         val sinkUp = LocalServersProvider.instance.startSink()
+        LocalServersProvider.instance.startTargets() // Network lab target (debug only); failure just disables that lab
         val grant = SharedPrefsBackendGrantStore(this).consume(System.currentTimeMillis())
         val resolved = Bootstrap.resolve(settings, BuildConfig.ARTRACKER_ENDPOINT, BuildConfig.ARTRACKER_KEY, grant, sinkUp)
 

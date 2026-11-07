@@ -140,4 +140,20 @@
     <string name="lab_replay_tree_hide">Sembunyikan pohon</string>
     <string name="lab_replay_tree_hide_desc">Kembali ke layar ringan.</string>
     <string name="lab_replay_rotate">Rotasi: putar perangkat untuk memaksa snapshot penuh baru.</string>
+    <string name="lab_network">Jaringan</string>
+    <string name="lab_network_desc">Panggilan HTTP lewat interceptor SDK ke server target lokal (tanpa jaringan eksternal).</string>
+    <string name="lab_network_effective">NetworkConfig berlaku: sampleRate=%1$s, hanya error=%2$b, host diabaikan=%3$s (ubah di Pengaturan, butuh restart).</string>
+    <string name="lab_network_unavailable">Server target lokal tidak aktif (hanya ada di build debug, dan port harus bebas).</string>
+    <string name="lab_network_last">Hasil terakhir: %1$s</string>
+    <string name="lab_queue">Antrean &amp; transport</string>
+    <string name="lab_queue_desc">Burst event untuk mengisi antrean persisten, pending dan lastSend langsung.</string>
+    <string name="lab_queue_live">Pending %1$d · kirim terakhir %2$s · progres burst %3$d</string>
+    <string name="lab_queue_hint">SINK menerima semuanya, jadi pending tidak menumpuk. Untuk melihat antrean tumbuh pakai profil OFFLINE di Pengaturan.</string>
+    <string name="lab_queue_burst">Burst %1$d event</string>
+    <string name="lab_queue_burst_desc">Memanggil ARTracker.track berulang di thread latar.</string>
+    <string name="lab_queue_confirm">Mengirim %1$d event sekaligus ke endpoint saat ini. Lanjutkan?</string>
+    <string name="lab_queue_stop">Hentikan burst</string>
+    <string name="lab_queue_stop_desc">Membatalkan burst yang sedang berjalan.</string>
+    <string name="lab_queue_flush">Flush</string>
+    <string name="lab_queue_flush_desc">ARTracker.flush(): minta SDK mengirim antrean sekarang.</string>
 </resources>

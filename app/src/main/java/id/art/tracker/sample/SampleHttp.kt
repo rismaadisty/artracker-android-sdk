@@ -13,7 +13,7 @@ object SampleHttp {
         .build()
 
     /** Blocking GET; call it off the main thread. Returns a short human-readable outcome. */
-    fun get(url: String): String = try {
+    fun get(url: String, client: OkHttpClient = this.client): String = try {
         client.newCall(Request.Builder().url(url).build()).execute().use { "HTTP ${it.code}" }
     } catch (e: Exception) {
         "${e.javaClass.simpleName}: ${e.message}"

@@ -5,7 +5,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import id.art.tracker.playground.labs.EventLab
 import id.art.tracker.playground.labs.IdentityLab
+import id.art.tracker.playground.labs.NetworkLab
 import id.art.tracker.playground.labs.PrivacyLab
+import id.art.tracker.playground.labs.QueueLab
 import id.art.tracker.playground.labs.ReplayLab
 import org.junit.Rule
 import org.junit.Test
@@ -46,5 +48,19 @@ class LabsRenderTest {
         rule.setContent { PlaygroundTheme { ReplayLab() } }
         rule.onNodeWithText("Mulai replay").assertExists()
         rule.onNodeWithText("Pohon lebar (> 2000 node)").assertExists()
+    }
+
+    @Test
+    fun networkLabExplainsWhenTheTargetServerIsNotRunning() {
+        rule.setContent { PlaygroundTheme { NetworkLab() } }
+        rule.onNodeWithText("Server target lokal", substring = true).assertExists()
+    }
+
+    @Test
+    fun queueLabRendersBurstsAndFlush() {
+        rule.mainClock.autoAdvance = false // the lab polls the status forever
+        rule.setContent { PlaygroundTheme { QueueLab() } }
+        rule.onNodeWithText("Burst 5000 event").assertExists()
+        rule.onNodeWithText("Flush").assertExists()
     }
 }
