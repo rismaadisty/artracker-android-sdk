@@ -57,7 +57,6 @@ import id.art.tracker.playground.boot.EndpointBadge
 import id.art.tracker.playground.boot.SharedPrefsBackendGrantStore
 import id.art.tracker.playground.inspector.ItemSource
 import id.art.tracker.playground.labs.LabRegistry
-import id.art.tracker.playground.labs.LabSection
 import id.art.tracker.playground.settings.EndpointProfile
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 import id.art.tracker.playground.labs.CrashNote
@@ -251,25 +250,17 @@ private fun ComingSoon() {
 private fun LabList(onOpen: (String) -> Unit) {
     val context = LocalContext.current
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        LabSection.values().forEach { section ->
-            val entries = LabRegistry.entries.filter { it.section == section }
-            if (entries.isEmpty()) return@forEach
-            item {
-                Text(
-                    stringResource(if (section == LabSection.LAB) R.string.section_lab else R.string.section_legacy),
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                )
-            }
-            items(entries) { e ->
-                OutlinedCard(
-                    onClick = { e.onOpen?.invoke(context) ?: onOpen(e.id) },
-                    modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth(),
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(stringResource(e.titleRes), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(e.descriptionRes), style = MaterialTheme.typography.bodyMedium)
-                    }
+        item {
+            Text(stringResource(R.string.section_lab), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp))
+        }
+        items(LabRegistry.entries) { e ->
+            OutlinedCard(
+                onClick = { e.onOpen?.invoke(context) ?: onOpen(e.id) },
+                modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(stringResource(e.titleRes), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(e.descriptionRes), style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }

@@ -1,5 +1,15 @@
 # Manual end-to-end test: sample app against a local backend
 
+> **Update (playground):** the sample app now starts on a loopback **sink** (profile `SINK`), not on the endpoint in
+> `local.properties`. To follow this checklist against a real backend, use Settings: profile `LOCAL` (local backend, uses the
+> key from `local.properties`) or `BACKEND` (remote; needs the typed confirmation and lasts one process start).
+> Most of sections 3, 6 and 7 are now covered by automated tests: see `app/src/androidTest` (`IngestFlowTest`,
+> `ScenarioFlowTest`, `TouchFlowTest`, `SafetyTest`), and the Inspector/Replay-lab export for `tools/replay-viewer`.
+> Mapping: section 3 -> Event/Network labs and scenario `ecommerce_checkout`; 4 -> Crash lab (use `OFFLINE`); 5 -> Crash lab
+> ANR; 6 -> Privacy lab, Replay lab and the chunk export; 7 -> Identity lab (opt-out switch) and Replay lab.
+> **Always manual:** the 401 kill-switch (it persists for an hour and would poison automated runs), the offline crash then
+> relaunch, and playback of replay chunks in the dashboard.
+
 Status: NOT yet run. This checklist is Task 24 Step 3; record the result in the PR description.
 
 Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artracker` backend repo next to this one.
@@ -12,12 +22,13 @@ Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artr
 
 ## 2. Configure and install the sample
 
-1. Add to the ROOT `local.properties` of this repo (never commit it):
+1. Add to the ROOT `local.properties` of this repo (never commit it). They are only used by profiles `LOCAL` and `BACKEND`:
    ```
    artracker.endpoint=http://10.0.2.2:<port>
    artracker.key=art_live_...
    ```
 2. `./gradlew :app:installDebug` on the emulator. (Cleartext to `10.0.2.2` and `localhost` is allowed in debug builds only.)
+3. Open *Pengaturan*, choose profile `LOCAL`, press *Terapkan & restart*.
 
 ## 3. Events, logs and screens
 

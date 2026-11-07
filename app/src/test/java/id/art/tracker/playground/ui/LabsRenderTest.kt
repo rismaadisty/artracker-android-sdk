@@ -1,7 +1,12 @@
 package id.art.tracker.playground.ui
 
 import android.app.Application
+import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.test.core.app.ApplicationProvider
+import id.art.tracker.playground.status.PlaygroundControls
 import androidx.compose.ui.test.onNodeWithText
 import id.art.tracker.playground.labs.CrashLab
 import id.art.tracker.playground.labs.EventLab
@@ -79,5 +84,21 @@ class LabsRenderTest {
         rule.mainClock.autoAdvance = false // the lab polls the status forever
         rule.setContent { PlaygroundTheme { SessionLab() } }
         rule.onNodeWithText("Reset (logout)").assertExists()
+    }
+
+    @Test
+    fun identityLabOptOutNeedsConfirmationAndCanBeUndone() {
+        val controls = PlaygroundControls.get(ApplicationProvider.getApplicationContext<Application>())
+        controls.setOptOut(false)
+        rule.setContent { PlaygroundTheme { IdentityLab() } }
+        rule.onNode(isToggleable()).performScrollTo().performClick()
+        rule.onNodeWithText("Lanjut").assertExists()
+        rule.onNodeWithText("Batal").performClick()
+        org.junit.Assert.assertFalse("cancelling must not opt out", controls.optedOut)
+        rule.onNode(isToggleable()).performScrollTo().performClick()
+        rule.onNodeWithText("Lanjut").performClick()
+        org.junit.Assert.assertTrue(controls.optedOut)
+        rule.onNode(isToggleable()).performScrollTo().performClick() // opting back in needs no confirmation
+        org.junit.Assert.assertFalse(controls.optedOut)
     }
 }

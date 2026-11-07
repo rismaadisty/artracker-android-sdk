@@ -24,15 +24,6 @@
     <string name="banner_remote">PRODUKSI — event dikirim ke server nyata: %1$s</string>
 
     <!-- Lab list -->
-    <string name="section_legacy">Layar lama (akan digantikan lab)</string>
-    <string name="legacy_login">Login</string>
-    <string name="legacy_login_desc">Email dan password: uji masking input.</string>
-    <string name="legacy_payment">Payment</string>
-    <string name="legacy_payment_desc">Kartu, CVV dan total yang di-mask.</string>
-    <string name="legacy_feed">Feed</string>
-    <string name="legacy_feed_desc">500 baris untuk uji scroll dan diff replay.</string>
-    <string name="legacy_diagnostics">Diagnostics</string>
-    <string name="legacy_diagnostics_desc">Tombol fitur SDK dan panel diagnostics.</string>
     <string name="legacy_xml">Legacy XML</string>
     <string name="legacy_xml_desc">Activity + Fragment XML: uji ViewWalker dan tag mask.</string>
     <!-- Inspector -->
@@ -102,6 +93,10 @@
     <string name="lab_identity_as">Identify sebagai %1$s</string>
     <string name="lab_identity_reset">Reset (logout)</string>
     <string name="lab_identity_reset_desc">Melupakan user dan memulai sesi baru.</string>
+    <string name="lab_identity_optout_section">Opt-out</string>
+    <string name="lab_identity_optout">Opt-out (berhenti merekam dan mengirim)</string>
+    <string name="lab_identity_optout_desc">Pilihan ini tersimpan lintas peluncuran. Mengaktifkannya menghapus semua yang masih antre.</string>
+    <string name="lab_identity_optout_confirm">Semua item yang masih antre akan dihapus dan tidak dikirim, juga setelah opt-in kembali. Lanjutkan?</string>
     <string name="lab_privacy">Privasi &amp; masking</string>
     <string name="lab_privacy_desc">Semua kasus masking dengan ekspektasi dan keterbatasan terdokumentasi, plus uji redaksi atribut.</string>
     <string name="lab_privacy_effective">Pengaturan berlaku: maskAllInputs=%1$b, maskAllText=%2$b (butuh restart untuk mengubah).</string>

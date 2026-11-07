@@ -6,40 +6,29 @@ import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import id.art.tracker.R
 import id.art.tracker.sample.legacy.LegacyActivity
-import id.art.tracker.sample.screens.DiagnosticsScreen
-import id.art.tracker.sample.screens.FeedScreen
-import id.art.tracker.sample.screens.LoginScreen
-import id.art.tracker.sample.screens.PaymentScreen
-
-enum class LabSection { LAB, LEGACY }
 
 /** One entry of the Lab tab. [onOpen] (instead of [content]) is for entries that start an Activity. */
 class LabEntry(
     val id: String,
     @StringRes val titleRes: Int,
     @StringRes val descriptionRes: Int,
-    val section: LabSection,
     val onOpen: ((Context) -> Unit)? = null,
     val content: @Composable () -> Unit = {},
 )
 
-/** Drives the Lab tab. Each lab task appends its entry here; the old demo screens live under LEGACY until Task 15. */
+/** Drives the Lab tab. */
 object LabRegistry {
     val entries: List<LabEntry> = listOf(
-        LabEntry("event", R.string.lab_event, R.string.lab_event_desc, LabSection.LAB, content = { EventLab() }),
-        LabEntry("privacy", R.string.lab_privacy, R.string.lab_privacy_desc, LabSection.LAB, content = { PrivacyLab() }),
-        LabEntry("replay", R.string.lab_replay, R.string.lab_replay_desc, LabSection.LAB, content = { ReplayLab() }),
-        LabEntry("network", R.string.lab_network, R.string.lab_network_desc, LabSection.LAB, content = { NetworkLab() }),
-        LabEntry("queue", R.string.lab_queue, R.string.lab_queue_desc, LabSection.LAB, content = { QueueLab() }),
-        LabEntry("crash", R.string.lab_crash, R.string.lab_crash_desc, LabSection.LAB, content = { CrashLab() }),
-        LabEntry("session", R.string.lab_session, R.string.lab_session_desc, LabSection.LAB, content = { SessionLab() }),
-        LabEntry("identity", R.string.lab_identity, R.string.lab_identity_desc, LabSection.LAB, content = { IdentityLab() }),
-        LabEntry("legacy_login", R.string.legacy_login, R.string.legacy_login_desc, LabSection.LEGACY, content = { LoginScreen() }),
-        LabEntry("legacy_payment", R.string.legacy_payment, R.string.legacy_payment_desc, LabSection.LEGACY, content = { PaymentScreen() }),
-        LabEntry("legacy_feed", R.string.legacy_feed, R.string.legacy_feed_desc, LabSection.LEGACY, content = { FeedScreen() }),
-        LabEntry("legacy_diagnostics", R.string.legacy_diagnostics, R.string.legacy_diagnostics_desc, LabSection.LEGACY, content = { DiagnosticsScreen() }),
+        LabEntry("event", R.string.lab_event, R.string.lab_event_desc, content = { EventLab() }),
+        LabEntry("privacy", R.string.lab_privacy, R.string.lab_privacy_desc, content = { PrivacyLab() }),
+        LabEntry("replay", R.string.lab_replay, R.string.lab_replay_desc, content = { ReplayLab() }),
+        LabEntry("network", R.string.lab_network, R.string.lab_network_desc, content = { NetworkLab() }),
+        LabEntry("queue", R.string.lab_queue, R.string.lab_queue_desc, content = { QueueLab() }),
+        LabEntry("crash", R.string.lab_crash, R.string.lab_crash_desc, content = { CrashLab() }),
+        LabEntry("session", R.string.lab_session, R.string.lab_session_desc, content = { SessionLab() }),
+        LabEntry("identity", R.string.lab_identity, R.string.lab_identity_desc, content = { IdentityLab() }),
         LabEntry(
-            "legacy_xml", R.string.legacy_xml, R.string.legacy_xml_desc, LabSection.LEGACY,
+            "legacy_xml", R.string.legacy_xml, R.string.legacy_xml_desc,
             onOpen = { it.startActivity(Intent(it, LegacyActivity::class.java)) },
         ),
     )
