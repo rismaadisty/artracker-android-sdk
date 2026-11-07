@@ -11,6 +11,7 @@ import id.art.tracker.playground.boot.SharedPrefsRunMarkerStore
 import id.art.tracker.playground.isMainProcess
 import id.art.tracker.playground.inspector.Inspector
 import id.art.tracker.playground.local.LocalServersProvider
+import id.art.tracker.playground.scenario.ActivityHolder
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 
 class SampleApplication : Application() {
@@ -19,6 +20,7 @@ class SampleApplication : Application() {
         // The SDK does not support multi-process apps: the `:restart` process must never initialise it.
         if (!isMainProcess(ProcessInfo.currentProcessName(this), packageName)) return
 
+        registerActivityLifecycleCallbacks(ActivityHolder)
         val settings = SharedPrefsSettingsStore(this).load()
         val sinkUp = LocalServersProvider.instance.startSink()
         LocalServersProvider.instance.startTargets() // Network lab target (debug only); failure just disables that lab
