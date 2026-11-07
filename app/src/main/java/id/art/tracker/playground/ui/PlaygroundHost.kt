@@ -43,9 +43,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import id.art.tracker.ARTracker
+import id.art.tracker.BuildConfig
 import id.art.tracker.R
+import id.art.tracker.playground.ProcessRestarter
 import id.art.tracker.playground.boot.BootState
 import id.art.tracker.playground.boot.EndpointBadge
+import id.art.tracker.playground.boot.SharedPrefsBackendGrantStore
+import id.art.tracker.playground.inspector.ItemSource
 import id.art.tracker.playground.labs.LabRegistry
 import id.art.tracker.playground.labs.LabSection
 import id.art.tracker.playground.settings.EndpointProfile
@@ -154,8 +158,22 @@ fun PlaygroundHost() {
                 NavHost(navController, startDestination = Route.Skenario.path, modifier = Modifier.weight(1f)) {
                     composable(Route.Skenario.path) { ComingSoon() }
                     composable(Route.Lab.path) { LabList(onOpen = { navController.navigate(Route.LabDetail.of(it)) }) }
-                    composable(Route.Inspector.path) { ComingSoon() }
-                    composable(Route.Pengaturan.path) { ComingSoon() }
+                    composable(Route.Inspector.path) {
+                        InspectorScreen(
+                            mode = if (badge.profile == EndpointProfile.SINK) ItemSource.SENT_PAYLOAD else ItemSource.METADATA_ONLY,
+                        )
+                    }
+                    composable(Route.Pengaturan.path) {
+                        val settingsStore = remember { SharedPrefsSettingsStore(context) }
+                        SettingsScreen(
+                            initial = remember { settingsStore.load() },
+                            store = settingsStore,
+                            grants = remember { SharedPrefsBackendGrantStore(context) },
+                            buildEndpoint = BuildConfig.ARTRACKER_ENDPOINT,
+                            realKeyPresent = BuildConfig.ARTRACKER_KEY.isNotBlank(),
+                            onRestart = { ProcessRestarter.restart(context) },
+                        )
+                    }
                     composable(Route.LabDetail.path) { backStack ->
                         LabRegistry.byId(backStack.arguments?.getString(Route.LabDetail.ARG))?.content?.invoke()
                     }

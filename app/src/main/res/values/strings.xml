@@ -34,4 +34,42 @@
     <string name="legacy_diagnostics_desc">Tombol fitur SDK dan panel diagnostics.</string>
     <string name="legacy_xml">Legacy XML</string>
     <string name="legacy_xml_desc">Activity + Fragment XML: uji ViewWalker dan tag mask.</string>
+    <!-- Inspector -->
+    <string name="inspector_banner_sent">Menampilkan payload yang dikirim SDK, setelah redaksi (sama dengan yang diterima backend).</string>
+    <string name="inspector_banner_metadata">Mode metadata: hanya jenis nilai yang dicatat (tanpa nilai, pesan, atau user id).</string>
+    <string name="inspector_value_hidden">nilai tidak ditampilkan</string>
+    <string name="inspector_search">Cari</string>
+    <string name="inspector_clear">Hapus</string>
+    <string name="inspector_refresh">Segarkan</string>
+    <string name="inspector_total">Total terlihat: %1$d</string>
+    <string name="inspector_empty">Belum ada item. Jalankan sebuah aksi lalu tekan Segarkan.</string>
+    <string name="inspector_footnote">Item muncul setelah SDK mengirimnya (flush). Item crash baru muncul setelah relaunch.</string>
+
+    <!-- Settings -->
+    <string name="settings_presets">Preset</string>
+    <string name="settings_destination">Tujuan event</string>
+    <string name="profile_sink">SINK — aman (lokal)</string>
+    <string name="profile_offline">OFFLINE — lubang hitam (antrean menumpuk)</string>
+    <string name="profile_local">LOCAL — backend di mesin dev</string>
+    <string name="profile_backend">BACKEND — produksi (berisiko)</string>
+    <string name="settings_local_endpoint">Endpoint LOCAL</string>
+    <string name="settings_environment">Environment</string>
+    <string name="settings_replay_enabled">Replay aktif</string>
+    <string name="settings_replay_rate">Replay sampleRate (0..1)</string>
+    <string name="settings_replay_fps">Replay fps</string>
+    <string name="settings_mask_inputs">Mask semua input</string>
+    <string name="settings_mask_text">Mask semua teks</string>
+    <string name="settings_network_rate">Network sampleRate (0..1)</string>
+    <string name="settings_only_errors">Rekam hanya error HTTP</string>
+    <string name="settings_ignore_hosts">Host diabaikan (pisah koma)</string>
+    <string name="settings_flush_interval">flushIntervalMs</string>
+    <string name="settings_session_timeout">sessionTimeoutMs</string>
+    <string name="settings_invalid_number">Angka tidak valid</string>
+    <string name="settings_key_present">Kunci API: terpasang</string>
+    <string name="settings_key_missing">Kunci API: belum diatur</string>
+    <string name="settings_backend_note">Backend aktif hanya untuk satu kali start proses ini; peluncuran berikutnya kembali ke SINK.</string>
+    <string name="settings_apply">Terapkan &amp; restart</string>
+    <string name="backend_confirm_title">Kirim ke server nyata?</string>
+    <string name="backend_confirm_body">Event, log, dan crash dari sesi ini akan dikirim ke %1$s. Ketik KIRIM untuk melanjutkan.</string>
+    <string name="backend_confirm_hint">Ketik KIRIM</string>
 </resources>
