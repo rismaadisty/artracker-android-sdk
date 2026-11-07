@@ -9,6 +9,7 @@ import id.art.tracker.playground.boot.QueueWiper
 import id.art.tracker.playground.boot.SharedPrefsBackendGrantStore
 import id.art.tracker.playground.boot.SharedPrefsRunMarkerStore
 import id.art.tracker.playground.isMainProcess
+import id.art.tracker.playground.inspector.Inspector
 import id.art.tracker.playground.local.LocalServersProvider
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 
@@ -31,6 +32,8 @@ class SampleApplication : Application() {
         marker.lastRunRemote = resolved.badge.remote
 
         BootState.resolved = resolved
-        SampleApp.initTracker(this, resolved.endpoint, resolved.apiKey, BuildConfig.DEBUG, settings, beforeSend = null)
+        // Keyed on the profile actually resolved (a refused BACKEND lands on SINK; a missing sink lands on OFFLINE).
+        val beforeSend = Inspector.beforeSendFor(resolved.badge.profile)
+        SampleApp.initTracker(this, resolved.endpoint, resolved.apiKey, BuildConfig.DEBUG, settings, beforeSend)
     }
 }
