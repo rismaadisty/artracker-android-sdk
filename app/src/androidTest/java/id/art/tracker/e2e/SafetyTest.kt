@@ -54,6 +54,6 @@ class SafetyTest {
     @Test
     fun theTestApplicationNeverUsesARemoteEndpoint() {
         assertEquals(EndpointClass.SAFE_LOCAL, EndpointGuard.classify(TestPlaygroundApplication.ingest.url))
-        assertEquals(EndpointClass.SAFE_LOCAL, EndpointGuard.classify(TestPlaygroundApplication.targets.baseUrl))
+        assertEquals(EndpointClass.SAFE_LOCAL, EndpointGuard.classify(TestPlaygroundApplication.targetsUrl))
     }
 }

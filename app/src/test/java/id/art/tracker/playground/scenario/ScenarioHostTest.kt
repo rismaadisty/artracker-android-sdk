@@ -77,4 +77,38 @@ class ScenarioHostTest {
         waitUntil("quick done") { h.state is RunState.Done }
         assertEquals("quick", h.active)
     }
+
+    @Test
+    fun aSupersededRunsLateCancelDoesNotOverwriteTheNewRunsState() {
+        val h = host()
+        h.start(waiting)
+        waitUntil("the user gate") { h.awaiting != null }
+        h.start(Scenario("quick", "Q", "d", setOf(Capability.EVENTS), listOf(Step("a") { note("1") })))
+        waitUntil("quick done") { h.state is RunState.Done }
+        Thread.sleep(150) // the first run's Cancelled callback arrives in this window
+        assertTrue("state was ${h.state}", h.state is RunState.Done)
+    }
+
+    @Test
+    fun theOutcomeIsReportedOnceEvenAcrossRecompositions() {
+        val h = host()
+        h.start(Scenario("quick", "Q", "d", setOf(Capability.EVENTS), listOf(Step("a") { note("1") })))
+        waitUntil("done") { h.state is RunState.Done }
+        assertTrue(h.takeOutcome() is RunState.Done)
+        assertNull(h.takeOutcome())
+        h.start(Scenario("again", "A", "d", setOf(Capability.EVENTS), listOf(Step("a") { note("1") })))
+        waitUntil("done again") { h.state is RunState.Done }
+        assertTrue("a new run reports its own outcome", h.takeOutcome() is RunState.Done)
+    }
+
+    @Test
+    fun cancelledAndRunningRunsReportNoOutcome() {
+        val h = host()
+        h.start(waiting)
+        waitUntil("the user gate") { h.awaiting != null }
+        assertNull(h.takeOutcome())
+        h.stop()
+        waitUntil("cancelled") { h.state == RunState.Cancelled }
+        assertNull(h.takeOutcome())
+    }
 }

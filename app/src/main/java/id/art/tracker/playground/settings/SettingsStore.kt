@@ -2,16 +2,23 @@ package id.art.tracker.playground.settings
 
 import android.content.Context
 
+/** [discarded] is true when something WAS saved but was corrupt or invalid, so [settings] is DEFAULT instead. */
+data class LoadResult(val settings: PlaygroundSettings, val discarded: Boolean)
+
 interface SettingsStore {
     /** Never throws and never returns invalid settings: corrupt or invalid saved state falls back to DEFAULT. */
     fun load(): PlaygroundSettings
+
+    fun loadResult(): LoadResult = LoadResult(load(), discarded = false)
     fun save(settings: PlaygroundSettings)
 }
 
 class SharedPrefsSettingsStore(context: Context) : SettingsStore {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    override fun load(): PlaygroundSettings {
+    override fun load(): PlaygroundSettings = loadResult().settings
+
+    override fun loadResult(): LoadResult {
         val d = PlaygroundSettings.DEFAULT
         val loaded = runCatching {
             PlaygroundSettings(
@@ -30,7 +37,9 @@ class SharedPrefsSettingsStore(context: Context) : SettingsStore {
                 sessionTimeoutMs = prefs.getLong("sessionTimeoutMs", d.sessionTimeoutMs),
             )
         }.getOrNull()
-        return if (loaded != null && loaded.validate().isEmpty()) loaded else d
+        if (loaded != null && loaded.validate().isEmpty()) return LoadResult(loaded, discarded = false)
+        // Nothing saved yet is not a discard; saved-but-unusable state is, and the caller should say so.
+        return LoadResult(d, discarded = prefs.all.isNotEmpty())
     }
 
     /** `commit()` (synchronous): the caller restarts the process right after saving. */

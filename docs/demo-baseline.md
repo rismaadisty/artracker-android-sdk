@@ -31,7 +31,7 @@ Command: `./gradlew :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest :app
 | Module | Tests | Skipped | Failures | Errors |
 | --- | --- | --- | --- | --- |
 | `:artracker-sdk` | 654 (unchanged from the baseline above) | 0 | 0 | 0 |
-| `:app` | 238 | 0 | 0 | 0 |
+| `:app` | 254 | 0 | 0 | 0 |
 
 `BUILD SUCCESSFUL`. Safety checks: `git diff feature/android-sdk -- artracker-sdk` is empty; `releaseRuntimeClasspath` contains
 no `mockwebserver`; no app source or doc mentions an external HTTP echo service (the one match is the test that guards it);

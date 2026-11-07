@@ -21,11 +21,15 @@ class SampleApplication : Application() {
         if (!isMainProcess(ProcessInfo.currentProcessName(this), packageName)) return
 
         registerActivityLifecycleCallbacks(ActivityHolder)
-        val settings = SharedPrefsSettingsStore(this).load()
+        val loaded = SharedPrefsSettingsStore(this).loadResult()
+        val settings = loaded.settings
         val sinkUp = LocalServersProvider.instance.startSink()
         LocalServersProvider.instance.startTargets() // Network lab target (debug only); failure just disables that lab
         val grant = SharedPrefsBackendGrantStore(this).consume(System.currentTimeMillis())
-        val resolved = Bootstrap.resolve(settings, BuildConfig.ARTRACKER_ENDPOINT, BuildConfig.ARTRACKER_KEY, grant, sinkUp)
+        val resolved = Bootstrap.withDiscardedNotice(
+            Bootstrap.resolve(settings, BuildConfig.ARTRACKER_ENDPOINT, BuildConfig.ARTRACKER_KEY, grant, sinkUp),
+            loaded.discarded,
+        )
 
         // The SDK sends leftovers right after init: nothing queued locally may be there when a remote endpoint starts.
         val marker = SharedPrefsRunMarkerStore(this)

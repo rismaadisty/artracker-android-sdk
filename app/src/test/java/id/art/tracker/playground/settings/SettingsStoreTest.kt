@@ -65,4 +65,21 @@ class SettingsStoreTest {
         store.save(PlaygroundSettings.DEFAULT.copy(flushIntervalMs = 5))
         assertEquals(PlaygroundSettings.DEFAULT, SharedPrefsSettingsStore(context).load())
     }
+
+    @Test
+    fun loadResultSaysWhenSavedSettingsWereDiscarded() {
+        val store = SharedPrefsSettingsStore(context)
+        assertEquals(false, store.loadResult().discarded) // nothing saved yet is not "discarded"
+        store.save(PlaygroundSettings.DEFAULT.copy(environment = "qa"))
+        assertEquals(false, store.loadResult().discarded)
+        assertEquals("qa", store.loadResult().settings.environment)
+
+        prefs.edit().putString("replaySampleRate", "not-a-number").commit()
+        assertEquals(true, store.loadResult().discarded)
+        assertEquals(PlaygroundSettings.DEFAULT, store.loadResult().settings)
+
+        prefs.edit().clear().commit()
+        store.save(PlaygroundSettings.DEFAULT.copy(flushIntervalMs = 5))
+        assertEquals(true, store.loadResult().discarded)
+    }
 }

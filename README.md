@@ -8,7 +8,7 @@ Version `0.1.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 >
 > | Area | State |
 > | --- | --- |
-> | Unit tests (JVM + Robolectric) | **Verified**: 654 SDK tests (60 classes) + 238 sample-app tests, 0 failures (see "Tests" below) |
+> | Unit tests (JVM + Robolectric) | **Verified**: 654 SDK tests (60 classes) + 254 sample-app tests, 0 failures (see "Tests" below) |
 > | Sample app builds (`:app:assembleDebug`, R8-minified `:app:assembleRelease`) | **Verified** |
 > | Run on a device or emulator | **NOT run.** No emulator was available. Nothing here has executed on real Android |
 > | End to end against the backend | **NOT run.** Checklist: [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md) |
@@ -387,7 +387,7 @@ dashboard (see [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md)).
 ```
 
 Last full run (2026-11-07): `:artracker-sdk:testDebugUnitTest` 654 tests in 60 classes, 0 failures, 0 skipped
-(includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 238 tests, 0 failures; `:app:assembleDebug`
+(includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 254 tests, 0 failures; `:app:assembleDebug`
 and `:app:assembleRelease` succeed. The instrumented suite (`:app:connectedDebugAndroidTest`) has not been run.
 
 The sample-app tests do not depend on `local.properties`: they use a test `Application` that never initialises the SDK,

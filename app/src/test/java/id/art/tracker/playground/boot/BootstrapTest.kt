@@ -119,4 +119,18 @@ class BootstrapTest {
         assertFalse(Bootstrap.shouldWipe(resolvedRemote = false, lastRunRemote = false))
         assertFalse(Bootstrap.shouldWipe(resolvedRemote = false, lastRunRemote = true))
     }
+
+    @Test
+    fun discardedSettingsAddANoticeAndKeepAnyExistingOne() {
+        val plain = Bootstrap.resolve(settings(EndpointProfile.SINK), remote, real, false, true)
+        assertNull(plain.notice)
+        assertEquals(plain, Bootstrap.withDiscardedNotice(plain, discarded = false))
+        val withNotice = Bootstrap.withDiscardedNotice(plain, discarded = true)
+        assertTrue(withNotice.notice!!.contains("Pengaturan tersimpan tidak valid"))
+        assertEquals(plain.endpoint, withNotice.endpoint)
+
+        val refused = Bootstrap.resolve(settings(EndpointProfile.BACKEND), remote, real, grantConsumed = false, sinkAvailable = true)
+        val both = Bootstrap.withDiscardedNotice(refused, discarded = true).notice!!
+        assertTrue(both.contains("Backend tidak diaktifkan") && both.contains("Pengaturan tersimpan tidak valid"))
+    }
 }

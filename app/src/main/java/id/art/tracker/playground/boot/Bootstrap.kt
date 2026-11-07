@@ -58,6 +58,14 @@ object Bootstrap {
         }
     }
 
+    /** Adds a visible notice when the saved settings were unusable and defaults are in effect. */
+    fun withDiscardedNotice(resolved: Resolved, discarded: Boolean): Resolved =
+        if (!discarded) {
+            resolved
+        } else {
+            resolved.copy(notice = listOfNotNull(resolved.notice, "Pengaturan tersimpan tidak valid; memakai pengaturan bawaan").joinToString("; "))
+        }
+
     /** The queue is wiped before `init` only when this run moves from a non-remote to a remote endpoint. */
     fun shouldWipe(resolvedRemote: Boolean, lastRunRemote: Boolean): Boolean = resolvedRemote && !lastRunRemote
 

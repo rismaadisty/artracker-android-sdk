@@ -1,7 +1,7 @@
 package id.art.tracker
 
 import android.app.Application
-import id.art.tracker.playground.local.HttpTargetServer
+import id.art.tracker.playground.local.LocalServersProvider
 import id.art.tracker.playground.scenario.ActivityHolder
 import id.art.tracker.playground.settings.EndpointGuard
 import id.art.tracker.playground.settings.PlaygroundSettings
@@ -17,7 +17,8 @@ class TestPlaygroundApplication : Application() {
         super.onCreate()
         registerActivityLifecycleCallbacks(ActivityHolder)
         ingest = MockIngest().also { it.start() }
-        targets = HttpTargetServer(requestedPort = 0).also { check(it.start()) { "target server could not start" } }
+        // The provider's server, because the scenarios' HTTP step reads LocalServersProvider.instance.targetBaseUrl.
+        check(LocalServersProvider.instance.startTargets()) { "target server could not start (port busy?)" }
         SampleApp.initTracker(
             this, ingest.url, EndpointGuard.DUMMY_KEY, debug = true,
             settings = PlaygroundSettings.DEFAULT.copy(flushIntervalMs = 1_000), beforeSend = null,
@@ -26,6 +27,6 @@ class TestPlaygroundApplication : Application() {
 
     companion object {
         lateinit var ingest: MockIngest
-        lateinit var targets: HttpTargetServer
+        val targetsUrl: String get() = checkNotNull(LocalServersProvider.instance.targetBaseUrl) { "target server not started" }
     }
 }

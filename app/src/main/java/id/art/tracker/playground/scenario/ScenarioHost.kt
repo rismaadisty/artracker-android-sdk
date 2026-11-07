@@ -26,12 +26,25 @@ class ScenarioHost(
 
     private var job: Job? = null
     private var gate: CompletableDeferred<Unit>? = null
+    private var runId = 0
+    private var reported = false
 
     fun start(scenario: Scenario) {
         stop()
+        // States from a superseded run (its late Cancelled) must not overwrite this run's state.
+        val id = ++runId
+        reported = false
         active = scenario.id
         state = RunState.Idle
-        job = scope.launch { runner.run(scenario, contextFor(scenario, ::awaitUser)) { state = it } }
+        job = scope.launch { runner.run(scenario, contextFor(scenario, ::awaitUser)) { if (id == runId) state = it } }
+    }
+
+    /** The final state (Done or Failed) once per run, then null: the screen shows it as a snackbar and goes back. */
+    fun takeOutcome(): RunState? {
+        val s = state
+        if (reported || (s !is RunState.Done && s !is RunState.Failed)) return null
+        reported = true
+        return s
     }
 
     fun stop() {

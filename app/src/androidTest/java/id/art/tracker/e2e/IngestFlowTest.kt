@@ -19,7 +19,6 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class IngestFlowTest {
     private val ingest get() = TestPlaygroundApplication.ingest
-    private val targets get() = TestPlaygroundApplication.targets
 
     @Before
     fun clean() = ingest.clear()
@@ -98,7 +97,7 @@ class IngestFlowTest {
     @Test
     fun callsToTheIngestEndpointAreNotRecordedButOtherLocalCallsAre() {
         SampleHttp.get(ingest.url + "/anything") // same host and port as the SDK endpoint: must be skipped
-        SampleHttp.get(targets.baseUrl + "/status/404") // different port: must be recorded
+        SampleHttp.get(TestPlaygroundApplication.targetsUrl + "/status/404") // different port: must be recorded
         ARTracker.flush()
         val seen = ingest.awaitUntil(10_000) { rs ->
             rs.items().any { it.optString("name") == "http_request" && it.optJSONObject("attributes")?.optString("url").orEmpty().contains("/status/404") }

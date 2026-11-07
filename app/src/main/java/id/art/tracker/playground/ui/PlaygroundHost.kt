@@ -32,7 +32,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import android.content.ContextWrapper
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,8 +65,8 @@ import id.art.tracker.playground.settings.EndpointProfile
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 import id.art.tracker.playground.labs.CrashNote
 import id.art.tracker.playground.scenario.ActivityHolder
-import id.art.tracker.playground.scenario.AppScenarioContext
-import id.art.tracker.playground.scenario.ScenarioHost
+import id.art.tracker.playground.scenario.ScenarioOutcome
+import id.art.tracker.playground.scenario.ScenarioViewModel
 import id.art.tracker.playground.scenario.shop.Cart
 import id.art.tracker.playground.scenario.shop.Checkout
 import id.art.tracker.playground.scenario.shop.OnboardingScreen
@@ -132,21 +136,26 @@ fun PlaygroundHost() {
 
     val controls = PlaygroundControls.get(context)
     val replayFps = remember { SharedPrefsSettingsStore(context).load().replayFps }
-    val scenarioHost = remember {
-        ScenarioHost(
-            scope = scope,
-            contextFor = { scenario, gate ->
-                AppScenarioContext(
-                    proves = scenario.proves,
-                    navigateTo = { navController.navigate(it) },
-                    activity = { ActivityHolder.resumed },
-                    replayOn = { controls.replayOn },
-                    replayFps = { replayFps },
-                    userGate = gate,
-                    notes = { feedback.show(it) },
-                )
-            },
-        )
+    // The ViewModel survives a rotation, so a running scenario (and its Lanjut gate) is not lost.
+    val owner = remember(context) { generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<ViewModelStoreOwner>().first() }
+    val scenarioVm = remember(owner) { ViewModelProvider(owner, ViewModelProvider.NewInstanceFactory())[ScenarioViewModel::class.java] }
+    val scenarioHost = scenarioVm.host
+    DisposableEffect(navController, controls, replayFps, feedback) {
+        scenarioVm.bindings.navigate = { navController.navigate(it) }
+        scenarioVm.bindings.replayOn = { controls.replayOn }
+        scenarioVm.bindings.replayFps = { replayFps }
+        scenarioVm.bindings.note = { feedback.show(it) }
+        onDispose { scenarioVm.bindings.reset() }
+    }
+    // A run navigates to shop screens, where its result would be invisible: report it and come back to Skenario.
+    LaunchedEffect(scenarioHost.state) {
+        scenarioHost.takeOutcome()?.let { outcome ->
+            ScenarioOutcome.message(outcome)?.let(feedback::show)
+            navController.navigate(Route.Skenario.path) {
+                popUpTo(Route.Skenario.path) { inclusive = false }
+                launchSingleTop = true
+            }
+        }
     }
 
     val resolved = BootState.resolved
