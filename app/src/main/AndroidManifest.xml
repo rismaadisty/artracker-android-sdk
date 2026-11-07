@@ -28,6 +28,13 @@
             android:exported="false"
             android:label="Legacy XML"
             android:theme="@style/Theme.Artrackerandroid.Legacy" />
+        <!-- Own process on purpose: it kills the main process and relaunches the app. SampleApplication skips the SDK here. -->
+        <activity
+            android:name=".playground.RestartActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:process=":restart"
+            android:theme="@android:style/Theme.NoDisplay" />
     </application>
 
 </manifest>
