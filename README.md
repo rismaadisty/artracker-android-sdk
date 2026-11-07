@@ -8,13 +8,14 @@ Version `0.1.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 >
 > | Area | State |
 > | --- | --- |
-> | Unit tests (JVM + Robolectric) | **Verified**: 654 SDK tests (60 classes) + 5 sample-app tests, 0 failures (see "Tests" below) |
+> | Unit tests (JVM + Robolectric) | **Verified**: 654 SDK tests (60 classes) + 254 sample-app tests, 0 failures (see "Tests" below) |
 > | Sample app builds (`:app:assembleDebug`, R8-minified `:app:assembleRelease`) | **Verified** |
 > | Run on a device or emulator | **NOT run.** No emulator was available. Nothing here has executed on real Android |
 > | End to end against the backend | **NOT run.** Checklist: [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md) |
 > | Performance (`init` <= 2 ms, replay walk p95 <= 8 ms, background CPU < 1 %) | **NOT measured.** Procedure: [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). Only the AAR size is measured (398621 bytes, release, not minified) |
 > | Playback of replay chunks in `rrweb-player` | **NOT verified.** Structure only (`validate-chunks.mjs`); see [`tools/replay-viewer`](tools/replay-viewer) |
 > | Instrumented tests (offline crash then relaunch, Compose walker on device) | **NOT written/run** |
+| Demo app playground instrumented suite (`app/src/androidTest`) | Written and **compiles** (`:app:assembleDebugAndroidTest`); **NOT run**: no device or emulator was available |
 > | R8 with the consumer rules | Sample app minified build and a stand-alone R8 run without the optional libraries: **verified to succeed**. A minified app **executed** on a device, or a real AGP app without those libraries: **NOT run** (see "ProGuard / R8") |
 > | Release to a public repository | **NOT done.** Only `publishToMavenLocal` was exercised |
 
@@ -349,19 +350,49 @@ Read these before shipping to production.
 - `TelemetryItem` and `Diagnostics` are public data classes. The API is 0.x: binary compatibility between versions is
   not guaranteed.
 
+## Demo app (playground)
+
+The `:app` module is an interactive playground for the SDK. It never changes `:artracker-sdk`.
+
+**Where events go** (Settings tab, restart needed; the SDK config is immutable):
+
+| Profile | Endpoint | Key |
+| --- | --- | --- |
+| `SINK` (default) | in-app MockWebServer on `localhost:38457` (debug builds only) | built-in dummy key |
+| `OFFLINE` | `http://sink.playground.invalid` (nothing answers; the queue fills) | built-in dummy key |
+| `LOCAL` | your dev backend, e.g. `http://10.0.2.2:3000` (must be a local host) | `artracker.key` from `local.properties` |
+| `BACKEND` | `artracker.endpoint` from `local.properties` | `artracker.key` |
+
+`BACKEND` to a remote host needs a typed confirmation (`KIRIM`) in Settings and is valid for **one process start**: the next
+launch falls back to `SINK`. Load and fake-PII actions are disabled while the endpoint is remote. Before a remote endpoint
+starts, the SDK's local queue is wiped, because the SDK flushes leftovers right after `init`.
+
+**Tabs**: *Skenario* (six scripted flows with real taps), *Lab* (event and log, privacy and masking, replay, network, queue,
+crash, session, identity and opt-out, and the legacy XML screen), *Inspector* (what the SDK **sent**, read from the sink after
+redaction; other profiles show value-free metadata only), *Pengaturan*.
+
+**Scenarios** (`ecommerce_checkout`, `onboarding_form`, `frustrated_taps`, `logout_switch_account`, `offline_user`,
+`long_session`) drive the UI with synthetic touches dispatched through `decorView.dispatchTouchEvent`, so the SDK's touch
+recorder sees them like real ones. Limits: touches are recorded only while replay runs, only in the Activity window (not
+dialogs or popups), and only after a first snapshot of the session exists. The SDK has no rage-click detection.
+
+**Tests**: `./gradlew :app:testDebugUnitTest` (JVM, MockWebServer for HTTP); `./gradlew :app:connectedDebugAndroidTest`
+(needs an emulator or device). Still manual: the 401 kill-switch, offline crash then relaunch, and replay playback in the
+dashboard (see [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md)).
+
 ## Tests
 
 ```sh
 ./gradlew :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug
 ```
 
-Last full run (2026-11-06): `:artracker-sdk:testDebugUnitTest` 654 tests in 60 classes, 0 failures, 0 skipped
-(includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 5 tests, 0 failures; `:app:assembleDebug`
-and an R8-minified `:app:assembleRelease` succeed.
+Last full run (2026-11-07): `:artracker-sdk:testDebugUnitTest` 654 tests in 60 classes, 0 failures, 0 skipped
+(includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 254 tests, 0 failures; `:app:assembleDebug`
+and `:app:assembleRelease` succeed. The instrumented suite (`:app:connectedDebugAndroidTest`) has not been run.
 
 The sample-app tests do not depend on `local.properties`: they use a test `Application` that never initialises the SDK,
 one Robolectric SDK level, and explicit arguments, so `:app:testDebugUnitTest` passes with or without `artracker.*`
-entries (5 tests either way).
+entries.
 
 Not covered by automated tests: anything that needs a device (see the status box), and E2E against a real backend.
 

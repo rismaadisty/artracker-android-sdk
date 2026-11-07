@@ -3,6 +3,9 @@ package id.art.tracker.sample
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.ARTracker
+import id.art.tracker.playground.settings.EndpointGuard
+import id.art.tracker.playground.settings.PlaygroundSettings
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -45,6 +48,32 @@ class SampleAppTest {
         val key = "art_live_" + "a".repeat(43)
         assertFalse(SampleApp.config("http://sample.sdk-test.invalid:3000", key, debug = false).debug)
         assertTrue(SampleApp.config("http://sample.sdk-test.invalid:3000", key, debug = true).debug)
+    }
+
+    @Test
+    fun initTrackerWithBlankKeyStillReturnsFalseWithSettings() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        assertFalse(SampleApp.initTracker(app, endpoint = "http://x.invalid", key = "", debug = false, settings = PlaygroundSettings.DEFAULT))
+    }
+
+    @Test
+    fun configWithoutSettingsPassesTheEndpointThrough() {
+        val key = "art_live_" + "a".repeat(43)
+        assertEquals("https://b.sdk-test.invalid", SampleApp.config("https://b.sdk-test.invalid", key, debug = false).endpoint)
+    }
+
+    @Test
+    fun configWithSettingsUsesTheResolvedEndpointArgument() {
+        val c = SampleApp.config("http://localhost:1", "art_live_" + "a".repeat(43), debug = false, settings = PlaygroundSettings.DEFAULT)
+        assertEquals("http://localhost:1", c.endpoint)
+        assertEquals("sample", c.environment)
+    }
+
+    @Test
+    fun dummyKeyAndSinkEndpointAreCarriedIntoTheConfigUnchanged() {
+        val c = SampleApp.config(EndpointGuard.SINK_ENDPOINT, EndpointGuard.DUMMY_KEY, debug = false, settings = PlaygroundSettings.DEFAULT)
+        assertEquals(EndpointGuard.SINK_ENDPOINT, c.endpoint)
+        assertEquals(EndpointGuard.DUMMY_KEY, c.apiKey)
     }
 
     @Test
