@@ -10,6 +10,10 @@ runs:
         java-version: "17"
 
     - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      with:
+        # Bawaannya cache hanya ditulis dari branch default, sedangkan main belum berisi SDK dan semua PR menargetkan
+        # feature/android-sdk. Tanpa ini, PR tidak pernah mendapat cache dependency.
+        cache-read-only: false
 
     - name: Perpanjang timeout dan retry unduhan dependency
       shell: bash
