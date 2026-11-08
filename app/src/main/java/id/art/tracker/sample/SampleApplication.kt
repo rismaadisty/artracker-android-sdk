@@ -1,6 +1,7 @@
 package id.art.tracker.sample
 
 import android.app.Application
+import id.art.tracker.ExperimentalARTrackerApi
 import id.art.tracker.BuildConfig
 import id.art.tracker.playground.ProcessInfo
 import id.art.tracker.playground.boot.BootState
@@ -11,10 +12,12 @@ import id.art.tracker.playground.boot.SharedPrefsRunMarkerStore
 import id.art.tracker.playground.isMainProcess
 import id.art.tracker.playground.inspector.Inspector
 import id.art.tracker.playground.local.LocalServersProvider
+import id.art.tracker.playground.local.NetworkInspector
 import id.art.tracker.playground.scenario.ActivityHolder
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 
 class SampleApplication : Application() {
+    @OptIn(ExperimentalARTrackerApi::class)
     override fun onCreate() {
         super.onCreate()
         // The SDK does not support multi-process apps: the `:restart` process must never initialise it.
@@ -41,6 +44,8 @@ class SampleApplication : Application() {
         BootState.resolved = resolved
         // Keyed on the profile actually resolved (a refused BACKEND lands on SINK; a missing sink lands on OFFLINE).
         val beforeSend = Inspector.beforeSendFor(resolved.badge.profile)
-        SampleApp.initTracker(this, resolved.endpoint, resolved.apiKey, BuildConfig.DEBUG, settings, beforeSend)
+        // Debug builds deliver through an OkHttp client with Chucker; release builds keep the built-in transport.
+        val sender = NetworkInspector.sender(this)
+        SampleApp.initTracker(this, resolved.endpoint, resolved.apiKey, BuildConfig.DEBUG, settings, beforeSend, sender)
     }
 }

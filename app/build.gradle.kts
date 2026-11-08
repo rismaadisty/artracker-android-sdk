@@ -89,4 +89,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     // Debug builds host the loopback sink and target servers (see playground/local); release builds have none.
     debugImplementation(libs.mockwebserver)
+    // Chucker shows the SDK's own deliveries (NetworkInspector). Release builds get the no-op artifact.
+    debugImplementation(libs.chucker)
+    releaseImplementation(libs.chucker.no.op)
 }
