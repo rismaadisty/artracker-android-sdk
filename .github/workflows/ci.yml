@@ -1,0 +1,144 @@
+name: CI
+
+# Gerbang otomatis untuk SDK (WI-00 di docs/audit/implementation-plan.md).
+# Job wajib untuk branch protection: unit, lint, assemble.
+# Job opsional: aar-size (hanya melaporkan) dan instrumented (manual atau nightly, butuh emulator).
+
+on:
+  # Tanpa filter base: PR SDK menargetkan feature/android-sdk, sedangkan main baru berisi proyek awal.
+  pull_request:
+  push:
+    branches: [main, feature/android-sdk]
+  workflow_dispatch:
+    inputs:
+      run_instrumented:
+        description: "Jalankan suite instrumented di emulator (API 24, 30, 35)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 19 * * *" # 02:00 WIB, hanya untuk job instrumented
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit:
+    name: Unit test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-build
+      - name: Unit test (SDK dan sample app)
+        run: .github/scripts/gradle-retry.sh :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest --stacktrace
+      - name: Unggah laporan test
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unit-test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-build
+      - name: Lint SDK
+        run: .github/scripts/gradle-retry.sh :artracker-sdk:lintDebug --stacktrace
+      - name: Unggah laporan lint
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lint-reports
+          path: artracker-sdk/build/reports/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  assemble:
+    name: Assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-build
+      - name: Assemble AAR, sample app, dan APK test instrumented
+        run: >-
+          .github/scripts/gradle-retry.sh
+          :artracker-sdk:assembleRelease
+          :app:assembleDebug
+          :app:assembleDebugAndroidTest
+          :app:assembleRelease
+          --stacktrace
+      - name: Unggah AAR
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: artracker-sdk-aar
+          path: artracker-sdk/build/outputs/aar/artracker-sdk-release.aar
+          retention-days: 14
+          if-no-files-found: error
+
+  aar-size:
+    name: Ukuran AAR
+    needs: assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: artracker-sdk-aar
+      - name: Laporkan ukuran AAR
+        run: |
+          size=$(stat -c%s artracker-sdk-release.aar)
+          baseline=398621 # README, tanpa minify. Penegakan batas ada di WI-19.
+          echo "AAR: ${size} byte (baseline README: ${baseline} byte)"
+          {
+            echo "### Ukuran AAR"
+            echo ""
+            echo "| Sekarang | Baseline README | Selisih |"
+            echo "| --- | --- | --- |"
+            echo "| ${size} byte | ${baseline} byte | $((size - baseline)) byte |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  instrumented:
+    name: Instrumented (API ${{ matrix.api-level }})
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_instrumented)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [24, 30, 35]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Aktifkan KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: ./.github/actions/setup-build
+      - name: Jalankan suite instrumented
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+      - name: Unggah laporan instrumented
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: instrumented-reports-api-${{ matrix.api-level }}
+          path: app/build/reports/androidTests/
+          retention-days: 14
+          if-no-files-found: ignore

@@ -1,0 +1,51 @@
+name: Setup build
+description: JDK 17, Gradle, dan unduhan Gradle wrapper dengan retry (unduhan dari GitHub kadang 504 atau timeout)
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      with:
+        # Bawaannya cache hanya ditulis dari branch default, sedangkan main belum berisi SDK dan semua PR menargetkan
+        # feature/android-sdk. Tanpa ini, PR tidak pernah mendapat cache dependency.
+        cache-read-only: false
+
+    - name: Perpanjang timeout dan retry unduhan dependency
+      shell: bash
+      run: |
+        gradle_home="${GRADLE_USER_HOME:-$HOME/.gradle}"
+        mkdir -p "$gradle_home"
+        cat >> "$gradle_home/gradle.properties" <<'EOF'
+        systemProp.org.gradle.internal.http.connectionTimeout=60000
+        systemProp.org.gradle.internal.http.socketTimeout=60000
+        systemProp.org.gradle.internal.repository.max.retries=6
+        systemProp.org.gradle.internal.repository.initial.backoff=2000
+        EOF
+
+    - name: Cache distribusi Gradle wrapper
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.gradle/wrapper/dists
+        key: gradle-dist-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+
+    - name: Siapkan Gradle wrapper (retry)
+      shell: bash
+      run: |
+        # Distribusi Gradle diunduh dari CDN GitHub yang kadang membalas 504 atau lambat. Satu unduhan gagal tidak boleh
+        # menggagalkan job; bila cache distribusi ada, perintah ini selesai tanpa mengunduh.
+        for attempt in 1 2 3 4 5 6 7 8; do
+          if ./gradlew --version; then
+            exit 0
+          fi
+          wait=$((attempt * 15))
+          if [ "$wait" -gt 60 ]; then wait=60; fi
+          echo "Unduhan Gradle gagal (percobaan ${attempt} dari 8); mencoba lagi dalam ${wait} detik..."
+          sleep "$wait"
+        done
+        echo "Gradle wrapper tidak dapat diunduh setelah 8 percobaan"
+        exit 1
