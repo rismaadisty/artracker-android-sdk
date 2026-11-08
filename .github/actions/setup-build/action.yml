@@ -23,16 +23,25 @@ runs:
         systemProp.org.gradle.internal.repository.initial.backoff=2000
         EOF
 
+    - name: Cache distribusi Gradle wrapper
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.gradle/wrapper/dists
+        key: gradle-dist-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+
     - name: Siapkan Gradle wrapper (retry)
       shell: bash
       run: |
-        # gradle-wrapper.properties memakai networkTimeout 10 detik; satu unduhan gagal tidak boleh menggagalkan job.
-        for attempt in 1 2 3 4 5; do
+        # Distribusi Gradle diunduh dari CDN GitHub yang kadang membalas 504 atau lambat. Satu unduhan gagal tidak boleh
+        # menggagalkan job; bila cache distribusi ada, perintah ini selesai tanpa mengunduh.
+        for attempt in 1 2 3 4 5 6 7 8; do
           if ./gradlew --version; then
             exit 0
           fi
-          echo "Unduhan Gradle gagal (percobaan ${attempt} dari 5); mencoba lagi..."
-          sleep $((attempt * 15))
+          wait=$((attempt * 15))
+          if [ "$wait" -gt 60 ]; then wait=60; fi
+          echo "Unduhan Gradle gagal (percobaan ${attempt} dari 8); mencoba lagi dalam ${wait} detik..."
+          sleep "$wait"
         done
-        echo "Gradle wrapper tidak dapat diunduh setelah 5 percobaan"
+        echo "Gradle wrapper tidak dapat diunduh setelah 8 percobaan"
         exit 1
