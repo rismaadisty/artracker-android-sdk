@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-build
       - name: Unit test (SDK dan sample app)
-        run: ./gradlew :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest --stacktrace
+        run: .github/scripts/gradle-retry.sh :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest --stacktrace
       - name: Unggah laporan test
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-build
       - name: Lint SDK
-        run: ./gradlew :artracker-sdk:lintDebug --stacktrace
+        run: .github/scripts/gradle-retry.sh :artracker-sdk:lintDebug --stacktrace
       - name: Unggah laporan lint
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -73,7 +73,7 @@ jobs:
       - uses: ./.github/actions/setup-build
       - name: Assemble AAR, sample app, dan APK test instrumented
         run: >-
-          ./gradlew
+          .github/scripts/gradle-retry.sh
           :artracker-sdk:assembleRelease
           :app:assembleDebug
           :app:assembleDebugAndroidTest
