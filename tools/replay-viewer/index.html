@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARTracker replay viewer</title>
+  <!-- Pinned: do not float this version, the SDK output is validated against exactly this build. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/rrweb-player@2.0.0-alpha.18/dist/style.css">
+  <style>
+    :root { color-scheme: light dark; --fg: #1d1d1f; --bg: #f5f5f7; --muted: #6e6e73; --err: #b3261e; --ok: #1b7f3b; --line: #d2d2d7; }
+    @media (prefers-color-scheme: dark) { :root { --fg: #f5f5f7; --bg: #1d1d1f; --muted: #a1a1a6; --err: #ff8a80; --ok: #7fd99a; --line: #3a3a3c; } }
+    body { margin: 0; padding: 16px; font: 14px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    p.hint { margin: 0 0 12px; color: var(--muted); }
+    .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
+    #status { margin: 8px 0; white-space: pre-wrap; }
+    #status.error { color: var(--err); }
+    #status.ok { color: var(--ok); }
+    #player { margin-top: 12px; display: flex; justify-content: center; }
+    [hidden] { display: none !important; }
+    code { font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <h1>ARTracker replay viewer</h1>
+  <p class="hint">
+    Load a JSON file: an array of <code>replay_chunk</code> attributes
+    (<code>{seq, start, end, full_snapshot, events}</code>) or an array of backend items whose
+    <code>attributes</code> hold those (the backend's <code>{"items": [...]}</code> response works as is). Chunks are
+    sorted by <code>start</code>, then <code>seq</code>; a file with several sessions gets a session picker.
+  </p>
+  <div class="bar">
+    <input id="file" type="file" accept="application/json,.json">
+    <label><input id="autoplay" type="checkbox" checked> autoplay</label>
+    <label id="sessionRow" hidden>session <select id="session"></select></label>
+  </div>
+  <div id="status" role="status"></div>
+  <div id="player"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/rrweb-player@2.0.0-alpha.18/dist/index.js"></script>
+  <script>
+    'use strict';
+
+    var EVENT_FULL_SNAPSHOT = 2;
+    var EVENT_META = 4;
+    var statusEl = document.getElementById('status');
+    var playerEl = document.getElementById('player');
+    var sessionEl = document.getElementById('session');
+    var sessionRow = document.getElementById('sessionRow');
+    var player = null;
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = kind || '';
+    }
+
+    // Accepts an array (or the backend's {items: [...]}) of chunk attributes, or of backend items wrapping them
+    // ({kind|type, name, session_id, attributes}). Items that are not replay chunks (other events/logs from the
+    // same export) are skipped, not errors. Returns [{session, attrs}].
+    function toChunks(parsed) {
+      if (parsed && !Array.isArray(parsed) && Array.isArray(parsed.items)) parsed = parsed.items;
+      if (!Array.isArray(parsed)) throw new Error('The file must contain a JSON array (or an object with an "items" array).');
+      var chunks = [];
+      var skipped = 0;
+      parsed.forEach(function (entry) {
+        var isItem = entry && typeof entry === 'object' && !Array.isArray(entry.events) && entry.attributes !== undefined;
+        if (isItem && entry.name !== 'replay_chunk') { skipped++; return; }
+        var attrs = isItem ? entry.attributes : entry;
+        if (typeof attrs === 'string') { try { attrs = JSON.parse(attrs); } catch (e) { attrs = null; } }
+        if (!attrs || !Array.isArray(attrs.events)) { skipped++; return; }
+        chunks.push({ session: isItem && entry.session_id ? String(entry.session_id) : null, attrs: attrs });
+      });
+      if (chunks.length === 0) throw new Error('No replay chunks found (expected objects with an "events" array, or items named "replay_chunk").');
+      return { chunks: chunks, skipped: skipped };
+    }
+
+    // One recording per session: a backend export mixes sessions, and their events must not be merged.
+    function groupBySession(chunks) {
+      var groups = {};
+      var order = [];
+      chunks.forEach(function (c) {
+        var key = c.session || '(single recording)';
+        if (!groups[key]) { groups[key] = []; order.push(key); }
+        groups[key].push(c.attrs);
+      });
+      order.sort(function (a, b) { return groups[b].length - groups[a].length; });
+      return { groups: groups, order: order };
+    }
+
+    function num(v, fallback) { return typeof v === 'number' && isFinite(v) ? v : fallback; }
+
+    function mergeEvents(chunks) {
+      chunks.sort(function (a, b) {
+        return num(a.start, 0) - num(b.start, 0) || num(a.seq, 0) - num(b.seq, 0);
+      });
+      var events = [];
+      chunks.forEach(function (c) { Array.prototype.push.apply(events, c.events); });
+      return events;
+    }
+
+    // rrweb needs a Meta and then a FullSnapshot before anything else, otherwise the player renders nothing.
+    function validateHead(events) {
+      var head = events.slice(0, 4);
+      var meta = head.find(function (e) { return e && e.type === EVENT_META; });
+      var full = head.find(function (e) { return e && e.type === EVENT_FULL_SNAPSHOT; });
+      if (!meta) throw new Error('The first events do not include a Meta event (type 4). The recording may start mid-session: export from the first chunk (seq 0 / full_snapshot=true).');
+      if (!full) throw new Error('The first events do not include a FullSnapshot event (type 2). The recording may start mid-session: export from the first chunk (seq 0 / full_snapshot=true).');
+      return meta;
+    }
+
+    var loaded = null; // {groups, order, skipped}
+
+    function play(sessionKey) {
+      var chunks = loaded.groups[sessionKey];
+      var events = mergeEvents(chunks);
+      var meta = validateHead(events);
+      var width = Math.round(num(meta.data && meta.data.width, 360)) || 360;
+      var height = Math.round(num(meta.data && meta.data.height, 800)) || 800;
+
+      if (player) { try { player.$destroy(); } catch (e) { /* ignore */ } playerEl.innerHTML = ''; player = null; }
+      var Player = window.rrwebPlayer && (window.rrwebPlayer.default || window.rrwebPlayer);
+      if (!Player) throw new Error('rrweb-player did not load (offline, or the CDN is blocked).');
+      player = new Player({
+        target: playerEl,
+        props: {
+          events: events,
+          width: width,
+          height: height,
+          autoPlay: document.getElementById('autoplay').checked,
+          showController: true,
+          mouseTail: false
+        }
+      });
+      setStatus(
+        chunks.length + ' chunks, ' + events.length + ' events, viewport ' + width + 'x' + height +
+          (loaded.skipped ? ' (' + loaded.skipped + ' non-replay items skipped)' : '') +
+          (meta.data && meta.data.href ? ', first screen ' + meta.data.href : ''),
+        'ok'
+      );
+    }
+
+    function showSessions() {
+      sessionEl.innerHTML = '';
+      sessionRow.hidden = loaded.order.length < 2;
+      loaded.order.forEach(function (key) {
+        var opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = key + ' (' + loaded.groups[key].length + ' chunks)';
+        sessionEl.appendChild(opt);
+      });
+    }
+
+    function safely(fn) {
+      try { fn(); } catch (err) { setStatus('Cannot play this file: ' + err.message, 'error'); }
+    }
+
+    sessionEl.addEventListener('change', function () { safely(function () { play(sessionEl.value); }); });
+
+    document.getElementById('file').addEventListener('change', function (ev) {
+      var file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      setStatus('Reading ' + file.name + ' ...');
+      file.text().then(function (text) {
+        var merged = toChunks(JSON.parse(text));
+        var grouped = groupBySession(merged.chunks);
+        loaded = { groups: grouped.groups, order: grouped.order, skipped: merged.skipped };
+        showSessions();
+        play(loaded.order[0]);
+      }).catch(function (err) {
+        setStatus('Cannot play this file: ' + err.message, 'error');
+      });
+    });
+  </script>
+</body>
+</html>
