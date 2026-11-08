@@ -35,5 +35,8 @@
 # contract. allowshrinking: the class is retained only if the host uses it, so apps without OkHttp do not keep it.
 -keep,allowshrinking class id.art.tracker.telemetry.okhttp.ARTrackerOkHttpInterceptor { public <init>(); }
 
+# Hosts pass their OkHttpClient: `ARTrackerOkHttpSender(client)`. Same reasoning as the interceptor: kept only if used.
+-keep,allowshrinking class id.art.tracker.telemetry.okhttp.ARTrackerOkHttpSender { public <init>(okhttp3.OkHttpClient); }
+
 # android.view.WindowManagerGlobal.mViews is read by reflection (RootViewLocator), but that is a framework class that
 # R8 never renames, so no rule is needed.

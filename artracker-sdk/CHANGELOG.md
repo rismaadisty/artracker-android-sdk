@@ -3,6 +3,19 @@
 All notable changes to `id.art.tracker:artracker-android`. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow semantic versioning (`0.x`: the API may still change).
 
+## [Unreleased]
+
+### Added
+
+- `NetworkConfig.sender` and the experimental `ARTrackerSender` (with `SendRequest` and `SendResponse`): replaces the
+  `HttpURLConnection` transport that posts batches to the ingest endpoint, for example to inspect the SDK's traffic with
+  Chucker, pin certificates or go through a proxy. Status mapping is shared with the built-in transport.
+- `ARTrackerOkHttpSender(OkHttpClient)`: an `ARTrackerSender` on top of your own `OkHttpClient` (OkHttp stays
+  `compileOnly`, with a consumer R8 rule like the interceptor). The SDK's own requests are tagged and
+  `ARTrackerOkHttpInterceptor` skips them, so an interceptor on the same client cannot feed itself.
+- `@ExperimentalARTrackerApi` (`RequiresOptIn`, warning level) marks APIs whose contract is not frozen yet.
+- Demo app: debug builds deliver through an OkHttp client with Chucker 4.2.0 and a *Buka Chucker* action in the *Jaringan* lab.
+
 ## [0.1.0] - 2026-11-06
 
 First release. **Not yet published to a public repository** (only `publishToMavenLocal` was exercised) and **not yet run

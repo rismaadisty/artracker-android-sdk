@@ -1,6 +1,5 @@
 package id.art.tracker.transport
 
-import id.art.tracker.core.SdkInfo
 import id.art.tracker.core.SdkLog
 import java.io.IOException
 import java.io.InputStream
@@ -18,13 +17,11 @@ internal class IngestClient(
     private val readTimeoutMs: Int = 15_000,
 ) : Sender {
     // A malformed endpoint can never succeed, so it is resolved once and reported as Drop(0) on every send.
-    private val url: URL? = runCatching { URL(endpoint.trimEnd('/') + INGEST_PATH) }
-        .getOrNull()
-        ?.takeIf { it.protocol == "http" || it.protocol == "https" }
+    private val url: URL? = IngestEndpoint.url(endpoint)
 
     // Defence in depth behind ARTrackerConfig.validate(): a key with CR/LF or any control character must never reach
     // the HTTP stack (the JDK opens the connection before it rejects such a header).
-    private val keyUsable: Boolean = apiKey.none { it.code < 0x20 || it.code == 0x7F }
+    private val keyUsable: Boolean = IngestEndpoint.keyUsable(apiKey)
 
     override fun send(gzipBody: ByteArray): SendResult {
         if (!keyUsable) {
@@ -44,16 +41,13 @@ internal class IngestClient(
             conn.instanceFollowRedirects = false
             conn.doOutput = true
             conn.useCaches = false
-            conn.setRequestProperty("X-Artracker-Key", apiKey)
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Content-Encoding", "gzip")
-            conn.setRequestProperty("User-Agent", "artracker-android/${SdkInfo.VERSION}")
+            for ((name, value) in IngestEndpoint.headers(apiKey)) conn.setRequestProperty(name, value)
             conn.setFixedLengthStreamingMode(gzipBody.size)
             conn.outputStream.use { it.write(gzipBody) }
 
             val status = conn.responseCode
             val retryAfter = conn.getHeaderField("Retry-After")
-            return map(status, retryAfter)
+            return IngestResponse.map(status, retryAfter)
         } catch (e: IllegalArgumentException) {
             // e.g. an API key containing CR/LF is rejected by setRequestProperty: can never succeed. Only the class is
             // logged: the exception message embeds the offending header value (the key).
@@ -67,25 +61,6 @@ internal class IngestClient(
         } finally {
             conn?.let { drainAndClose(it) }
         }
-    }
-
-    private fun map(status: Int, retryAfter: String?): SendResult = when {
-        status in 200..299 -> SendResult.Accepted
-        status == 401 || status == 403 -> SendResult.Unauthorized
-        status == 413 -> SendResult.TooLarge
-        status == 429 || status == 503 -> SendResult.RetryAfter(parseRetryAfterMs(retryAfter))
-        status in 400..499 -> SendResult.Drop(status)
-        // 5xx, and unexpected 1xx/3xx (redirects are never followed): transient or misconfigured, keep the batch.
-        else -> SendResult.RetryAfter(null)
-    }
-
-    /** Delta-seconds only; HTTP-dates, garbage and negatives yield null; values are capped at one hour. */
-    private fun parseRetryAfterMs(raw: String?): Long? {
-        val s = raw?.trim()
-        if (s.isNullOrEmpty() || !s.all { it in '0'..'9' }) return null
-        // All digits but unparseable as Long means an absurdly large number: cap it rather than ignore it.
-        val seconds = s.toLongOrNull() ?: return MAX_RETRY_AFTER_MS
-        return minOf(seconds, MAX_RETRY_AFTER_MS / 1000) * 1000
     }
 
     private fun drainAndClose(conn: HttpURLConnection) {
@@ -110,8 +85,6 @@ internal class IngestClient(
     }
 
     private companion object {
-        const val INGEST_PATH = "/api/v1/ingest"
-        const val MAX_RETRY_AFTER_MS = 3_600_000L
         const val MAX_DRAIN_BYTES = 64 * 1024
     }
 }

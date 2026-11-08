@@ -26,6 +26,7 @@ import id.art.tracker.telemetry.ErrorDeduper
 import id.art.tracker.telemetry.ExitInfoCollector
 import id.art.tracker.telemetry.Stacktrace
 import id.art.tracker.transport.Backoff
+import id.art.tracker.transport.CustomSenderAdapter
 import id.art.tracker.transport.EventPipeline
 import id.art.tracker.transport.EventStore
 import id.art.tracker.transport.Flusher
@@ -189,7 +190,8 @@ internal class ARTrackerCore(
     val flusher = Flusher(
         queue = queue,
         encoder = PayloadEncoder { device.envelopeContext(config.environment) },
-        sender = IngestClient(config.endpoint, config.apiKey),
+        sender = config.network.sender?.let { CustomSenderAdapter(it, config.endpoint, config.apiKey) }
+            ?: IngestClient(config.endpoint, config.apiKey),
         killSwitch = killSwitch,
         clock = clock,
         backoff = Backoff(),
