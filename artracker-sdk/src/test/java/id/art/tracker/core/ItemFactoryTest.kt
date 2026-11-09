@@ -81,15 +81,15 @@ class ItemFactoryTest {
         assertEquals(0, f.log(LogLevel.FATAL, "crash", null).priority())
         assertEquals(1, f.log(LogLevel.ERROR, "err", null).priority())
         assertEquals(2, f.event("tap").priority())
-        assertEquals(3, f.session("replay_chunk").priority())
+        assertEquals(2, f.session("replay_chunk").priority())
         assertEquals(2, f.log(LogLevel.INFO, "info", null).priority())
     }
 
     @Test
-    fun priority_onlyTheSdkReplayChunkIsLowest() {
+    fun priority_nameReplayChunkGetsNoSpecialTreatment() {
         val f = factory()
-        assertEquals(3, f.session("replay_chunk").priority())
-        // A user event borrowing the name is an ordinary event, not evicted first.
+        // Replay no longer travels through the ingest queue: an item with that name is like any other.
+        assertEquals(2, f.session("replay_chunk").priority())
         assertEquals(2, f.event("replay_chunk").priority())
     }
 }

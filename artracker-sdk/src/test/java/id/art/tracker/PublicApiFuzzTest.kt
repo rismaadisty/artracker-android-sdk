@@ -13,6 +13,7 @@ import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.ClassAvailability
 import id.art.tracker.core.SdkLog
+import id.art.tracker.transport.ReplayStore
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
 import id.art.tracker.testutil.QueueReader
 import id.art.tracker.testutil.StrictJson
@@ -72,6 +73,7 @@ class PublicApiFuzzTest {
         ClassAvailability.resetOverrides()
         ProcessLifecycleTestUtil.stop()
         app.deleteDatabase("artracker.db")
+        app.deleteDatabase(ReplayStore.DB_NAME)
     }
 
     @After
@@ -79,6 +81,7 @@ class PublicApiFuzzTest {
         ARTracker.resetForTest()
         ProcessLifecycleTestUtil.stop()
         app.deleteDatabase("artracker.db")
+        app.deleteDatabase(ReplayStore.DB_NAME)
         SdkLog.enabled = false
     }
 
@@ -121,7 +124,8 @@ class PublicApiFuzzTest {
 
         assertTrue("validated only $validated of ~${ITERATIONS * 2} expected payloads: the fuzz did not exercise the pipeline", validated > 800)
         // Every kind of item was produced at some point (guards against a fuzz that silently stops recording).
-        listOf("track_fuzz", "log", "exception", "\$identify", "screen_view", "replay_chunk", "session_start")
+        // Replay no longer travels through the ingest queue (it has its own upload queue), so there is no replay item.
+        listOf("track_fuzz", "log", "exception", "\$identify", "screen_view", "session_start")
             .forEach { assertTrue("no persisted '$it' item over $ITERATIONS iterations (seed=$SEED)", (seenNames[it] ?: 0) > 0) }
     }
 

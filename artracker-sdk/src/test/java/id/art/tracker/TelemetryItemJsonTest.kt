@@ -22,11 +22,11 @@ class TelemetryItemJsonTest {
     }
 
     @Test
-    fun replayChunk_isEncodedWithReplayDepth() {
+    fun itemNamedReplayChunk_isCutAtTheNormalDepth() {
         val json = items.session("replay_chunk", mapOf("events" to listOf(nested(100)))).toJson()
-        assertFalse(json.contains("[max_depth]"))
-        assertTrue(json.contains("deepest-text"))
-        JSONObject(json) // valid JSON
+        assertTrue(json.contains("\"[max_depth]\""))
+        assertFalse(json.contains("deepest-text"))
+        JSONObject(json) // still valid JSON
     }
 
     @Test
@@ -38,7 +38,7 @@ class TelemetryItemJsonTest {
 
     @Test
     fun eventNamedReplayChunk_doesNotGetReplayDepth() {
-        // Only the SDK's own session item gets the larger limit; a user event that borrows the name does not.
+        // Nothing gets the larger replay limit through toJson any more (replay has its own upload path).
         val json = items.event("replay_chunk", mapOf("p" to nested(40))).toJson()
         assertTrue(json.contains("\"[max_depth]\""))
     }

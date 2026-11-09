@@ -3,6 +3,35 @@
 All notable changes to `id.art.tracker:artracker-android`. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow semantic versioning (`0.x`: the API may still change).
 
+## [Unreleased]
+
+### Changed
+
+- Session replay now uploads through the backend's Session Replay API instead of `replay_chunk` items in
+  `POST /api/v1/ingest`: `POST /api/v1/replay/chunk-url`, `PUT` of the gzipped rrweb events to the returned signed URL,
+  then `POST /api/v1/replay/chunk-ack`. Chunks are merged into per-session batches (256 KB or 10 s), queued in their own
+  `artracker_replay.db` (20 MiB / 200 batches, 8 attempts, 7 days, `seq` persisted per session) and retried idempotently.
+  `replay_chunk` handling was removed from the ingest pipeline.
+- **Breaking for older backends:** a backend without the replay endpoints answers `404`, so replay batches are dropped and
+  no replay is shown until the backend is upgraded. Ingest events are unaffected.
+- Replay uploads go through `NetworkConfig.sender` when one is set, so Chucker, certificate pinning and proxies cover them
+  too. **Contract change of the experimental `ARTrackerSender`:** `SendRequest` gained `method` (`POST`, or `PUT` for the
+  replay upload; default `POST`) and `SendResponse` gained `body` (the start of the response, up to 16 KiB; the replay
+  `chunk-url` step needs it). A custom sender must honour the method and return the body, otherwise the replay upload
+  fails (retried, then dropped); ingest is unaffected. `ARTrackerOkHttpSender` already does both. Without a sender the
+  built-in `HttpURLConnection` is used, as before.
+
+### Added
+
+- `NetworkConfig.sender` and the experimental `ARTrackerSender` (with `SendRequest` and `SendResponse`): replaces the
+  `HttpURLConnection` transport that posts batches to the ingest endpoint, for example to inspect the SDK's traffic with
+  Chucker, pin certificates or go through a proxy. Status mapping is shared with the built-in transport.
+- `ARTrackerOkHttpSender(OkHttpClient)`: an `ARTrackerSender` on top of your own `OkHttpClient` (OkHttp stays
+  `compileOnly`, with a consumer R8 rule like the interceptor). The SDK's own requests are tagged and
+  `ARTrackerOkHttpInterceptor` skips them, so an interceptor on the same client cannot feed itself.
+- `@ExperimentalARTrackerApi` (`RequiresOptIn`, warning level) marks APIs whose contract is not frozen yet.
+- Demo app: debug builds deliver through an OkHttp client with Chucker 4.2.0 and a *Buka Chucker* action in the *Jaringan* lab.
+
 ## [0.1.0] - 2026-11-06
 
 First release. **Not yet published to a public repository** (only `publishToMavenLocal` was exercised) and **not yet run

@@ -66,7 +66,8 @@ class EventPipelineTest {
         beforeSend: BeforeSend? = null,
         flushIntervalMs: Long = 10_000L,
         scope: CoroutineScope = backgroundScope,
-    ) = EventPipeline(scope, queue, flusher, clock, beforeSend, flushIntervalMs)
+        onItemAccepted: ((TelemetryItem) -> Unit)? = null,
+    ) = EventPipeline(scope, queue, flusher, clock, beforeSend, flushIntervalMs, onItemAccepted = onItemAccepted)
 
     private fun payloadOf(id: String): String = queue.stored.first { it.id == id }.payloadJson
 
@@ -81,6 +82,33 @@ class EventPipelineTest {
         assertTrue(payload, payload.contains("[redacted]"))
         assertFalse(payload, payload.contains("\"x\""))
         assertTrue(payload, payload.contains("home"))
+    }
+
+    @Test
+    fun onItemAccepted_calledOnlyForErrorAndFatal() = runTest {
+        val accepted = ArrayList<String>()
+        val p = pipeline(onItemAccepted = { accepted += "${it.level}:${it.name}" })
+
+        p.enqueue(factory.event("plain"))
+        p.enqueue(factory.log(LogLevel.DEBUG, "d", "m"))
+        p.enqueue(factory.log(LogLevel.INFO, "i", "m"))
+        p.enqueue(factory.log(LogLevel.WARN, "w", "m"))
+        p.enqueue(factory.log(LogLevel.ERROR, "e", "m"))
+        p.enqueue(factory.log(LogLevel.FATAL, "f", "m"))
+        p.awaitIdle()
+
+        assertEquals(listOf("ERROR:e", "FATAL:f"), accepted)
+    }
+
+    @Test
+    fun onItemAccepted_throwing_neverBreaksEnqueue() = runTest {
+        val p = pipeline(onItemAccepted = { throw IllegalStateException("hook") })
+
+        val item = factory.log(LogLevel.ERROR, "e", "m")
+        assertTrue(p.enqueue(item))
+        p.awaitIdle()
+
+        assertTrue(queue.stored.any { it.id == item.id })
     }
 
     @Test
@@ -148,7 +176,7 @@ class EventPipelineTest {
     }
 
     @Test
-    fun replayChunk_skipsRedactor() = runTest {
+    fun itemNamedReplayChunk_isRedactedLikeAnyOtherItem() = runTest {
         val p = pipeline()
         val chunk = factory.session("replay_chunk", mapOf("data" to "a@b.com"))
         val other = factory.event("other", mapOf("data" to "a@b.com"))
@@ -156,8 +184,8 @@ class EventPipelineTest {
         p.enqueue(other)
         p.awaitIdle()
 
-        assertTrue(payloadOf(chunk.id).contains("a@b.com"))
-        assertEquals(3, queue.stored.first { it.id == chunk.id }.priority)
+        assertFalse(payloadOf(chunk.id).contains("a@b.com"))
+        assertEquals(2, queue.stored.first { it.id == chunk.id }.priority)
         assertFalse(payloadOf(other.id).contains("a@b.com"))
     }
 
@@ -586,7 +614,7 @@ class EventPipelineTest {
     }
 
     @Test
-    fun replayChunk_nameAndMessage_stayUntouched() = runTest {
+    fun itemNamedReplayChunk_messageIsRedacted_nameIsKept() = runTest {
         val p = pipeline()
         val chunk = factory.session("replay_chunk", mapOf("data" to "a@b.com"))
         val withMessage = chunk.copy(message = "a@b.com")
@@ -595,7 +623,7 @@ class EventPipelineTest {
 
         val json = JSONObject(payloadOf(withMessage.id))
         assertEquals("replay_chunk", json.getString("name"))
-        assertEquals("a@b.com", json.getString("message"))
+        assertFalse(json.getString("message").contains("a@b.com"))
     }
 
     @Test

@@ -12,7 +12,7 @@ internal object Json {
     const val MAX_DEPTH = 32
 
     /**
-     * Limit for `replay_chunk` attributes only: rrweb snapshots nest about two JSON levels per wireframe level
+     * Limit for replay upload batches only (the batcher and chunker use it explicitly): rrweb snapshots nest about two JSON levels per wireframe level
      * (walker depth 50, Compose hosts add up to 50 more) plus the event/chunk wrappers. It still bounds cycles.
      */
     const val REPLAY_MAX_DEPTH = 256

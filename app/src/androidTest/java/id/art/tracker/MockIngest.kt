@@ -12,11 +12,13 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 
 /**
- * A MockWebServer on IPv4 loopback that plays the ingest backend for the instrumented tests: it records every request
- * (body already gunzipped) and answers `202 {"status":"accepted","queued":n}` unless a response was scripted.
+ * A MockWebServer on IPv4 loopback that plays the backend for the instrumented tests: it records every request and
+ * answers `202 {"status":"accepted","queued":n}` to ingest unless a response was scripted (scripted responses apply to
+ * ingest only). It also plays the three Session Replay API endpoints: the recorded body of a replay `PUT` is the
+ * gunzipped JSON array of rrweb events, the `chunk-url` and `chunk-ack` bodies are their plain JSON.
  */
 class MockIngest {
-    class Recorded(val path: String, val headers: Headers, val body: String)
+    class Recorded(val path: String, val headers: Headers, val body: String, val method: String = "POST")
 
     private val server = MockWebServer()
     private val recorded = CopyOnWriteArrayList<Recorded>()
@@ -28,11 +30,26 @@ class MockIngest {
     fun start() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                val body = runCatching {
-                    GZIPInputStream(ByteArrayInputStream(request.body.readByteArray())).use { it.readBytes().toString(Charsets.UTF_8) }
-                }.getOrDefault("")
-                recorded += Recorded(request.path.orEmpty(), request.headers, body)
-                return script.poll() ?: MockResponse().setResponseCode(202).setBody("{\"status\":\"accepted\",\"queued\":1}")
+                val path = request.path.orEmpty()
+                val route = path.substringBefore('?')
+                val raw = request.body.readByteArray()
+                val plain = route == CHUNK_URL_PATH || route == CHUNK_ACK_PATH
+                val body = if (plain) {
+                    raw.toString(Charsets.UTF_8)
+                } else {
+                    runCatching {
+                        GZIPInputStream(ByteArrayInputStream(raw)).use { it.readBytes().toString(Charsets.UTF_8) }
+                    }.getOrDefault("")
+                }
+                recorded += Recorded(path, request.headers, body, request.method.orEmpty())
+                return when (route) {
+                    CHUNK_URL_PATH -> MockResponse().setResponseCode(200).setBody(
+                        "{\"upload_url\":\"$url$UPLOAD_PATH?key=k&exp=1&sig=s\",\"object_key\":\"k\",\"expires_in\":300}",
+                    )
+                    UPLOAD_PATH, CHUNK_ACK_PATH -> MockResponse().setResponseCode(200)
+                    else -> script.poll()
+                        ?: MockResponse().setResponseCode(202).setBody("{\"status\":\"accepted\",\"queued\":1}")
+                }
             }
         }
         server.start(InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1)), 0)
@@ -66,5 +83,11 @@ class MockIngest {
     fun clear() {
         recorded.clear()
         script.clear()
+    }
+
+    companion object {
+        const val CHUNK_URL_PATH = "/api/v1/replay/chunk-url"
+        const val UPLOAD_PATH = "/api/v1/replay/upload-chunk"
+        const val CHUNK_ACK_PATH = "/api/v1/replay/chunk-ack"
     }
 }

@@ -27,8 +27,12 @@ import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.replay.capture.ViewWalker
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
-import id.art.tracker.toJson
+import id.art.tracker.transport.NewReplayBatch
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.util.zip.GZIPInputStream
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.runBlocking
@@ -60,6 +64,7 @@ class ReplayChunkExportTest {
     private val clock = FakeClock(1_762_300_000_000L)
     private val dispatcher = ManualDispatcher()
     private val seen = CopyOnWriteArrayList<TelemetryItem>()
+    private val sinkBatches = CopyOnWriteArrayList<NewReplayBatch>()
     private lateinit var core: ARTrackerCore
     private lateinit var activity: Activity
     private lateinit var column: LinearLayout
@@ -182,7 +187,7 @@ class ReplayChunkExportTest {
         )
         core = ARTrackerCore(app, cfg, clock, replayFactory = { c, handler ->
             ReplayController.create(c, ViewWalker(MaskingPolicy(c.config.privacy)), handler, { _, _ -> true }, dispatcher)
-        })
+        }, replaySink = ReplaySink { sinkBatches += it })
         ARTrackerCore.install(core)
         core.start()
         ProcessLifecycleTestUtil.start()
@@ -224,10 +229,14 @@ class ReplayChunkExportTest {
         dispatcher.runAll()
         runBlocking { withTimeout(15_000) { core.awaitIdle() } }
 
-        val chunks = seen.filter { it.name == "replay_chunk" }
-        assertTrue("expected several chunks, got ${chunks.size}", chunks.isNotEmpty())
-        val attributes = chunks.map { it.attributes }
-        val events = attributes.flatMap { it["events"] as List<Map<String, Any?>> }
+        assertTrue("replay must not travel through the ingest pipeline", seen.none { it.name == "replay_chunk" })
+        val batches = sinkBatches.toList()
+        assertTrue("expected a batch, got ${batches.size}", batches.isNotEmpty())
+        val events = batches.flatMap { batch ->
+            val text = GZIPInputStream(ByteArrayInputStream(batch.gzipBody)).use { String(it.readBytes(), Charsets.UTF_8) }
+            val array = JSONArray(text)
+            (0 until array.length()).map { plain(array.get(it)) as Map<String, Any?> }
+        }
 
         // Meta then FullSnapshot first; two snapshots (Login, Feed); mutations; touches.
         assertEquals(listOf(4, 2), events.take(2).map { it["type"] })
@@ -244,10 +253,27 @@ class ReplayChunkExportTest {
         assertFalse("input text leaked into the recording", json.contains("alice@example.com"))
         assertTrue("masked input should be written as asterisks", Regex("\"\\*{14}\"").containsMatchIn(json))
 
+        // The playground export and tools/replay-viewer still read the old chunk-attributes shape: one object per batch.
+        val attributes = batches.mapIndexed { index, batch ->
+            val own = events.filter { e -> (e["timestamp"] as? Number)?.toLong() in batch.firstTsMs..batch.lastTsMs }
+            linkedMapOf(
+                "seq" to index,
+                "start" to batch.firstTsMs,
+                "end" to batch.lastTsMs,
+                "full_snapshot" to own.any { it["type"] == 2 },
+                "platform" to "android",
+                "events" to own,
+            )
+        }
         val dir = File("build/replay-export").apply { mkdirs() }
         File(dir, "replay-chunks.json").writeText(Json.encode(attributes, Json.REPLAY_MAX_DEPTH))
-        // The same recording as the backend returns it (items wrapping the chunk attributes).
-        File(dir, "replay-items.json").writeText("[" + chunks.joinToString(",") { it.toJson() } + "]")
+    }
+
+    private fun plain(value: Any?): Any? = when (value) {
+        is JSONObject -> value.keys().asSequence().associateWith { plain(value.get(it)) }
+        is JSONArray -> (0 until value.length()).map { plain(value.get(it)) }
+        JSONObject.NULL -> null
+        else -> value
     }
 
     private companion object {

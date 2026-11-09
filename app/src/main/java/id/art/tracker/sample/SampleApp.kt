@@ -4,7 +4,10 @@ import android.app.Application
 import android.util.Log
 import id.art.tracker.ARTracker
 import id.art.tracker.ARTrackerConfig
+import id.art.tracker.ARTrackerSender
 import id.art.tracker.BeforeSend
+import id.art.tracker.ExperimentalARTrackerApi
+import id.art.tracker.NetworkConfig
 import id.art.tracker.ReplayConfig
 import id.art.tracker.playground.settings.PlaygroundSettings
 
@@ -20,6 +23,7 @@ object SampleApp {
      * [endpoint] must already be the resolved one (see `Bootstrap`).
      * Returns true when [ARTracker.init] was called.
      */
+    @OptIn(ExperimentalARTrackerApi::class)
     fun initTracker(
         app: Application,
         endpoint: String,
@@ -27,28 +31,32 @@ object SampleApp {
         debug: Boolean,
         settings: PlaygroundSettings? = null,
         beforeSend: BeforeSend? = null,
+        sender: ARTrackerSender? = null,
     ): Boolean {
         if (key.isBlank()) {
             Log.w(TAG, "artracker.key is not set in local.properties; ARTracker is not initialised")
             return false
         }
-        ARTracker.init(app, config(endpoint, key, debug, settings, beforeSend))
+        ARTracker.init(app, config(endpoint, key, debug, settings, beforeSend, sender))
         return true
     }
 
     /** The demo configuration; `debug` is passed through, never hard-coded. */
+    @OptIn(ExperimentalARTrackerApi::class)
     fun config(
         endpoint: String,
         key: String,
         debug: Boolean,
         settings: PlaygroundSettings? = null,
         beforeSend: BeforeSend? = null,
-    ): ARTrackerConfig = settings?.toConfig(endpoint, key, debug, beforeSend) ?: ARTrackerConfig(
+        sender: ARTrackerSender? = null,
+    ): ARTrackerConfig = settings?.toConfig(endpoint, key, debug, beforeSend, sender) ?: ARTrackerConfig(
         endpoint = endpoint,
         apiKey = key,
         environment = "sample",
         debug = debug,
         replay = ReplayConfig(enabled = true, sampleRate = 1.0, framesPerSecond = 1.0),
+        network = NetworkConfig(sender = sender),
         beforeSend = beforeSend,
     )
 }

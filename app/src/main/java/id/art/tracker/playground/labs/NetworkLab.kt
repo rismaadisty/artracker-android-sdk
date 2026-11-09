@@ -1,5 +1,6 @@
 package id.art.tracker.playground.labs
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +21,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import id.art.tracker.R
 import id.art.tracker.playground.local.LocalServersProvider
+import id.art.tracker.playground.local.NetworkInspector
 import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 import id.art.tracker.playground.ui.ActionCard
 import id.art.tracker.sample.SampleHttp
@@ -55,6 +57,16 @@ fun NetworkLab(modifier: Modifier = Modifier) {
             ),
             style = MaterialTheme.typography.bodySmall,
         )
+        // Debug builds only: the SDK's own deliveries (POST /api/v1/ingest) are visible in Chucker.
+        NetworkInspector.launchIntent(context)?.let { intent ->
+            ActionCard(
+                "Buka Chucker",
+                "layar Network Activity: setiap pengiriman batch SDK ke endpoint (POST /api/v1/ingest) tampil di sini",
+            ) {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                "membuka Chucker"
+            }
+        }
         if (base == null) {
             Text(stringResource(R.string.lab_network_unavailable), style = MaterialTheme.typography.bodyMedium)
         } else {

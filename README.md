@@ -121,7 +121,7 @@ SDK uninitialised and every other call a no-op; each validation error is logged 
 | `debug` | `false` | SDK logs to logcat (tag `ARTracker`) |
 | `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0)` | `framesPerSecond` is clamped to 0.5..4.0; NaN or infinity is rejected |
 | `privacy` | `PrivacyConfig(maskAllInputs = true, maskAllText = false, sensitiveViewClasses = emptySet())` | See "Masking" |
-| `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false)` | Used by the OkHttp interceptor. `captureHeaders` is reserved: headers are never captured |
+| `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false, sender = null)` | The first four are used by the OkHttp interceptor; `captureHeaders` is reserved: headers are never captured. `sender` replaces the transport, see "Custom transport" |
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
 | `sessionTimeoutMs` | `1_800_000` | Idle timeout (30 min), minimum 1000; a session never lasts more than 24 h |
 | `beforeSend` | `null` | `BeforeSend { item -> item }`: modify an item, or return `null` to drop it. Runs before the item is queued |
@@ -166,6 +166,57 @@ captures headers, returns the response untouched and rethrows exceptions unchang
 parameters are stripped from the URL, the fragment is removed, and calls to the ARTracker endpoint host are skipped.
 Tune it with `NetworkConfig(ignoreHosts = ..., sampleRate = ..., captureOnlyErrors = ...)`. OkHttp is not a dependency
 of the SDK: your app must provide it.
+
+## Custom transport (Chucker, pinning, proxies)
+
+By default the SDK sends its requests with `HttpURLConnection`: no extra dependency and nothing to configure. To send
+them through your own HTTP stack, pass an `ARTrackerSender` in `NetworkConfig`; it carries the ingest batches and the
+session replay upload (`chunk-url`, the `PUT` to the signed URL, `chunk-ack`). The API is **experimental**
+(`@OptIn(ExperimentalARTrackerApi::class)`). `ARTrackerOkHttpSender` wraps an `OkHttpClient`, so whatever interceptors
+that client has (Chucker, a certificate pinner, a proxy, custom timeouts) apply to the SDK's own requests too:
+
+```kotlin
+@OptIn(ExperimentalARTrackerApi::class)
+fun initTracker(app: Application) {
+    val client = OkHttpClient.Builder()
+        .followRedirects(false)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .addInterceptor(ChuckerInterceptor.Builder(app).redactHeaders("X-Artracker-Key").build())
+        .build()
+    ARTracker.init(
+        app,
+        ARTrackerConfig(
+            endpoint = "https://ingest.example.com",
+            apiKey = "art_live_...",
+            network = NetworkConfig(sender = ARTrackerOkHttpSender(client)),
+        ),
+    )
+}
+```
+
+- Use Chucker in debug builds only: `debugImplementation("com.github.chuckerteam.chucker:library:4.2.0")` and
+  `releaseImplementation("...:library-no-op:4.2.0")`, and pass `sender = null` in release (the demo app does this, see
+  `NetworkInspector`).
+- **Chucker version**: Chucker 4.3.0 and later depend on OkHttp 5 and ship Java 21 bytecode. Against the OkHttp 4.12 this
+  SDK is built with (and a JDK 17 unit-test JVM) use Chucker **4.2.0**. Mixing OkHttp 4 and 5 also breaks
+  `mockwebserver` 4.x in unit tests.
+- Do not add `ARTrackerOkHttpInterceptor` to that client to see the SDK's traffic: the SDK's own requests are tagged and
+  skipped by the interceptor on purpose, otherwise each delivery would be reported as an `http_request` that is delivered
+  again, forever. Chucker (or any other interceptor) sees them normally.
+- A custom `ARTrackerSender` must honour `SendRequest.method` (`POST`, and `PUT` for the replay upload), the headers and the
+  body. It returns the HTTP status, the raw `Retry-After` header and the response body (`SendResponse.body`, up to 16 KiB:
+  the replay `chunk-url` step reads the signed upload URL from it) and throws `IOException` for a network failure; the
+  SDK maps the status exactly as for the built-in transport. It must not follow redirects or retry on its own, and should
+  use timeouts: it runs on a background thread and a hung call stalls delivery. A sender that always POSTs, or drops the
+  response body, breaks the replay upload (batches are retried, then dropped); the API key is never on the `PUT`.
+- The sender is used while `ARTracker.init` ran in the current process. A background flush started by WorkManager in a
+  process where `init` did not run falls back to the built-in transport, because a sender cannot be persisted, and so does
+  not show up in Chucker.
+- Verified on a physical device (Android 14, Chucker 4.2.0): Chucker records every delivery (`POST /api/v1/ingest`), decodes
+  the `gzip` request body and shows the JSON batch, and `redactHeaders("X-Artracker-Key")` masks the key. On Android 13
+  and later the notification only appears after the notification permission is granted; the Chucker screen itself can
+  always be opened with `Chucker.getLaunchIntent(context)` (the demo app has a button for it).
 
 ## Masking
 
@@ -220,9 +271,13 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
 - **Not captured**: bitmaps, WebView content, SurfaceView/TextureView/video/map content, original text of masked views.
 - **Cost control**: capture runs only when the screen was drawn since the last tick, with an 8 ms main-thread budget
   watchdog that halves the frame rate, at most 2000 nodes and depth 50 per frame, and stops in the background. Chunks
-  (`session` item `replay_chunk`, at most 24 KB) are flushed every 5 s or at 20 KB.
+  are merged into per-session batches (closed at 256 KB or 10 s), gzipped as a JSON array of rrweb events, queued in a
+  separate `artracker_replay.db` and uploaded through the backend's Session Replay API (`chunk-url`, `PUT`,
+  `chunk-ack`), at most 5 MiB per upload. Replay is no longer sent to `/api/v1/ingest`, so a backend without the
+  replay endpoints shows no replays until it is upgraded. Replay uploads go through your `ARTrackerSender` when you set
+  one (so Chucker, certificate pinning and proxies see them), otherwise through the built-in `HttpURLConnection`.
 - **Privacy model**: layer 1 is the walker (UI masking above, applied before anything is stored); layer 2 is the
-  attribute redactor for everything else. Replay chunks skip layer 2 because they are already masked; only their
+  attribute redactor for everything else. Replay batches skip layer 2 because they are already masked; only their
   screen `href` (`android://<screen>`) is sanitised (URL scrubbing, id masking).
 
 ## Crash, ANR and offline behaviour
@@ -247,7 +302,7 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Session | `session` | `session_start` / `session_end` | device metadata |
-| Replay | `session` | `replay_chunk` | at most 24 KB |
+| Replay | *(not an ingest item)* | rrweb batch via the Session Replay API | at most 5 MiB gzipped per upload |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |
 | Low-memory kill (API 30+) | `log` | `warn`, name `low_memory_kill` | from `ApplicationExitInfo` |
@@ -366,6 +421,8 @@ The `:app` module is an interactive playground for the SDK. It never changes `:a
 `BACKEND` to a remote host needs a typed confirmation (`KIRIM`) in Settings and is valid for **one process start**: the next
 launch falls back to `SINK`. Load and fake-PII actions are disabled while the endpoint is remote. Before a remote endpoint
 starts, the SDK's local queue is wiped, because the SDK flushes leftovers right after `init`.
+
+**Network inspection**: debug builds deliver the SDK's batches through an OkHttp client with Chucker (`NetworkInspector`). Open it from the *Lab* tab, *Jaringan* entry, with *Buka Chucker*, or from Chucker's notification (Android 13 and later need the notification permission). Release builds use Chucker's no-op artifact and the built-in transport.
 
 **Tabs**: *Skenario* (six scripted flows with real taps), *Lab* (event and log, privacy and masking, replay, network, queue,
 crash, session, identity and opt-out, and the legacy XML screen), *Inspector* (what the SDK **sent**, read from the sink after

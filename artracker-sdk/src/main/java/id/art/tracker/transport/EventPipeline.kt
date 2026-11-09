@@ -2,6 +2,7 @@ package id.art.tracker.transport
 
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.BeforeSend
+import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.Clock
 import id.art.tracker.core.MAX_MESSAGE
@@ -9,7 +10,6 @@ import id.art.tracker.core.MAX_NAME
 import id.art.tracker.core.SdkLog
 import id.art.tracker.core.limit
 import id.art.tracker.privacy.AttributeRedactor
-import id.art.tracker.isReplayChunk
 import id.art.tracker.priority
 import id.art.tracker.toJson
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,8 +37,7 @@ import kotlinx.coroutines.withContext
  *
  * - [enqueue] only does a `trySend` into a bounded channel (capacity 1000, oldest dropped on overflow), so the
  *   caller is never blocked and nothing here throws.
- * - One consumer coroutine runs `beforeSend`, the attribute redactor (except for the SDK's `replay_chunk` session
- *   items, see `isReplayChunk`) and builds the
+ * - One consumer coroutine runs `beforeSend`, the attribute redactor and builds the
  *   [StoredItem]s, which it persists in groups of up to [GROUP_SIZE] or [GROUP_WINDOW_MS] (whichever is first),
  *   as a single `queue.insert(list)`. A group holding a priority-0 item (crash/fatal) is persisted at once.
  * - A second coroutine performs flushes. A flush is requested right after persisting a priority-0 item or when
@@ -56,6 +55,11 @@ internal class EventPipeline(
     private val beforeSend: BeforeSend?,
     private val flushIntervalMs: Long,
     private val flushContext: CoroutineContext = EmptyCoroutineContext,
+    /**
+     * Called on the caller's thread for every ERROR / FATAL item the pipeline accepts (the replay recorder flags its
+     * open batch with it). Must be cheap; a throwing hook never affects [enqueue].
+     */
+    private val onItemAccepted: ((TelemetryItem) -> Unit)? = null,
 ) {
     /** Idle accounting: [settled] counts items fully handled (persisted, dropped, or evicted from the channel). */
     private data class Progress(
@@ -109,6 +113,7 @@ internal class EventPipeline(
         val seq = accepted.incrementAndGet()
         return try {
             if (channel.trySend(Queued(item, seq)).isSuccess) {
+                notifyAccepted(item)
                 true
             } else {
                 settle(1)
@@ -118,6 +123,12 @@ internal class EventPipeline(
             settle(1)
             false
         }
+    }
+
+    private fun notifyAccepted(item: TelemetryItem) {
+        val hook = onItemAccepted ?: return
+        if (item.level != LogLevel.ERROR && item.level != LogLevel.FATAL) return
+        runCatching { hook(item) }
     }
 
     /** Starts the foreground flush timer; flushes only when something is pending. Idempotent. */
@@ -323,18 +334,14 @@ internal class EventPipeline(
                     original
                 }
             }
-            val safe = if (item.isReplayChunk()) {
-                item
-            } else {
-                // Name and message are free text too (log(), captureException(), track(name), ExitInfo description):
-                // the same redaction as the attributes. Redaction can lengthen a string (a***@x.y), so the factory's
-                // limits are applied again. Any throw drops the whole item (fail closed), like the attributes.
-                item.copy(
-                    name = AttributeRedactor.redactString(item.name).limit(MAX_NAME),
-                    message = item.message?.let { AttributeRedactor.redactString(it).limit(MAX_MESSAGE) },
-                    attributes = AttributeRedactor.redact(item.attributes),
-                )
-            }
+            // Name and message are free text too (log(), captureException(), track(name), ExitInfo description):
+            // the same redaction as the attributes. Redaction can lengthen a string (a***@x.y), so the factory's
+            // limits are applied again. Any throw drops the whole item (fail closed), like the attributes.
+            val safe = item.copy(
+                name = AttributeRedactor.redactString(item.name).limit(MAX_NAME),
+                message = item.message?.let { AttributeRedactor.redactString(it).limit(MAX_MESSAGE) },
+                attributes = AttributeRedactor.redact(item.attributes),
+            )
             StoredItem(
                 id = safe.id,
                 priority = safe.priority(),

@@ -46,6 +46,10 @@ android {
 
 kotlin {
     explicitApi()
+    compilerOptions {
+        // The SDK itself uses its experimental API (NetworkConfig.sender); only hosts get the warning.
+        optIn.add("id.art.tracker.ExperimentalARTrackerApi")
+    }
 }
 
 dependencies {

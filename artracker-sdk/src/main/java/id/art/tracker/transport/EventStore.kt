@@ -127,7 +127,7 @@ internal class EventStore(
     }
 
     /**
-     * Drops pending items, lowest value first (replay_chunk, then event/session, then error logs; oldest
+     * Drops pending items, lowest value first (event/session, then error logs; oldest
      * first within a priority) until both limits hold. Priority 0 and in-flight items are never evicted.
      */
     private fun evictIfNeeded(db: SQLiteDatabase) {

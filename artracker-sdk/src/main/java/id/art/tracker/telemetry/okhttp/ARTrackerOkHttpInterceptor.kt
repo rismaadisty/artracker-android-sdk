@@ -33,6 +33,8 @@ public class ARTrackerOkHttpInterceptor internal constructor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
+        // The SDK's own delivery (ARTrackerOkHttpSender): reporting it would feed itself forever.
+        if (request.tag(SdkRequestTag::class.java) != null) return chain.proceed(request)
         val startMs = safeNow()
         val response = try {
             chain.proceed(request)

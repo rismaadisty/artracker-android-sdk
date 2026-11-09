@@ -69,16 +69,20 @@ public class PrivacyConfig @JvmOverloads constructor(
 )
 
 /**
- * Network capture settings used by `ARTrackerOkHttpInterceptor`.
+ * Network settings: what `ARTrackerOkHttpInterceptor` captures, and how batches are delivered.
  *
  * [captureHeaders] is reserved: headers are never captured today, whatever its value.
  * [ignoreHosts] are matched exactly against the request host, ignoring case.
+ * [sender] replaces the transport that posts batches to the ingest endpoint (null = the built-in `HttpURLConnection`
+ * transport). See [ARTrackerSender].
  */
 public class NetworkConfig @JvmOverloads constructor(
     public val captureHeaders: Boolean = false,
     public val ignoreHosts: Set<String> = emptySet(),
     public val sampleRate: Double = 1.0,
     public val captureOnlyErrors: Boolean = false,
+    @property:ExperimentalARTrackerApi
+    public val sender: ARTrackerSender? = null,
 )
 
 private const val KEY_PREFIX: String = "art_live_"

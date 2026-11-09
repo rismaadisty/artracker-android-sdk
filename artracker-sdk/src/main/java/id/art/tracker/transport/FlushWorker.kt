@@ -3,6 +3,7 @@ package id.art.tracker.transport
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.Clock
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SdkLog
@@ -18,6 +19,10 @@ import kotlinx.coroutines.withContext
 internal object FlusherRegistry {
     @Volatile
     var current: Flusher? = null
+
+    /** The live [ReplayFlusher]; set when the core first needs the replay queue, so absent if replay was never used. */
+    @Volatile
+    var replay: ReplayFlusher? = null
 }
 
 /**
@@ -30,12 +35,11 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
         // Flusher blocks its thread on HTTP, so never run it on the default (CPU) dispatcher.
         return withContext(Dispatchers.IO) {
             try {
+                val config = TransportConfigStore(SharedPrefsStore(applicationContext, TransportConfigStore.PREFS_NAME)).load()
                 val registered = FlusherRegistry.current
-                if (registered != null) {
-                    flush(registered)
-                } else {
-                    runStandalone()
-                }
+                val ingest = if (registered != null) registered.flushAll() else config?.let { runStandalone(it) }
+                val replay = flushReplay(config)
+                result(ingest, replay)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -47,9 +51,8 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
         }
     }
 
-    private suspend fun runStandalone(): Result {
-        val config = TransportConfigStore(SharedPrefsStore(applicationContext, TransportConfigStore.PREFS_NAME)).load()
-            ?: return Result.success()
+    /** Null when there is nothing to do (no saved configuration, or the event store cannot be opened). */
+    private suspend fun runStandalone(config: TransportConfigStore.Saved): FlushOutcome? {
         val clock = Clock.SYSTEM
         // Deliberately no resetOrphanedBatches(): that is for SDK init only. In a process without init() another
         // process-wide store may hold in-flight batches that must not be handed out twice.
@@ -57,7 +60,7 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
             EventStore(applicationContext, clock)
         } catch (e: Exception) {
             SdkLog.w("opening event store failed", e)
-            return Result.success()
+            return null
         }
         try {
             val killSwitch = KillSwitch(SharedPrefsStore(applicationContext, TransportConfigStore.PREFS_NAME), clock)
@@ -78,15 +81,48 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
                 // We are the background scheduler: a failure is retried through Result.retry() below.
                 scheduler = BackgroundScheduler { },
             )
-            return flush(flusher)
+            return flusher.flushAll()
         } finally {
             store.close()
         }
     }
 
-    private suspend fun flush(flusher: Flusher): Result =
-        when (flusher.flushAll()) {
-            FlushOutcome.FAILED, FlushOutcome.PAUSED -> Result.retry()
-            FlushOutcome.EMPTY, FlushOutcome.SENT, FlushOutcome.DROPPED, FlushOutcome.DISABLED -> Result.success()
+    /**
+     * Uploads queued replay batches. The live process's [ReplayFlusher] is reused; in a fresh process one is built from
+     * the saved configuration, but only when a replay database exists (opening one would create it). Null when there
+     * is nothing to upload.
+     */
+    private suspend fun flushReplay(config: TransportConfigStore.Saved?): FlushOutcome? {
+        FlusherRegistry.replay?.let { return it.flushAll() }
+        // A live core owns the replay queue and uploads it itself: a second flusher beside it would double the uploads in
+        // flight and make two SQLite connections compete for the write lock.
+        if (ARTrackerCore.instanceOrNull() != null) return null
+        config ?: return null
+        if (!applicationContext.getDatabasePath(ReplayStore.DB_NAME).exists()) return null
+        val clock = Clock.SYSTEM
+        // Like the ingest path: no resetOrphaned(), another process-wide store may hold batches in flight.
+        val store = try {
+            ReplayStore(applicationContext, clock)
+        } catch (e: Exception) {
+            SdkLog.w("opening replay store failed", e)
+            return null
         }
+        try {
+            val flusher = ReplayFlusher(
+                queue = store,
+                sender = ReplayClient(config.endpoint, config.apiKey),
+                killSwitch = KillSwitch(SharedPrefsStore(applicationContext, TransportConfigStore.PREFS_NAME), clock),
+                clock = clock,
+                backoff = Backoff(),
+                scheduler = BackgroundScheduler { },
+            )
+            return flusher.flushAll()
+        } finally {
+            store.close()
+        }
+    }
+
+    /** The worst outcome of the two queues decides: a failed or paused one is retried by WorkManager. */
+    private fun result(vararg outcomes: FlushOutcome?): Result =
+        if (outcomes.any { it == FlushOutcome.FAILED || it == FlushOutcome.PAUSED }) Result.retry() else Result.success()
 }

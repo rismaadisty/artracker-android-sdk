@@ -47,7 +47,7 @@ class ReplayChunkerTest {
 
     @Test
     fun chunksUnder24KB() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         val random = Random(1)
         val out = ArrayList<Map<String, Any?>>()
         var expectedEvents = 0
@@ -78,7 +78,7 @@ class ReplayChunkerTest {
 
     @Test
     fun seqIncrements() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         val out = ArrayList<Map<String, Any?>>()
         repeat(40) { out += chunker.add(mutation(it.toLong(), 3_000), false) }
         out += chunker.drain()
@@ -90,7 +90,7 @@ class ReplayChunkerTest {
 
     @Test
     fun startAndEnd_areFirstAndLastTimestamps() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         chunker.add(mutation(1_000, 10), false)
         chunker.add(mutation(1_500, 10), false)
         chunker.add(mutation(2_000, 10), false)
@@ -103,7 +103,7 @@ class ReplayChunkerTest {
 
     @Test
     fun flushesAt20KB() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         val emitted = ArrayList<Map<String, Any?>>()
         var added = 0
         while (emitted.isEmpty() && added < 100) {
@@ -119,12 +119,12 @@ class ReplayChunkerTest {
 
     @Test
     fun drain_ofEmptyChunker_isEmpty() {
-        assertTrue(ReplayChunker().drain().isEmpty())
+        assertTrue(ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024).drain().isEmpty())
     }
 
     @Test
     fun fullSnapshotStartsNewChunk() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         assertTrue(chunker.add(mutation(1, 10), false).isEmpty())
         val closed = chunker.add(meta(2), false) // Meta opens the snapshot sequence
         assertEquals(1, closed.size)
@@ -139,7 +139,7 @@ class ReplayChunkerTest {
 
     @Test
     fun fullSnapshotWithoutMeta_alsoStartsNewChunk() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         chunker.add(mutation(1, 10), false)
         val closed = chunker.add(bigSnapshot(1, 1, 3), true)
         assertEquals(1, closed.size)
@@ -150,7 +150,7 @@ class ReplayChunkerTest {
     fun oversizedEvent_isTrimmedAndFlagged() {
         val snapshot = bigSnapshot(40, 20)
         assertTrue(Json.encode(snapshot, Json.REPLAY_MAX_DEPTH).length > limit)
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         val out = chunker.add(meta(999), false) + chunker.add(snapshot, true) + chunker.drain()
         val chunk = out.single { c -> events(c).any { it["type"] == 2 } }
         assertTrue(bytes(chunk) <= limit)
@@ -184,7 +184,7 @@ class ReplayChunkerTest {
 
     @Test
     fun untrimmableEvent_isDroppedAndReported() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         chunker.add(mutation(1, 10), false)
         assertTrue(chunker.add(mutation(2, 30_000), false).isEmpty())
         assertTrue(chunker.consumeDropped())
@@ -194,7 +194,7 @@ class ReplayChunkerTest {
 
     @Test
     fun measuredSize_equalsSerializedSize() {
-        val chunker = ReplayChunker()
+        val chunker = ReplayChunker(maxBytes = 24 * 1024, flushAtBytes = 20 * 1024)
         val random = Random(3)
         var checked = 0
         for (i in 0 until 300) {

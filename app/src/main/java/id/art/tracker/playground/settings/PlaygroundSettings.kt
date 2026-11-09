@@ -1,7 +1,9 @@
 package id.art.tracker.playground.settings
 
 import id.art.tracker.ARTrackerConfig
+import id.art.tracker.ARTrackerSender
 import id.art.tracker.BeforeSend
+import id.art.tracker.ExperimentalARTrackerApi
 import id.art.tracker.NetworkConfig
 import id.art.tracker.PrivacyConfig
 import id.art.tracker.ReplayConfig
@@ -48,7 +50,14 @@ data class PlaygroundSettings(
         EndpointGuard.classify(endpointFor(backendEndpoint)) == EndpointClass.REMOTE
 
     /** [endpoint] is already resolved by Bootstrap. */
-    fun toConfig(endpoint: String, apiKey: String, debug: Boolean, beforeSend: BeforeSend? = null): ARTrackerConfig =
+    @OptIn(ExperimentalARTrackerApi::class)
+    fun toConfig(
+        endpoint: String,
+        apiKey: String,
+        debug: Boolean,
+        beforeSend: BeforeSend? = null,
+        sender: ARTrackerSender? = null,
+    ): ARTrackerConfig =
         ARTrackerConfig(
             endpoint = endpoint,
             apiKey = apiKey,
@@ -60,6 +69,7 @@ data class PlaygroundSettings(
                 ignoreHosts = ignoreHosts,
                 sampleRate = networkSampleRate,
                 captureOnlyErrors = captureOnlyErrors,
+                sender = sender,
             ),
             flushIntervalMs = flushIntervalMs,
             sessionTimeoutMs = sessionTimeoutMs,
