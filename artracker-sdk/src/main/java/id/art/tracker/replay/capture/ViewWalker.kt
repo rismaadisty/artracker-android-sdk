@@ -15,6 +15,7 @@ import android.widget.VideoView
 import id.art.tracker.privacy.MaskDecision
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.privacy.ViewMaskRules
+import id.art.tracker.replay.model.ImageFit
 import id.art.tracker.replay.model.TextAlignment
 import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
@@ -43,6 +44,7 @@ internal class ViewWalker(
     private val composeWalker: ComposeWalkerApi? = null,
     private val maxNodes: Int = 2000,
     private val maxDepth: Int = 50,
+    private val icons: IconRasterizer = IconRasterizer.shared,
 ) {
     private var count = 0
     private var capped = false
@@ -52,6 +54,7 @@ internal class ViewWalker(
     fun walk(root: View): Wireframe? {
         count = 0
         capped = false
+        icons.beginFrame()
         return try {
             node(root, 0, false)
         } catch (_: Throwable) {
@@ -130,14 +133,22 @@ internal class ViewWalker(
         val background = look?.color
         val elevationDp = (view.elevation / density).takeIf { it > 0f }
         val clip = view.clipToOutline
+        var image: String? = null
+        var imageFit: ImageFit? = null
+        if (!masked && view is ImageView) {
+            val d = view.drawable
+            if (d != null) image = icons.forDrawable(d, view.imageTintList, view.drawableState, w, h)
+            if (image != null) imageFit = fitOf(view.scaleType)
+        }
         val visual = VisualStyle(
             gradient = look?.gradient, radiiDp = look?.radiiDp,
             borderWidthDp = look?.borderWidthDp, borderColor = look?.borderColor,
             shadowDp = elevationDp, clip = clip,
             italic = italic, textAlign = textAlign, lineHeightDp = lineHeightDp, wrap = wrap,
+            image = image, imageFit = imageFit,
         ).takeIf { it != EMPTY_VISUAL }
 
-        val children = if (view is ViewGroup) {
+        var children: List<Wireframe> = if (view is ViewGroup) {
             val childCount = view.childCount
             val list = ArrayList<Wireframe>(childCount)
             for (i in 0 until childCount) {
@@ -149,12 +160,55 @@ internal class ViewWalker(
             emptyList()
         }
 
+        if (!masked && view is TextView) children = children + compoundIcons(view, id, x, y, density)
+
         return Wireframe(
             id = id, x = x, y = y, width = w, height = h,
             type = typeOf(view),
             text = text, textColor = textColor, textSizeSp = textSizeSp, fontWeight = fontWeight,
             visual = visual, background = background, alpha = alpha, masked = masked, children = children,
         )
+    }
+
+    private fun fitOf(type: ImageView.ScaleType): ImageFit = when (type) {
+        ImageView.ScaleType.CENTER_CROP -> ImageFit.COVER
+        ImageView.ScaleType.FIT_XY -> ImageFit.FILL
+        else -> ImageFit.CONTAIN
+    }
+
+    /**
+     * Icons drawn by a TextView next to its text (`drawableStart`, a `MaterialButton` icon...), as child nodes placed
+     * the way `TextView.onDraw` places them. Only real icons (see [IconRasterizer]); the others are left out.
+     */
+    private fun compoundIcons(view: TextView, id: Int, x: Int, y: Int, density: Float): List<Wireframe> {
+        val drawables = view.compoundDrawables
+        if (drawables.all { it == null }) return emptyList()
+        val tint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) view.compoundDrawableTintList else null
+        val out = ArrayList<Wireframe>(1)
+        drawables.forEachIndexed { index, d ->
+            if (d == null || count >= maxNodes) return@forEachIndexed
+            val wPx = d.bounds.width()
+            val hPx = d.bounds.height()
+            val w = dp(wPx, density)
+            val h = dp(hPx, density)
+            val uri = icons.forDrawable(d, tint, view.drawableState, w, h) ?: return@forEachIndexed
+            val innerW = view.width - view.compoundPaddingLeft - view.compoundPaddingRight
+            val innerH = view.height - view.compoundPaddingTop - view.compoundPaddingBottom
+            val (ox, oy) = when (index) {
+                0 -> view.paddingLeft to view.compoundPaddingTop + (innerH - hPx) / 2
+                1 -> view.compoundPaddingLeft + (innerW - wPx) / 2 to view.paddingTop
+                2 -> view.width - view.paddingRight - wPx to view.compoundPaddingTop + (innerH - hPx) / 2
+                else -> view.compoundPaddingLeft + (innerW - wPx) / 2 to view.height - view.paddingBottom - hPx
+            }
+            count++
+            out.add(
+                Wireframe(
+                    id = 31 * id + 1 + index, x = x + dp(ox, density), y = y + dp(oy, density), width = w, height = h,
+                    type = WireframeType.IMAGE, visual = VisualStyle(image = uri, imageFit = ImageFit.CONTAIN),
+                ),
+            )
+        }
+        return out
     }
 
     /** CSS weight of [typeface]: the real weight on API 28+, else bold/regular from its style. */
