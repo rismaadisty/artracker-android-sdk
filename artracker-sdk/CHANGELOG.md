@@ -14,8 +14,12 @@ versions follow semantic versioning (`0.x`: the API may still change).
   `replay_chunk` handling was removed from the ingest pipeline.
 - **Breaking for older backends:** a backend without the replay endpoints answers `404`, so replay batches are dropped and
   no replay is shown until the backend is upgraded. Ingest events are unaffected.
-- Replay uploads always use the built-in `HttpURLConnection`: a custom `ARTrackerSender` (its contract is `POST` only) and
-  therefore host certificate pinning, proxy or Chucker do not cover them.
+- Replay uploads go through `NetworkConfig.sender` when one is set, so Chucker, certificate pinning and proxies cover them
+  too. **Contract change of the experimental `ARTrackerSender`:** `SendRequest` gained `method` (`POST`, or `PUT` for the
+  replay upload; default `POST`) and `SendResponse` gained `body` (the start of the response, up to 16 KiB; the replay
+  `chunk-url` step needs it). A custom sender must honour the method and return the body, otherwise the replay upload
+  fails (retried, then dropped); ingest is unaffected. `ARTrackerOkHttpSender` already does both. Without a sender the
+  built-in `HttpURLConnection` is used, as before.
 
 ### Added
 

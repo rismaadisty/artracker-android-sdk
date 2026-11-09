@@ -7,6 +7,11 @@ import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.ARTracker
 import id.art.tracker.ARTrackerConfig
+import id.art.tracker.ARTrackerSender
+import id.art.tracker.NetworkConfig
+import id.art.tracker.telemetry.okhttp.ARTrackerOkHttpSender
+import java.util.concurrent.CopyOnWriteArrayList
+import okhttp3.OkHttpClient
 import id.art.tracker.ReplayConfig
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.ClassAvailability
@@ -76,7 +81,7 @@ class ReplayIntegrationTest {
         }
     }
 
-    private fun startRecording() {
+    private fun startRecording(sender: ARTrackerSender? = null) {
         ARTracker.init(
             app,
             ARTrackerConfig(
@@ -85,6 +90,7 @@ class ReplayIntegrationTest {
                 environment = "test",
                 appVersion = "1.0",
                 replay = ReplayConfig(enabled = true, sampleRate = 1.0),
+                network = NetworkConfig(sender = sender),
             ),
         )
         ProcessLifecycleTestUtil.start()
@@ -136,6 +142,32 @@ class ReplayIntegrationTest {
         assertEquals(put.body.size, chunkUrl.getInt("size_bytes"))
         assertEquals(put.body.size, ack.getInt("size_bytes"))
         assertEquals(events.length(), ack.getInt("event_count"))
+    }
+
+    @Test
+    fun customSender_carriesTheReplayUploadToo() {
+        val delegate = ARTrackerOkHttpSender(OkHttpClient.Builder().followRedirects(false).build())
+        val seen = CopyOnWriteArrayList<Pair<String, String>>()
+        val sender = ARTrackerSender { request ->
+            seen += request.method to request.url.substringBefore('?').removePrefix(backend.endpoint)
+            delegate.send(request)
+        }
+        startRecording(sender)
+        closeBatch()
+        awaitCalls(FakeReplayBackend.ACK, 1)
+
+        // The three steps went through the host's sender (so Chucker, pinning or a proxy see them)...
+        val replaySteps = seen.filter { it.second.startsWith("/api/v1/replay/") }
+        assertEquals(
+            listOf("POST" to FakeReplayBackend.CHUNK_URL, "PUT" to FakeReplayBackend.UPLOAD, "POST" to FakeReplayBackend.ACK),
+            replaySteps,
+        )
+        // ...and still arrived intact, with the key only on the two POSTs.
+        assertNull(backend.requestsTo(FakeReplayBackend.UPLOAD).single().header("X-Artracker-Key"))
+        assertEquals(
+            backend.requestsTo(FakeReplayBackend.UPLOAD).single().body.size,
+            backend.requestsTo(FakeReplayBackend.ACK).single().json().getInt("size_bytes"),
+        )
     }
 
     @Test

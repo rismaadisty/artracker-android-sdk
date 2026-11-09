@@ -35,6 +35,14 @@ class CustomSenderAdapterTest {
         adapter(answering(status, retryAfter)).send(body)
 
     @Test
+    fun ingestDeliveries_arePosts() {
+        val recorder = answering(202)
+        adapter(recorder).send(body)
+
+        assertEquals("POST", recorder.requests.single().method)
+    }
+
+    @Test
     fun status2xx_isAccepted() {
         for (status in listOf(200, 202, 204)) assertEquals("status $status", SendResult.Accepted, result(status))
     }

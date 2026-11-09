@@ -1,5 +1,7 @@
 package id.art.tracker.transport
 
+import id.art.tracker.ARTrackerSender
+import id.art.tracker.SendRequest
 import id.art.tracker.core.Iso8601
 import id.art.tracker.core.Json
 import id.art.tracker.core.SdkInfo
@@ -84,6 +86,8 @@ internal class ReplayClient(
     private val apiKey: String,
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 30_000,
+    /** The host's transport (`NetworkConfig.sender`); null uses `HttpURLConnection`. Same steps, same mapping. */
+    private val sender: ARTrackerSender? = null,
 ) : ReplaySender {
     private val chunkUrlUrl: URL? = ReplayEndpoint.url(endpoint, ReplayEndpoint.CHUNK_URL_PATH)
     private val chunkAckUrl: URL? = ReplayEndpoint.url(endpoint, ReplayEndpoint.CHUNK_ACK_PATH)
@@ -187,6 +191,7 @@ internal class ReplayClient(
         readBody: Boolean,
         contentType: String = "application/json",
     ): Response {
+        sender?.let { return sendThrough(it, step, target, method, payload, authenticated, contentType) }
         var conn: HttpURLConnection? = null
         try {
             conn = target.openConnection() as HttpURLConnection
@@ -217,6 +222,32 @@ internal class ReplayClient(
             throw Failed(ReplayResult.NetworkError(e))
         } finally {
             conn?.let { drainAndClose(it) }
+        }
+    }
+
+    /** The same request, made by the host's [ARTrackerSender]. Its failures map like the built-in transport's. */
+    private fun sendThrough(
+        sender: ARTrackerSender,
+        step: ReplayStep,
+        target: URL,
+        method: String,
+        payload: ByteArray,
+        authenticated: Boolean,
+        contentType: String,
+    ): Response {
+        val headers = LinkedHashMap<String, String>(4)
+        if (authenticated) headers["X-Artracker-Key"] = apiKey
+        headers["Content-Type"] = contentType
+        headers["User-Agent"] = "artracker-android/${SdkInfo.VERSION}"
+        try {
+            val response = sender.send(SendRequest(target.toString(), headers, payload, method))
+            return Response(response.statusCode, response.retryAfter, response.body)
+        } catch (e: IOException) {
+            throw Failed(ReplayResult.NetworkError(e))
+        } catch (e: Exception) {
+            // The sender is host code: not a known-permanent condition, so keep the batch and retry with backoff.
+            SdkLog.w("custom sender failed on replay ${step.name.lowercase()} (${e.javaClass.simpleName})")
+            throw Failed(ReplayResult.NetworkError(e))
         }
     }
 

@@ -73,6 +73,46 @@ class ARTrackerOkHttpSenderTest {
     }
 
     @Test
+    fun put_sendsTheMethodContentTypeAndBodyUnchanged() {
+        server.enqueue(MockResponse().setResponseCode(200))
+        val request = SendRequest(
+            url = server.url("/api/v1/replay/upload-chunk?key=k&sig=s").toString(),
+            headers = linkedMapOf("Content-Type" to "application/gzip", "User-Agent" to "artracker-android/test"),
+            body = body,
+            method = "PUT",
+        )
+
+        val response = ARTrackerOkHttpSender(client()).send(request)
+
+        assertEquals(200, response.statusCode)
+        val recorded = server.takeRequest(2, TimeUnit.SECONDS)!!
+        assertEquals("PUT", recorded.method)
+        assertEquals("/api/v1/replay/upload-chunk?key=k&sig=s", recorded.path)
+        assertEquals("application/gzip", recorded.getHeader("Content-Type"))
+        assertNull(recorded.getHeader("X-Artracker-Key"))
+        assertArrayEquals(body, recorded.body.readByteArray())
+    }
+
+    @Test
+    fun responseBody_isReturned_andCappedAtSixteenKiB() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{\"upload_url\":\"https://x/u\"}"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("x".repeat(40 * 1024)))
+
+        val small = ARTrackerOkHttpSender(client()).send(ingestRequest())
+        val big = ARTrackerOkHttpSender(client()).send(ingestRequest())
+
+        assertEquals("{\"upload_url\":\"https://x/u\"}", small.body)
+        assertEquals(16 * 1024, big.body!!.length)
+    }
+
+    @Test
+    fun noBody_isNull() {
+        server.enqueue(MockResponse().setResponseCode(202))
+
+        assertNull(ARTrackerOkHttpSender(client()).send(ingestRequest()).body)
+    }
+
+    @Test
     fun retryAfter_isExposedAsTheRawHeader() {
         server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "7"))
 

@@ -219,8 +219,9 @@ internal class ARTrackerCore(
     }
     private val replayQueue: ReplayStore by replayStoreLazy
     private val replayFlusherLazy = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        // Always the built-in transport: ARTrackerSender's contract is POST-only, and the upload needs a PUT.
-        ReplayFlusher(replayQueue, ReplayClient(config.endpoint, config.apiKey), killSwitch, clock, Backoff(), scheduler)
+        // The host's ARTrackerSender (when set) carries the replay upload too, so pinning, proxy and Chucker apply.
+        val client = ReplayClient(config.endpoint, config.apiKey, sender = config.network.sender)
+        ReplayFlusher(replayQueue, client, killSwitch, clock, Backoff(), scheduler)
             .also { FlusherRegistry.replay = it }
     }
     private val replayFlusher: ReplayFlusher by replayFlusherLazy

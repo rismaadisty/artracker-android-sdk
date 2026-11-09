@@ -169,8 +169,9 @@ of the SDK: your app must provide it.
 
 ## Custom transport (Chucker, pinning, proxies)
 
-By default the SDK posts batches with `HttpURLConnection`: no extra dependency and nothing to configure. To send them
-through your own HTTP stack, pass an `ARTrackerSender` in `NetworkConfig`. The API is **experimental**
+By default the SDK sends its requests with `HttpURLConnection`: no extra dependency and nothing to configure. To send
+them through your own HTTP stack, pass an `ARTrackerSender` in `NetworkConfig`; it carries the ingest batches and the
+session replay upload (`chunk-url`, the `PUT` to the signed URL, `chunk-ack`). The API is **experimental**
 (`@OptIn(ExperimentalARTrackerApi::class)`). `ARTrackerOkHttpSender` wraps an `OkHttpClient`, so whatever interceptors
 that client has (Chucker, a certificate pinner, a proxy, custom timeouts) apply to the SDK's own requests too:
 
@@ -203,9 +204,12 @@ fun initTracker(app: Application) {
 - Do not add `ARTrackerOkHttpInterceptor` to that client to see the SDK's traffic: the SDK's own requests are tagged and
   skipped by the interceptor on purpose, otherwise each delivery would be reported as an `http_request` that is delivered
   again, forever. Chucker (or any other interceptor) sees them normally.
-- A custom `ARTrackerSender` returns the HTTP status (and the raw `Retry-After` header) and throws `IOException` for a
-  network failure; the SDK maps the status exactly as for the built-in transport. It must not follow redirects or retry on
-  its own, and should use timeouts: it runs on a background thread and a hung call stalls delivery.
+- A custom `ARTrackerSender` must honour `SendRequest.method` (`POST`, and `PUT` for the replay upload), the headers and the
+  body. It returns the HTTP status, the raw `Retry-After` header and the response body (`SendResponse.body`, up to 16 KiB:
+  the replay `chunk-url` step reads the signed upload URL from it) and throws `IOException` for a network failure; the
+  SDK maps the status exactly as for the built-in transport. It must not follow redirects or retry on its own, and should
+  use timeouts: it runs on a background thread and a hung call stalls delivery. A sender that always POSTs, or drops the
+  response body, breaks the replay upload (batches are retried, then dropped); the API key is never on the `PUT`.
 - The sender is used while `ARTracker.init` ran in the current process. A background flush started by WorkManager in a
   process where `init` did not run falls back to the built-in transport, because a sender cannot be persisted, and so does
   not show up in Chucker.
@@ -270,8 +274,8 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
   are merged into per-session batches (closed at 256 KB or 10 s), gzipped as a JSON array of rrweb events, queued in a
   separate `artracker_replay.db` and uploaded through the backend's Session Replay API (`chunk-url`, `PUT`,
   `chunk-ack`), at most 5 MiB per upload. Replay is no longer sent to `/api/v1/ingest`, so a backend without the
-  replay endpoints shows no replays until it is upgraded. Replay uploads always use the built-in `HttpURLConnection`:
-  a custom `ARTrackerSender` (and so your certificate pinning, proxy or Chucker) covers `/ingest` only.
+  replay endpoints shows no replays until it is upgraded. Replay uploads go through your `ARTrackerSender` when you set
+  one (so Chucker, certificate pinning and proxies see them), otherwise through the built-in `HttpURLConnection`.
 - **Privacy model**: layer 1 is the walker (UI masking above, applied before anything is stored); layer 2 is the
   attribute redactor for everything else. Replay batches skip layer 2 because they are already masked; only their
   screen `href` (`android://<screen>`) is sanitised (URL scrubbing, id masking).

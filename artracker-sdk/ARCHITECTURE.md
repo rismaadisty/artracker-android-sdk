@@ -255,7 +255,7 @@ Mode screenshot dicatat sebagai pekerjaan masa depan (§13), bukan v1.
 - `ReplayChunker` memecah event menjadi chunk (batas 512 KB, ditutup di 64 KB). Chunk **bukan lagi item `session` di `/ingest`**: `ReplayBatcher` menggabung chunk per session menjadi batch (tutup di 256 KB JSON mentah atau 10 detik sejak event pertama, saat session berganti, atau saat recording berhenti), di-gzip sebagai **array event rrweb**, lalu disimpan di antrean `artracker_replay.db` dan dikirim lewat Session Replay API (§2). Batch gzip >5 MiB dibuang.
 - `seq` ditetapkan oleh `ReplayStore` dan dipersist per session, jadi melanjutkan setelah proses restart pada session yang sama. `start_time` = timestamp event pertama dari batch pertama session itu.
 - Flush tick tiap 5 detik memindahkan chunk ke batch; batch ditutup menurut aturan di atas.
-- Upload replay selalu lewat `HttpURLConnection` bawaan (`ReplayClient`): kontrak `ARTrackerSender` hanya `POST`, sedangkan upload butuh `PUT`.
+- Upload replay lewat `ARTrackerSender` bila host mengaturnya (`NetworkConfig.sender`), jadi Chucker, certificate pinning, dan proxy host ikut mencakupnya; tanpa sender dipakai `HttpURLConnection` bawaan (`ReplayClient`). Karena itu `SendRequest` punya `method` (`POST`, atau `PUT` untuk upload) dan `SendResponse` punya `body` (langkah `chunk-url` membaca `upload_url` darinya). `FlushWorker` di proses tanpa `init` selalu memakai transport bawaan.
 - **Default `replay.enabled = false`** (opt-in, setara keputusan D2 web) dan `sampleRate = 0.1`. Sampling deterministik: `hash(session_id) < sampleRate`.
 
 ---
@@ -454,7 +454,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | R3 | Kuota 1000 event/s per project dibagi semua device | Replay sampling, dedup error, breadcrumbs tidak dikirim terpisah, batching 10 s |
 | R4 | Tidak ada dedup server → retry setelah `202` hilang membuat baris ganda | UUIDv7 stabil; dedup di backend di masa depan |
 | R5 | ~~Backend belum punya endpoint replay~~ **Selesai**: SDK memakai Session Replay API (`chunk-url` → `PUT` → `chunk-ack`). Backend lama tanpa endpoint itu membalas `404`, sehingga batch dibuang dan replay tidak tampil sampai backend di-upgrade | Lihat §2 dan §6.5 |
-| R6 | Upload replay tidak lewat `ARTrackerSender` (kontraknya hanya `POST`), jadi certificate pinning, proxy, atau Chucker milik host **tidak berlaku** untuk upload replay; hanya `/ingest` yang melewatinya | Didokumentasikan; bila pinning wajib, matikan replay atau tambah dukungan `PUT` di `ARTrackerSender` |
+| R6 | `ARTrackerSender` kustom yang selalu `POST` atau tidak mengembalikan body response merusak upload replay (`chunk-url` tanpa `upload_url` di-retry lalu dibuang). Kontrak sender sekarang mewajibkan `method` dan `body` | Terdokumentasi di KDoc `ARTrackerSender`, README, dan CHANGELOG; `ARTrackerOkHttpSender` sudah memenuhinya. API masih eksperimental |
 
 ---
 
