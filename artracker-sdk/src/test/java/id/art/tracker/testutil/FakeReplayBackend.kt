@@ -24,7 +24,8 @@ internal class RecordedCall(
 
 /**
  * MockWebServer that imitates the three Session Replay API endpoints: `POST chunk-url`, `PUT upload-chunk` and
- * `POST chunk-ack`. Every request is recorded. Each step answers `200` unless its responder is replaced.
+ * `POST chunk-ack`, plus `POST ingest` so a whole SDK can talk to it. Every request is recorded. Each step answers
+ * `200` (`202` for ingest) unless its responder is replaced.
  */
 internal class FakeReplayBackend {
     private val server = MockWebServer()
@@ -47,6 +48,8 @@ internal class FakeReplayBackend {
 
     @Volatile var ack: (RecordedCall) -> MockResponse = { MockResponse().setResponseCode(200) }
 
+    @Volatile var ingest: (RecordedCall) -> MockResponse = { MockResponse().setResponseCode(202) }
+
     init {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
@@ -61,6 +64,7 @@ internal class FakeReplayBackend {
                     call.method == "POST" && call.route == CHUNK_URL -> chunkUrl(call)
                     call.method == "PUT" && call.route == UPLOAD -> upload(call)
                     call.method == "POST" && call.route == ACK -> ack(call)
+                    call.method == "POST" && call.route == INGEST -> ingest(call)
                     else -> MockResponse().setResponseCode(404)
                 }
             }
@@ -78,5 +82,6 @@ internal class FakeReplayBackend {
         const val CHUNK_URL = "/api/v1/replay/chunk-url"
         const val UPLOAD = "/api/v1/replay/upload-chunk"
         const val ACK = "/api/v1/replay/chunk-ack"
+        const val INGEST = "/api/v1/ingest"
     }
 }
