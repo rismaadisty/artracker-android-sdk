@@ -188,6 +188,7 @@ internal object WireframeDiffer {
     private fun changedStyle(a: Wireframe, b: Wireframe, p: Index, n: Index): Boolean =
         p.relX(a) != n.relX(b) || p.relY(a) != n.relY(b) ||
             a.width != b.width || a.height != b.height ||
-            a.textColor != b.textColor || a.textSizeSp != b.textSizeSp ||
+            a.textColor != b.textColor || a.textSizeSp != b.textSizeSp || a.fontWeight != b.fontWeight ||
+            a.visual != b.visual ||
             a.background != b.background || a.alpha != b.alpha || a.masked != b.masked
 }

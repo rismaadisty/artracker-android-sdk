@@ -3,6 +3,9 @@ package id.art.tracker.replay.rrweb
 import id.art.tracker.core.Json
 import id.art.tracker.replay.diff.WireframeDiff
 import id.art.tracker.replay.diff.WireframeDiffer
+import id.art.tracker.replay.model.ImageFit
+import id.art.tracker.replay.model.TextAlignment
+import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
 import id.art.tracker.replay.model.WireframeType
 import org.json.JSONArray
@@ -58,7 +61,27 @@ class RrwebEncoderTest {
     private fun style(node: Map<String, Any?>) = (node["attributes"] as Map<String, Any?>)["style"] as String
 
     private fun textsOf(snapshot: Map<String, Any?>): List<String> =
-        allNodes(snapshot).filter { it["type"] == 3 }.map { it["textContent"] as String }
+        allNodes(snapshot).filter { it["type"] == 3 && it["id"] != STYLE_TEXT_NODE_ID }.map { it["textContent"] as String }
+
+    @Test
+    fun fullSnapshot_headCarriesSelfContainedStylesheet() {
+        val snap = encoder.fullSnapshot(box(2, 10, 20, 50, 40), 1234L)
+        val html = snap.map("data").map("node").list("childNodes").first { it["tagName"] == "html" }
+        val head = html.list("childNodes").first { it["tagName"] == "head" }
+        val style = head.list("childNodes").single()
+        assertEquals(2, style["type"])
+        assertEquals(STYLE_NODE_ID, style["id"])
+        val textNode = style.list("childNodes").single()
+        assertEquals(3, textNode["type"])
+        assertEquals(STYLE_TEXT_NODE_ID, textNode["id"])
+        val css = textNode["textContent"] as String
+        assertTrue(css, css.contains("font-family:Roboto"))
+        assertTrue(css, css.contains("[data-artracker-type=\"TEXT\"]"))
+        assertTrue(css, css.contains("white-space:nowrap"))
+        assertFalse("the default sheet must not invent fills or borders", css.contains("border:") || css.contains("border-radius") || css.contains("rgba("))
+        // Reserved ids stay clear of wireframe nodes (which start at 10).
+        assertTrue(allNodes(snap).filter { it !== style && it !== textNode }.none { it["id"] == STYLE_NODE_ID || it["id"] == STYLE_TEXT_NODE_ID })
+    }
 
     @Test
     fun fullSnapshot_structure() {
@@ -76,7 +99,8 @@ class RrwebEncoderTest {
         val htmlKids = html.list("childNodes")
         assertEquals(listOf("head", "body"), htmlKids.map { it["tagName"] })
         assertEquals(listOf(3, 4), htmlKids.map { it["id"] })
-        assertTrue(htmlKids[0].list("childNodes").isEmpty())
+        val headKids = htmlKids[0].list("childNodes")
+        assertEquals(listOf("style"), headKids.map { it["tagName"] })
         val bodyStyle = style(htmlKids[1])
         assertTrue(bodyStyle, bodyStyle.contains("margin:0;position:relative;width:50px;height:40px;overflow:hidden"))
         val div = firstDiv(snap)
@@ -97,6 +121,113 @@ class RrwebEncoderTest {
         assertTrue(style(child), style(child).contains("left:5px;top:7px;"))
     }
 
+    private fun styleOfNode(w: Wireframe): String = style(elementFor(encoder.fullSnapshot(root(w), 0L), w.id))
+
+    @Test
+    fun visual_shapeBorderShadowGradient() {
+        val card = Wireframe(
+            2, 12, 160, 296, 280, WireframeType.CONTAINER, background = 0xFFFFFFFF.toInt(),
+            visual = VisualStyle(
+                radiiDp = listOf(12f, 12f, 12f, 12f), borderWidthDp = 1f, borderColor = 0xFFE2E8F0.toInt(),
+                shadowDp = 2f, clip = true, gradient = "linear-gradient(180deg,#ffffff,#eeeeee)",
+            ),
+        )
+        val s = styleOfNode(card)
+        assertTrue(s, s.contains("border-radius:12px;"))
+        assertTrue(s, s.contains("border:1px solid #e2e8f0;"))
+        assertTrue(s, s.contains("box-shadow:0px 2px 4px rgba(0,0,0,0.14);"))
+        assertTrue(s, s.contains("background-image:linear-gradient(180deg,#ffffff,#eeeeee);"))
+        assertTrue(s, s.endsWith("overflow:hidden;"))
+    }
+
+    @Test
+    fun visual_unevenRadii_useCssCornerOrder() {
+        val s = styleOfNode(Wireframe(2, 0, 0, 80, 40, WireframeType.BUTTON, visual = VisualStyle(radiiDp = listOf(20f, 0f, 4.5f, 8f))))
+        assertTrue(s, s.contains("border-radius:20px 0px 4.5px 8px;"))
+    }
+
+    @Test
+    fun visual_textProperties_singleLine() {
+        val t = Wireframe(
+            2, 0, 0, 100, 22, WireframeType.TEXT, text = "Hi", textSizeSp = 16f, fontWeight = 600,
+            visual = VisualStyle(fontFamily = "serif", italic = true, textAlign = TextAlignment.CENTER, lineHeightDp = 22f),
+        )
+        val s = styleOfNode(t)
+        assertTrue(s, s.contains("font-size:16px;font-weight:600;"))
+        assertTrue(s, s.contains("font-family:serif;font-style:italic;justify-content:center;line-height:22px;"))
+        assertFalse(s, s.contains("white-space"))
+    }
+
+    @Test
+    fun visual_textProperties_multiLineWraps() {
+        val t = Wireframe(
+            2, 0, 0, 100, 44, WireframeType.TEXT, text = "a b c d",
+            visual = VisualStyle(wrap = true, textAlign = TextAlignment.RIGHT),
+        )
+        val s = styleOfNode(t)
+        assertTrue(s, s.contains("display:block;white-space:normal;text-align:right;"))
+        assertFalse(s, s.contains("justify-content"))
+    }
+
+    @Test
+    fun visual_textProperties_ignoredWithoutText() {
+        val s = styleOfNode(Wireframe(2, 0, 0, 10, 10, WireframeType.CONTAINER, visual = VisualStyle(italic = true, textAlign = TextAlignment.CENTER)))
+        assertFalse(s, s.contains("font-style"))
+        assertFalse(s, s.contains("justify-content"))
+    }
+
+    @Test
+    fun visual_image_isABackgroundImage_andBeatsGradient() {
+        val uri = "data:image/webp;base64,UklGRkYAAABXRUJQ+/=="
+        val s = styleOfNode(
+            Wireframe(2, 0, 0, 24, 24, WireframeType.IMAGE, visual = VisualStyle(image = uri, imageFit = ImageFit.CONTAIN, gradient = "linear-gradient(0deg,#000,#fff)")),
+        )
+        assertTrue(s, s.contains("background-image:url(\"$uri\");background-size:contain;background-repeat:no-repeat;background-position:center;"))
+        assertFalse(s, s.contains("linear-gradient"))
+        // An icon replaces the grey placeholder.
+        assertFalse(s, s.contains("#cccccc"))
+    }
+
+    @Test
+    fun visual_imagePadding_keepsTheIconInsideTheContentBox() {
+        val uri = "data:image/webp;base64,AAAA"
+        val s = styleOfNode(
+            Wireframe(2, 0, 0, 48, 48, WireframeType.IMAGE, visual = VisualStyle(image = uri, imageFit = ImageFit.CONTAIN, paddingDp = listOf(8f, 12f, 8f, 12f))),
+        )
+        assertTrue(s, s.contains("padding:8px 12px 8px 12px;background-origin:content-box;"))
+        // Padding only exists to place an icon: without one it is not written.
+        val none = styleOfNode(Wireframe(2, 0, 0, 48, 48, WireframeType.IMAGE, visual = VisualStyle(paddingDp = listOf(8f, 8f, 8f, 8f))))
+        assertFalse(none, none.contains("padding"))
+    }
+
+    @Test
+    fun visual_untrustedStrings_areNeverWrittenIntoCss() {
+        val evil = Wireframe(
+            2, 0, 0, 24, 24, WireframeType.CONTAINER,
+            visual = VisualStyle(
+                image = "data:image/webp;base64,AAAA\");background:url(http://evil/x",
+                gradient = "linear-gradient(0deg,red);background:url(http://evil/x)",
+                fontFamily = "x;background:url(http://evil/x)",
+            ),
+        )
+        val s = styleOfNode(evil)
+        assertFalse(s, s.contains("evil"))
+        assertFalse(s, s.contains("url("))
+    }
+
+    @Test
+    fun visual_nonFiniteOrNegativeNumbers_areDropped() {
+        val s = styleOfNode(
+            Wireframe(
+                2, 0, 0, 10, 10, WireframeType.CONTAINER,
+                visual = VisualStyle(radiiDp = listOf(Float.NaN, -1f, 3f, 3f), borderWidthDp = Float.POSITIVE_INFINITY, borderColor = 0xFF000000.toInt(), shadowDp = -2f),
+            ),
+        )
+        assertFalse(s, s.contains("border-radius"))
+        assertFalse(s, s.contains("border:"))
+        assertFalse(s, s.contains("box-shadow"))
+    }
+
     @Test
     fun fullSnapshot_styleDetails() {
         val styled = Wireframe(
@@ -106,7 +237,7 @@ class RrwebEncoderTest {
         val s = style(elementFor(encoder.fullSnapshot(root(styled), 0L), 2))
         assertEquals(
             "position:absolute;left:1px;top:2px;width:30px;height:40px;" +
-                "background-color:rgba(255,0,0,0.502);color:#102030;font-size:14px;opacity:0.5;overflow:hidden;",
+                "background-color:rgba(255,0,0,0.502);color:#102030;font-size:14px;opacity:0.5;overflow:visible;",
             s,
         )
         encoder.reset()
@@ -345,7 +476,7 @@ class RrwebEncoderTest {
     fun fullSnapshot_assignsSequentialIdsFrom10InPreOrder() {
         val snap = encoder.fullSnapshot(root(box(2, 0, 0, 10, 10, label(3, "a")), box(4)), 0L)
         val ids = allNodes(snap).map { it["id"] }
-        assertEquals(listOf(1, 2, 3, 4, 5, 10, 11, 12, 13, 14), ids.map { it as Int }.sorted())
+        assertEquals(listOf(1, 2, 3, 4, 5, STYLE_NODE_ID, STYLE_TEXT_NODE_ID, 10, 11, 12, 13, 14), ids.map { it as Int }.sorted())
         assertEquals(10, elementFor(snap, 1)["id"])
         assertEquals(11, elementFor(snap, 2)["id"])
         assertEquals(12, elementFor(snap, 3)["id"])
@@ -607,5 +738,10 @@ class RrwebEncoderTest {
             enc.mutation(WireframeDiffer.diff(frames[i - 1], frames[i]), i.toLong())?.let { dom.apply(it) }
             assertEquals("frame $i", Dom(RrwebEncoder().fullSnapshot(frames[i], 0L)).normalized(), dom.normalized())
         }
+    }
+
+    private companion object {
+        const val STYLE_NODE_ID = 6
+        const val STYLE_TEXT_NODE_ID = 7
     }
 }

@@ -1,6 +1,8 @@
 package id.art.tracker.replay.capture
 
-import android.graphics.drawable.ColorDrawable
+import android.view.Gravity
+import android.graphics.Typeface
+import android.os.Build
 import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
@@ -13,6 +15,9 @@ import android.widget.VideoView
 import id.art.tracker.privacy.MaskDecision
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.privacy.ViewMaskRules
+import id.art.tracker.replay.model.ImageFit
+import id.art.tracker.replay.model.TextAlignment
+import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
 import id.art.tracker.replay.model.WireframeType
 import kotlin.math.min
@@ -39,6 +44,7 @@ internal class ViewWalker(
     private val composeWalker: ComposeWalkerApi? = null,
     private val maxNodes: Int = 2000,
     private val maxDepth: Int = 50,
+    private val icons: IconRasterizer = IconRasterizer.shared,
 ) {
     private var count = 0
     private var capped = false
@@ -48,6 +54,7 @@ internal class ViewWalker(
     fun walk(root: View): Wireframe? {
         count = 0
         capped = false
+        icons.beginFrame()
         return try {
             node(root, 0, false)
         } catch (_: Throwable) {
@@ -99,19 +106,53 @@ internal class ViewWalker(
         var text: String? = null
         var textColor: Int? = null
         var textSizeSp: Float? = null
+        var fontWeight: Int? = null
+        var italic = false
+        var textAlign: TextAlignment? = null
+        var wrap = false
+        var lineHeightDp: Float? = null
         if (view is TextView) {
             val raw: CharSequence? = view.text
+            val useHint = raw.isNullOrEmpty() && !masked && !view.hint.isNullOrEmpty()
+            val shown: CharSequence? = if (useHint) view.hint else raw
             text = when {
-                raw == null -> null
-                masked -> MaskingPolicy.maskText(raw)
-                else -> raw.subSequence(0, min(raw.length, MAX_TEXT_LENGTH)).toString()
+                shown == null -> null
+                masked -> MaskingPolicy.maskText(shown)
+                else -> shown.subSequence(0, min(shown.length, MAX_TEXT_LENGTH)).toString()
             }
-            textColor = view.currentTextColor
+            textColor = if (useHint) view.currentHintTextColor else view.currentTextColor
             textSizeSp = view.textSize / (density * view.resources.configuration.fontScale)
+            val typeface = view.typeface
+            fontWeight = weightOf(typeface)?.takeIf { it != REGULAR_WEIGHT }
+            italic = typeface != null && typeface.style and Typeface.ITALIC != 0
+            textAlign = alignOf(view)
+            wrap = view.lineCount > 1
+            if (wrap) lineHeightDp = view.lineHeight / density
         }
-        val background = (view.background as? ColorDrawable)?.color
+        val look = DrawableStyleReader.read(view, density)
+        val background = look?.color
+        val elevationDp = (view.elevation / density).takeIf { it > 0f }
+        val clip = view.clipToOutline
+        var image: String? = null
+        var imageFit: ImageFit? = null
+        var imagePadding: List<Float>? = null
+        if (!masked && view is ImageView) {
+            val d = view.drawable
+            if (d != null) image = icons.forDrawable(d, view.imageTintList, view.drawableState, w, h, density)
+            if (image != null) {
+                imageFit = fitOf(view.scaleType)
+                imagePadding = listOf(view.paddingTop, view.paddingRight, view.paddingBottom, view.paddingLeft).map { it / density }
+            }
+        }
+        val visual = VisualStyle(
+            gradient = look?.gradient, radiiDp = look?.radiiDp,
+            borderWidthDp = look?.borderWidthDp, borderColor = look?.borderColor,
+            shadowDp = elevationDp, clip = clip,
+            italic = italic, textAlign = textAlign, lineHeightDp = lineHeightDp, wrap = wrap,
+            image = image, imageFit = imageFit, paddingDp = imagePadding,
+        ).takeIf { it != EMPTY_VISUAL }
 
-        val children = if (view is ViewGroup) {
+        var children: List<Wireframe> = if (view is ViewGroup) {
             val childCount = view.childCount
             val list = ArrayList<Wireframe>(childCount)
             for (i in 0 until childCount) {
@@ -123,12 +164,72 @@ internal class ViewWalker(
             emptyList()
         }
 
+        if (!masked && view is TextView) children = children + compoundIcons(view, id, x, y, density)
+
         return Wireframe(
             id = id, x = x, y = y, width = w, height = h,
             type = typeOf(view),
-            text = text, textColor = textColor, textSizeSp = textSizeSp,
-            background = background, alpha = alpha, masked = masked, children = children,
+            text = text, textColor = textColor, textSizeSp = textSizeSp, fontWeight = fontWeight,
+            visual = visual, background = background, alpha = alpha, masked = masked, children = children,
         )
+    }
+
+    private fun fitOf(type: ImageView.ScaleType): ImageFit = when (type) {
+        ImageView.ScaleType.CENTER_CROP -> ImageFit.COVER
+        ImageView.ScaleType.FIT_XY -> ImageFit.FILL
+        else -> ImageFit.CONTAIN
+    }
+
+    /**
+     * Icons drawn by a TextView next to its text (`drawableStart`, a `MaterialButton` icon...), as child nodes placed
+     * the way `TextView.onDraw` places them. Only real icons (see [IconRasterizer]); the others are left out.
+     */
+    private fun compoundIcons(view: TextView, id: Int, x: Int, y: Int, density: Float): List<Wireframe> {
+        val drawables = view.compoundDrawables
+        if (drawables.all { it == null }) return emptyList()
+        val tint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) view.compoundDrawableTintList else null
+        val out = ArrayList<Wireframe>(1)
+        drawables.forEachIndexed { index, d ->
+            if (d == null || count >= maxNodes) return@forEachIndexed
+            val wPx = d.bounds.width()
+            val hPx = d.bounds.height()
+            val w = dp(wPx, density)
+            val h = dp(hPx, density)
+            val uri = icons.forDrawable(d, tint, view.drawableState, w, h, density) ?: return@forEachIndexed
+            val innerW = view.width - view.compoundPaddingLeft - view.compoundPaddingRight
+            val innerH = view.height - view.compoundPaddingTop - view.compoundPaddingBottom
+            val (ox, oy) = when (index) {
+                0 -> view.paddingLeft to view.compoundPaddingTop + (innerH - hPx) / 2
+                1 -> view.compoundPaddingLeft + (innerW - wPx) / 2 to view.paddingTop
+                2 -> view.width - view.paddingRight - wPx to view.compoundPaddingTop + (innerH - hPx) / 2
+                else -> view.compoundPaddingLeft + (innerW - wPx) / 2 to view.height - view.paddingBottom - hPx
+            }
+            count++
+            out.add(
+                Wireframe(
+                    id = 31 * id + 1 + index, x = x + dp(ox, density), y = y + dp(oy, density), width = w, height = h,
+                    type = WireframeType.IMAGE, visual = VisualStyle(image = uri, imageFit = ImageFit.CONTAIN),
+                ),
+            )
+        }
+        return out
+    }
+
+    /** CSS weight of [typeface]: the real weight on API 28+, else bold/regular from its style. */
+    private fun weightOf(typeface: Typeface?): Int? {
+        if (typeface == null) return null
+        val real = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) typeface.weight else 0
+        return if (real > 0) real else if (typeface.style and Typeface.BOLD != 0) BOLD_WEIGHT else REGULAR_WEIGHT
+    }
+
+    /** Null for the default (left); only center and right need to be written. */
+    private fun alignOf(view: TextView): TextAlignment? {
+        val absolute = Gravity.getAbsoluteGravity(view.gravity, view.layoutDirection) and Gravity.HORIZONTAL_GRAVITY_MASK
+        return when (absolute) {
+            Gravity.CENTER_HORIZONTAL -> TextAlignment.CENTER
+            Gravity.RIGHT -> TextAlignment.RIGHT
+            else -> null
+        }
     }
 
     private fun typeOf(view: View): WireframeType = when {
@@ -216,6 +317,9 @@ internal class ViewWalker(
     }
 
     private companion object {
+        val EMPTY_VISUAL = VisualStyle()
+        const val REGULAR_WEIGHT = 400
+        const val BOLD_WEIGHT = 700
         const val MAX_TEXT_LENGTH = 200
         const val COMPOSE_HOST_CLASS = "androidx.compose.ui.platform.AndroidComposeView"
     }

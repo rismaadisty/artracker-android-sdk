@@ -61,6 +61,8 @@ class WireframeDifferTest {
             box(2).copy(alpha = 0.5f),
             box(2).copy(masked = true),
             box(2).copy(textColor = 1),
+            box(2).copy(fontWeight = 700),
+            box(2).copy(visual = id.art.tracker.replay.model.VisualStyle(shadowDp = 2f)),
         )) {
             assertEquals(listOf(2), WireframeDiffer.diff(base, root(changed)).updates.map { it.id })
         }

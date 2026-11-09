@@ -20,7 +20,21 @@
               "type": 2,
               "tagName": "head",
               "attributes": {},
-              "childNodes": [],
+              "childNodes": [
+                {
+                  "type": 2,
+                  "tagName": "style",
+                  "attributes": {},
+                  "childNodes": [
+                    {
+                      "type": 3,
+                      "textContent": "html,body{margin:0;padding:0;font-family:Roboto,-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;line-height:1.25;color:#0f172a;background:#fafafa}[data-artracker-type]{box-sizing:border-box}[data-artracker-type=\"TEXT\"]{display:flex;align-items:center;font-size:11px;line-height:1.15;color:#1e293b;white-space:nowrap}",
+                      "id": 7
+                    }
+                  ],
+                  "id": 6
+                }
+              ],
               "id": 3
             },
             {
@@ -42,7 +56,7 @@
                       "type": 2,
                       "tagName": "span",
                       "attributes": {
-                        "style": "position:absolute;left:16px;top:40px;width:328px;height:48px;color:#212121;font-size:20px;overflow:hidden;",
+                        "style": "position:absolute;left:16px;top:40px;width:328px;height:48px;color:#212121;font-size:20px;overflow:visible;",
                         "data-artracker-type": "TEXT"
                       },
                       "childNodes": [

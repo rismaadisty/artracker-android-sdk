@@ -23,6 +23,17 @@ versions follow semantic versioning (`0.x`: the API may still change).
 
 ### Added
 
+- Session replay now carries the app's own look, not only boxes and text: view backgrounds (`ColorDrawable`,
+  `GradientDrawable` with gradient, radius and stroke, Material shape drawables), Compose fills, gradients, rounded
+  shapes, borders, shadows and clips, elevation, font weight / italic / alignment / multi-line wrapping, and layout nodes
+  without semantics (a `Box` with `Modifier.background`). The rrweb snapshot also ships a small default `<style>`
+  (sans-serif, single-line text) so a chunk renders sensibly in any player.
+- **Privacy change:** small **vector icons** (`VectorDrawable`, `VectorDrawableCompat`, Compose `VectorPainter` /
+  `ColorPainter`, intrinsic size up to 64 dp) are now rasterized at their own size and sent as WebP/PNG data URIs (at
+  most 6 KB each; cached per source, variant and pixel content; at most 24 new encodes per frame). **Bitmaps are never
+  rasterized, however small** (an image loader hands a 40 dp avatar over as a <= 64 px bitmap), so photos, thumbnails,
+  `BitmapPainter`, third-party painters (Coil/Glide) and every masked node keep the neutral placeholder, and
+  `contentDescription` is still never captured. Apps whose icons are PNGs therefore still see placeholders.
 - `NetworkConfig.sender` and the experimental `ARTrackerSender` (with `SendRequest` and `SendResponse`): replaces the
   `HttpURLConnection` transport that posts batches to the ingest endpoint, for example to inspect the SDK's traffic with
   Chucker, pin certificates or go through a proxy. Status mapping is shared with the built-in transport.

@@ -199,7 +199,8 @@ class ViewWalkerTest {
     }
 
     @Test
-    fun imageView_hasNoBitmapData() {
+    fun imageView_photo_hasNoBitmapData() {
+        // Only icons (small vectors / tiny bitmaps) are rasterized, see IconRasterizerTest; a photo never is.
         var drawableReads = 0
         val image = object : ImageView(context) {
             override fun getDrawable(): Drawable? {
@@ -207,7 +208,7 @@ class ViewWalkerTest {
                 return super.getDrawable()
             }
         }.apply {
-            setImageDrawable(BitmapDrawable(context.resources, Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)))
+            setImageDrawable(BitmapDrawable(context.resources, Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)))
             contentDescription = "photo-description"
             layoutParams = lp()
         }
@@ -223,7 +224,8 @@ class ViewWalkerTest {
         assertNull(node.textSizeSp)
         assertNull(node.background)
         assertTrue(node.children.isEmpty())
-        assertEquals(0, drawableReads)
+        assertNull(node.visual?.image)
+        assertFalse(wf.toDebugString().contains("data:image"))
         assertFalse(wf.toDebugString().contains("photo-description"))
     }
 
