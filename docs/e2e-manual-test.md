@@ -63,9 +63,9 @@ Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artr
 
 1. Replay is on by default in the sample (`sampleRate = 1.0`); use Diagnostics > *Start replay* if it was stopped.
 2. Open Login, type an email and a password (for example `hunter2-secret`), open Payment, type digits into card/CVV, then Flush.
-3. Confirm `replay_chunk` items exist for the session.
+3. Confirm `replay_sessions` and `replay_chunks` rows exist for the session (replay no longer travels as `replay_chunk` ingest items).
 4. Fetch the events JSON and grep it for the typed secrets, for example `curl -H "Authorization: Bearer $TOKEN" ... | grep -c 'hunter2-secret'`. Expected: `0`. Card digits and the payment total must not appear either (the total is masked by `Modifier.artrackerMask()`).
-5. Open the Legacy XML screen and type into the password and number fields; the tagged containers (`artracker-mask`) must be masked in the chunks too.
+5. Open the Legacy XML screen and type into the password and number fields; the tagged containers (`artracker-mask`) must be masked in the uploaded replay too.
 
 ## 7. Extras
 

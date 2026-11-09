@@ -14,31 +14,24 @@ uses, and checks the recording's structure without a browser.
 ### From a test run (no device, no backend)
 
 `ReplayChunkExportTest` records a Login to Feed session with the real walker, encoder, chunker and controller and
-writes it to `artracker-sdk/build/replay-export/` (`replay-chunks.json` as chunk attributes, `replay-items.json` as
-backend-style items):
+writes it to `artracker-sdk/build/replay-export/` (`replay-chunks.json` as chunk attributes, rebuilt from the upload
+batches; the old `replay-items.json` is no longer written because replay is not an ingest item):
 
 ```sh
 ./gradlew :artracker-sdk:testDebugUnitTest --tests "id.art.tracker.replay.ReplayChunkExportTest"
 node tools/replay-viewer/validate-chunks.mjs artracker-sdk/build/replay-export/replay-chunks.json --forbid hunter2-secret
 ```
 
-### From a sample app run (backend)
+### From a sample app run
 
-Run the sample app with replay enabled against the backend (see `docs/e2e-manual-test.md`), then export the chunks
-with the dashboard JWT. The SDK has no on-device dump (the `ARTracker` debug log does not contain replay data):
+Debug builds of the sample app run a loopback sink that also plays the Session Replay API (`chunk-url`, `PUT`,
+`chunk-ack`): the *Replay lab* export writes the last 50 uploaded batches as `replay-chunks.json` in the chunk-attributes
+format below. The Inspector does not list replay uploads (they are not ingest items).
 
-```sh
-curl -s -H "Authorization: Bearer $DASHBOARD_JWT" \
-  "http://localhost:<port>/api/v1/projects/<project-id>/events?kind=session&limit=100" \
-  | jq '[.items[] | select(.name == "replay_chunk")]' > chunks.json
-```
-
-Notes on that endpoint: it returns `{"items": [...]}`, newest first, at most 100 items per call, and there is no
-filter by name or session, so `kind=session` also returns `session_start` / `session_end` (the `jq` filter drops
-them). The viewer and the validator accept the response as is, plus any mix of sessions: a file holding several
-sessions gets a session picker (viewer) or one report per session (validator). If the 100-item window starts in the
-middle of a session, the first chunk (the one with the Meta and the full snapshot) is missing and both tools say so;
-export again right after a short run.
+The SDK no longer sends replay as `replay_chunk` items to `/api/v1/ingest`, so exporting them from the events API (the
+old `curl ... | jq 'select(.name == "replay_chunk")'` recipe) only works for data recorded by an earlier SDK version. A
+backend that stored replay through the new API serves it from its own replay endpoints, which this tool does not fetch.
+When you have the dashboard's JSON, the accepted formats below still apply.
 
 Accepted formats (all three work in both tools):
 

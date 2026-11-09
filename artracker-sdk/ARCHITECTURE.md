@@ -42,9 +42,9 @@ Compose/View hierarchy + touch gesture, WorkManager + offline SQLite. Publikasi 
 | Timestamp | Kirim `sent_at` (envelope) **dan** `timestamp` (item) agar backend mengoreksi jam perangkat yang meleset (drift 0–7 hari) | `ingest/sanitize.go#normalizeTimestamp` |
 | Rate limit | 50 req/s dan 1000 event/s **per project** (dibagi semua device). Habis → `429` + `Retry-After` | `ingest/ratelimit.go` |
 | Dedup | **Tidak ada** di server. SDK membuat UUIDv7 sekali per item dan memakainya ulang saat retry | `CONTRACT.md §12` |
-| Replay | Belum ada endpoint `/replay/...` di backend walau issue #8 sudah ditutup. Chunk replay dikirim sebagai `type:"session"`, `name:"replay_chunk"`, sama seperti web SDK. Player di dashboard memakai **rrweb** | `grep replay backend` kosong; `frontend/src/pages/DashboardPage.tsx` |
+| Replay | **Session Replay API**, bukan `/ingest`: `POST /api/v1/replay/chunk-url` (minta URL upload bertanda tangan) → `PUT {upload_url}` (body gzip, `Content-Type: application/gzip`) → `POST /api/v1/replay/chunk-ack`. Semua langkah idempotent di server, jadi retry mengulang ketiganya. `session_id` cocok `^[a-zA-Z0-9_-]{8,128}$`, `chunk_seq >= 0`, `size_bytes` 1..5 MiB (5242880) dan harus sama dengan panjang body PUT. `X-Artracker-Key` hanya untuk dua `POST`, tidak pernah ke `upload_url`. Rate limit 50 req/s per project (dibagi semua device). Field `direct` **tidak dikirim**: server memutuskan mode upload lewat `REPLAY_PROXY_UPLOAD`. Player di dashboard memakai **rrweb** | `backend/internal/handler/replay.go`, `0004_session_replay.sql`, `0006_replay_frustration.sql` (repo `artracker`, commit `8af564a`) |
 
-**Aturan SDK (sama dengan web):** maksimum **50 item / 128 KB uncompressed per request**, soft cap **24 KB per `attributes`**.
+**Aturan SDK (sama dengan web):** maksimum **50 item / 128 KB uncompressed per request**, soft cap **24 KB per `attributes`**. Aturan ini hanya untuk `/ingest`; replay punya batas sendiri (lihat baris Replay dan §6.5).
 
 > Catatan: di Android tidak ada CORS, jadi header `Retry-After` **bisa dibaca**. Ini kelebihan dibanding web SDK.
 
@@ -91,7 +91,8 @@ artracker-sdk/src/main/java/id/art/tracker/
 │   ├─ diff/WireframeDiffer.kt  Diff frame N-1 vs N → mutations
 │   ├─ rrweb/RrwebEncoder.kt    Wireframe/diff → event rrweb (Meta, FullSnapshot, Incremental)
 │   ├─ touch/TouchRecorder.kt   Window.Callback wrapper → MouseInteraction/TouchMove
-│   └─ ReplayChunker.kt         Pecah event menjadi chunk ≤24 KB
+│   ├─ ReplayChunker.kt         Pecah event menjadi chunk (≤512 KB, tutup di 64 KB)
+│   └─ ReplayBatcher.kt         Gabung chunk per session menjadi batch upload (256 KB / 10 s, gzip)
 ├─ privacy/
 │   ├─ MaskingPolicy.kt         Keputusan mask/unmask per node
 │   ├─ ViewMaskRules.kt         EditText inputType, autofill hints, tag, class
@@ -251,8 +252,10 @@ Mode screenshot dicatat sebagai pekerjaan masa depan (§13), bukan v1.
 
 ### 6.5 Chunking & sampling
 
-- Chunk = `type:"session"`, `name:"replay_chunk"`, attributes `{seq, start, end, full_snapshot, platform:"android", events:[…]}`, ≤24 KB. Dipecah per event; event tunggal >24 KB (full snapshot raksasa) subtree-nya dirangkum lalu ditandai `oversized:true`.
-- Flush chunk tiap 5 detik atau saat ≥20 KB.
+- `ReplayChunker` memecah event menjadi chunk (batas 512 KB, ditutup di 64 KB). Chunk **bukan lagi item `session` di `/ingest`**: `ReplayBatcher` menggabung chunk per session menjadi batch (tutup di 256 KB JSON mentah atau 10 detik sejak event pertama, saat session berganti, atau saat recording berhenti), di-gzip sebagai **array event rrweb**, lalu disimpan di antrean `artracker_replay.db` dan dikirim lewat Session Replay API (§2). Batch gzip >5 MiB dibuang.
+- `seq` ditetapkan oleh `ReplayStore` dan dipersist per session, jadi melanjutkan setelah proses restart pada session yang sama. `start_time` = timestamp event pertama dari batch pertama session itu.
+- Flush tick tiap 5 detik memindahkan chunk ke batch; batch ditutup menurut aturan di atas.
+- Upload replay selalu lewat `HttpURLConnection` bawaan (`ReplayClient`): kontrak `ARTrackerSender` hanya `POST`, sedangkan upload butuh `PUT`.
 - **Default `replay.enabled = false`** (opt-in, setara keputusan D2 web) dan `sampleRate = 0.1`. Sampling deterministik: `hash(session_id) < sampleRate`.
 
 ---
@@ -334,7 +337,7 @@ Tidak memakai Room (KSP/kapt, ukuran, konflik versi) dan kotlinx.serialization. 
 ```sql
 CREATE TABLE items (
   id TEXT PRIMARY KEY,           -- UUIDv7 item (stabil saat retry)
-  priority INTEGER NOT NULL,     -- 0 crash/fatal, 1 log error, 2 event/session, 3 replay_chunk
+  priority INTEGER NOT NULL,     -- 0 crash/fatal, 1 log error, 2 event/session
   created_at INTEGER NOT NULL,
   size_bytes INTEGER NOT NULL,
   payload TEXT NOT NULL,         -- JSON RawItem yang sudah final (ter-redaksi)
@@ -345,9 +348,27 @@ CREATE INDEX idx_items_pending ON items(batch_id, priority, created_at);
 ```
 
 - **Write-ahead**: semua item dipersist sebelum dikirim, dengan transaksi berkelompok (tiap 1 detik atau 20 item) untuk menekan I/O.
-- Batas: **5 MB / 5000 baris**. Eviction mulai dari `replay_chunk` tertua, lalu `event`. Crash/fatal tidak pernah di-evict.
+- Batas: **5 MB / 5000 baris**. Eviction mulai dari `event`/`session` tertua, lalu log error. Crash/fatal tidak pernah di-evict.
 - Item lebih tua dari 7 hari dibuang (backend menolak drift >7 hari untuk koreksi skew).
 - Saat start, baris dengan `batch_id` yang tertinggal (proses mati di tengah kirim) di-reset ke pending.
+
+#### Antrean replay — `ReplayStore` (`artracker_replay.db`)
+
+Database terpisah, dibuka **malas**: tidak dibuat bila replay tidak pernah dipakai.
+
+```sql
+CREATE TABLE replay_batches (
+  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
+  first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, event_count INTEGER NOT NULL, has_error INTEGER NOT NULL,
+  user_id TEXT, environment TEXT NOT NULL, body BLOB NOT NULL, size_bytes INTEGER NOT NULL,
+  claimed INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL, start_ms INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+```
+
+- Batas: **20 MiB / 200 batch**; eviction membuang batch pending tertua (yang sedang diunggah tidak pernah). Maksimal **8 attempt** per batch, lalu dibuang. Retensi **7 hari** (batch dan counter `seq`).
+- `replay_seq` bertahan setelah batch selesai, di-`clear()` (opt-out), atau dievict, supaya `seq` tidak pernah dipakai ulang: PUT menimpa objek lama sedangkan ack ditolak server.
+- `ReplayFlusher` mengunggah satu batch pada satu waktu (maks 2 batch per detik saat drain). `401/403` pada `chunk-url`/`chunk-ack` menyalakan kill-switch; `401/403` pada PUT berarti tanda tangan kedaluwarsa dan hanya mengulang dari langkah 1. Opt-out mengosongkan antrean dan membuang batch yang terbuka. `FlushWorker` ikut mengirim antrean ini di background.
 
 ### 9.3 Batching & gzip
 
@@ -396,7 +417,7 @@ CREATE INDEX idx_items_pending ON items(batch_id, priority, created_at);
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Sesi | `session` | `session_start` / `session_end` | metadata perangkat |
-| Replay | `session` | `replay_chunk` | ≤24 KB |
+| Replay | *(bukan item ingest)* | batch rrweb lewat Session Replay API | ≤5 MiB gzip per upload |
 | Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | dari `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
@@ -432,7 +453,8 @@ CREATE INDEX idx_items_pending ON items(batch_id, priority, created_at);
 | R2 | AGP 9.0.1 memakai built-in Kotlin, sedangkan catalog `kotlin = 2.0.21` (plugin compose). Kompatibilitas belum diverifikasi | Diverifikasi di Fase 0 dengan `./gradlew :artracker-sdk:assemble`; naikkan Kotlin bila perlu |
 | R3 | Kuota 1000 event/s per project dibagi semua device | Replay sampling, dedup error, breadcrumbs tidak dikirim terpisah, batching 10 s |
 | R4 | Tidak ada dedup server → retry setelah `202` hilang membuat baris ganda | UUIDv7 stabil; dedup di backend di masa depan |
-| R5 | Backend belum punya endpoint replay; `rrweb-player` dashboard perlu menyusun chunk dari `telemetry_events` | Di luar scope issue ini, sama dengan web SDK |
+| R5 | ~~Backend belum punya endpoint replay~~ **Selesai**: SDK memakai Session Replay API (`chunk-url` → `PUT` → `chunk-ack`). Backend lama tanpa endpoint itu membalas `404`, sehingga batch dibuang dan replay tidak tampil sampai backend di-upgrade | Lihat §2 dan §6.5 |
+| R6 | Upload replay tidak lewat `ARTrackerSender` (kontraknya hanya `POST`), jadi certificate pinning, proxy, atau Chucker milik host **tidak berlaku** untuk upload replay; hanya `/ingest` yang melewatinya | Didokumentasikan; bila pinning wajib, matikan replay atau tambah dukungan `PUT` di `ARTrackerSender` |
 
 ---
 
@@ -527,8 +549,8 @@ Hal-hal berikut berbeda dari teks di atas (atau melengkapinya) setelah implement
 - **Compose**: tidak ada semantics input-type, jadi aturan numerik/telepon/autofill tidak ada padanannya di Compose (hanya `Password`, `maskAllInputs`, `Modifier.artrackerMask()`).
 
 **Replay**
-- **Kedalaman JSON**: `Json.MAX_DEPTH = 32` terlalu dangkal untuk pohon wireframe, jadi item `replay_chunk` di-encode dengan `Json.REPLAY_MAX_DEPTH = 256`. Hanya item `session` bernama `replay_chunk` (`isReplayChunk()`) yang melewati redaksi atribut dan mendapat batas itu; event pengguna yang meminjam nama itu tidak. `priority()` memakai `isReplayChunk()` yang sama.
-- **`ReplayHref`**: `href` `android://<screen>` dibangun dari nama layar yang disuplai host dan disanitasi (scrub URL, masking id di path, batas 200 karakter), karena chunk replay tidak melewati lapis 2. Deteksi pergantian layar memakai kunci mentah di memori (bukan href yang sudah disanitasi).
+- **Kedalaman JSON**: `Json.MAX_DEPTH = 32` terlalu dangkal untuk pohon wireframe, jadi `ReplayChunker` dan `ReplayBatcher` meng-encode dengan `Json.REPLAY_MAX_DEPTH = 256`. Batch replay tidak lagi melewati `EventPipeline`: tidak ada pengecualian redaksi atau prioritas khusus untuk item bernama `replay_chunk` (`isReplayChunk()` dihapus); item dengan nama itu diperlakukan seperti item lain.
+- **`ReplayHref`**: `href` `android://<screen>` dibangun dari nama layar yang disuplai host dan disanitasi (scrub URL, masking id di path, batas 200 karakter), karena batch replay tidak melewati lapis 2. Deteksi pergantian layar memakai kunci mentah di memori (bukan href yang sudah disanitasi).
 - **`ComposeWalker`**: `ReflectiveSemanticsAccess` tidak memakai refleksi sama sekali; ia menautkan langsung ke `ViewRootForTest` (API internal Compose) dan dibungkus try/catch dengan fallback blok placeholder. Di-instansiasi hanya di balik `ClassAvailability.compose`.
 - **`stopReplay()`** mematikan perekaman juga untuk sesi berikutnya sampai `startReplay()` dipanggil.
 - **Snapshot terlalu besar** dipangkas (`oversized`); perubahan berikutnya bisa tidak sinkron sampai full snapshot berikutnya. `seq` chunk mulai dari 0 lagi pada tiap proses.

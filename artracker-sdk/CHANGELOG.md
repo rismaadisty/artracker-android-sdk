@@ -5,6 +5,18 @@ versions follow semantic versioning (`0.x`: the API may still change).
 
 ## [Unreleased]
 
+### Changed
+
+- Session replay now uploads through the backend's Session Replay API instead of `replay_chunk` items in
+  `POST /api/v1/ingest`: `POST /api/v1/replay/chunk-url`, `PUT` of the gzipped rrweb events to the returned signed URL,
+  then `POST /api/v1/replay/chunk-ack`. Chunks are merged into per-session batches (256 KB or 10 s), queued in their own
+  `artracker_replay.db` (20 MiB / 200 batches, 8 attempts, 7 days, `seq` persisted per session) and retried idempotently.
+  `replay_chunk` handling was removed from the ingest pipeline.
+- **Breaking for older backends:** a backend without the replay endpoints answers `404`, so replay batches are dropped and
+  no replay is shown until the backend is upgraded. Ingest events are unaffected.
+- Replay uploads always use the built-in `HttpURLConnection`: a custom `ARTrackerSender` (its contract is `POST` only) and
+  therefore host certificate pinning, proxy or Chucker do not cover them.
+
 ### Added
 
 - `NetworkConfig.sender` and the experimental `ARTrackerSender` (with `SendRequest` and `SendResponse`): replaces the

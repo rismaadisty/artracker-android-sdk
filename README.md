@@ -267,9 +267,13 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
 - **Not captured**: bitmaps, WebView content, SurfaceView/TextureView/video/map content, original text of masked views.
 - **Cost control**: capture runs only when the screen was drawn since the last tick, with an 8 ms main-thread budget
   watchdog that halves the frame rate, at most 2000 nodes and depth 50 per frame, and stops in the background. Chunks
-  (`session` item `replay_chunk`, at most 24 KB) are flushed every 5 s or at 20 KB.
+  are merged into per-session batches (closed at 256 KB or 10 s), gzipped as a JSON array of rrweb events, queued in a
+  separate `artracker_replay.db` and uploaded through the backend's Session Replay API (`chunk-url`, `PUT`,
+  `chunk-ack`), at most 5 MiB per upload. Replay is no longer sent to `/api/v1/ingest`, so a backend without the
+  replay endpoints shows no replays until it is upgraded. Replay uploads always use the built-in `HttpURLConnection`:
+  a custom `ARTrackerSender` (and so your certificate pinning, proxy or Chucker) covers `/ingest` only.
 - **Privacy model**: layer 1 is the walker (UI masking above, applied before anything is stored); layer 2 is the
-  attribute redactor for everything else. Replay chunks skip layer 2 because they are already masked; only their
+  attribute redactor for everything else. Replay batches skip layer 2 because they are already masked; only their
   screen `href` (`android://<screen>`) is sanitised (URL scrubbing, id masking).
 
 ## Crash, ANR and offline behaviour
@@ -294,7 +298,7 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Session | `session` | `session_start` / `session_end` | device metadata |
-| Replay | `session` | `replay_chunk` | at most 24 KB |
+| Replay | *(not an ingest item)* | rrweb batch via the Session Replay API | at most 5 MiB gzipped per upload |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |
 | Low-memory kill (API 30+) | `log` | `warn`, name `low_memory_kill` | from `ApplicationExitInfo` |
