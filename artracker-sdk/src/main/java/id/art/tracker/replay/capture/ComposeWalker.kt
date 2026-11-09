@@ -3,6 +3,7 @@ package id.art.tracker.replay.capture
 import android.view.View
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.layout.LayoutInfo
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsConfiguration
@@ -63,15 +64,19 @@ internal class ComposeWalker(
         if (root == null) {
             block(view)
         } else {
-            Walk(view).node(root, 0, parentMasked)
+            Walk(view, root).node(root, 0, parentMasked)
         }
     } catch (_: Throwable) {
         block(view)
     }
 
     /** State of one walk: counters plus the host's density and screen origin. */
-    private inner class Walk(host: View) {
+    private inner class Walk(host: View, root: SemanticsNode) {
         private val hostId = System.identityHashCode(host)
+
+        /** Ids of every node of the semantics tree: layout nodes outside it are the "visual only" ones. */
+        private val semanticIds = HashSet<Int>().also { collectIds(root, it) }
+        private var layoutVisits = 0
         private val density = density(host)
         private val originX: Int
         private val originY: Int
@@ -124,8 +129,10 @@ internal class ComposeWalker(
             }
             val kids = node.children
             val children = ArrayList<Wireframe>(kids.size)
+            // Backgrounds and icons of layout nodes without semantics paint under/between the semantic content.
+            children.addAll(visualOnlyUnder(node.layoutInfo, depth, masked))
             for (child in kids) node(child, depth + 1, masked)?.let(children::add)
-            val box = ComposeStyleReader.boxStyle(node, density)
+            val box = ComposeStyleReader.boxStyle(node.layoutInfo, density)
             val textStyle = if (type == WireframeType.TEXT || type == WireframeType.INPUT) {
                 ComposeStyleReader.textStyle(config, density)
             } else {
@@ -148,6 +155,56 @@ internal class ComposeWalker(
         }
 
         private fun dp(px: Float): Int = (px / density).roundToInt()
+
+        private fun collectIds(n: SemanticsNode, out: MutableSet<Int>) {
+            out.add(n.id)
+            for (c in n.children) collectIds(c, out)
+        }
+
+        /**
+         * Wireframes for layout nodes below [info] that are not semantics nodes but paint something (a fill, a
+         * border, a painter). Semantics nodes stop the descent: the semantics walk emits them with their own style.
+         * Capped by [MAX_LAYOUT_VISITS] so a huge layout cannot make a frame expensive.
+         */
+        private fun visualOnlyUnder(info: LayoutInfo, depth: Int, parentMasked: Boolean): List<Wireframe> {
+            if (capped || depth > MAX_DEPTH) return emptyList()
+            val out = ArrayList<Wireframe>(0)
+            for (child in ComposeStyleReader.layoutChildren(info)) {
+                if (capped || ++layoutVisits > MAX_LAYOUT_VISITS) break
+                if (child.semanticsId in semanticIds) continue
+                val nested = visualOnlyUnder(child, depth + 1, parentMasked)
+                val own = visualOnlyNode(child, nested, parentMasked)
+                if (own != null) out.add(own) else out.addAll(nested)
+            }
+            return out
+        }
+
+        private fun visualOnlyNode(info: LayoutInfo, nested: List<Wireframe>, parentMasked: Boolean): Wireframe? {
+            val box = ComposeStyleReader.boxStyle(info, density)
+            val painter = ComposeStyleReader.hasPainter(info)
+            if (box.background == null && box.gradient == null && box.borderWidthDp == null && !painter) return null
+            val bounds = ComposeStyleReader.boundsOf(info) ?: return null
+            if (bounds.width <= 0f || bounds.height <= 0f) return null
+            val x = dp(originX + bounds.left)
+            val y = dp(originY + bounds.top)
+            val w = dp(bounds.width)
+            val h = dp(bounds.height)
+            val id = 31 * hostId + info.semanticsId
+            if (count >= maxNodes) {
+                capped = true
+                count++
+                return Wireframe(id, x, y, w, h, WireframeType.CONTAINER, summarized = true)
+            }
+            count++
+            val visual = VisualStyle(
+                gradient = box.gradient, radiiDp = box.radiiDp, borderWidthDp = box.borderWidthDp,
+                borderColor = box.borderColor, shadowDp = box.shadowDp, clip = box.clip,
+            ).takeIf { it != EMPTY_VISUAL }
+            return Wireframe(
+                id, x, y, w, h, if (painter) WireframeType.IMAGE else WireframeType.CONTAINER,
+                background = box.background, alpha = box.alpha, visual = visual, masked = parentMasked, children = nested,
+            )
+        }
     }
 
     /** Masked, textless, childless placeholder of the host's size. Never throws. */
@@ -193,6 +250,7 @@ internal class ComposeWalker(
     private companion object {
         val EMPTY_VISUAL = VisualStyle()
         const val MAX_DEPTH = 50
+        const val MAX_LAYOUT_VISITS = 4000
         const val MAX_TEXT_LENGTH = 200
     }
 }

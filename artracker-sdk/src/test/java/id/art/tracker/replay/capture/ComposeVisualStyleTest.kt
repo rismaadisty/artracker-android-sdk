@@ -211,4 +211,63 @@ class ComposeVisualStyleTest {
         assertFalse(wf.toDebugString().contains("secret-value"))
         assertNotNull(t.text)
     }
+
+    // ---- nodes with no semantics (a Box with Modifier.background, an Icon without contentDescription) ----
+
+    @Test
+    fun boxWithBackground_withoutSemantics_isStillCaptured() {
+        val wf = capture {
+            Column {
+                Box(Modifier.size(40.dp).background(Color.Red, RoundedCornerShape(12.dp)))
+                Text("after")
+            }
+        }
+        val red = wf.all().single { it.background == 0xFFFF0000.toInt() }
+        assertEquals(WireframeType.CONTAINER, red.type)
+        assertEquals(40, red.width)
+        assertEquals(listOf(12f, 12f, 12f, 12f), red.visual!!.radiiDp)
+        assertEquals(1, wf.all().count { it.type == WireframeType.TEXT })
+    }
+
+    @Test
+    fun boxWithoutAnyVisual_addsNoNode() {
+        val wf = capture { Column { Box(Modifier.size(40.dp)); Text("only") } }
+        assertTrue(wf.all().none { it.width == 40 && it.height == 40 })
+    }
+
+    @Test
+    fun nestedBackgrounds_keepBothAndTheTextOnce() {
+        val wf = capture {
+            Box(Modifier.size(100.dp).background(Color.Blue)) {
+                Box(Modifier.size(50.dp).background(Color.Green)) { Text("inner") }
+            }
+        }
+        assertEquals(1, wf.all().count { it.background == 0xFF0000FF.toInt() })
+        assertEquals(1, wf.all().count { it.background == 0xFF00FF00.toInt() })
+        assertEquals(1, wf.all().count { it.type == WireframeType.TEXT })
+    }
+
+    @Test
+    fun semanticNodes_areNeverDuplicatedByTheLayoutWalk() {
+        val wf = capture { Box(Modifier.size(40.dp).node().background(Color.Red)) }
+        assertEquals(1, wf.all().count { it.background == 0xFFFF0000.toInt() })
+    }
+
+    @Test
+    fun backgroundIsPaintedBeforeTheContentOnTopOfIt() {
+        val wf = capture { Box(Modifier.size(100.dp).background(Color.Blue)) { Text("on top") } }
+        val ids = wf.all().map { it.type }
+        assertTrue(ids.indexOf(WireframeType.CONTAINER) >= 0)
+        val blue = wf.all().first { it.background == 0xFF0000FF.toInt() }
+        val text = wf.all().first { it.type == WireframeType.TEXT }
+        assertTrue(wf.all().indexOf(blue) < wf.all().indexOf(text))
+    }
+
+    @Test
+    fun layoutOnlyNodes_countAgainstTheNodeBudget() {
+        rule.setContent { Column { repeat(30) { Box(Modifier.size(10.dp).background(Color.Red)) } } }
+        val all = ComposeWalker(MaskingPolicy(PrivacyConfig()), maxNodes = 10).walk(host(), false)!!.all()
+        assertTrue("size=${all.size}", all.size <= 12)
+        assertTrue(all.any { it.summarized })
+    }
 }

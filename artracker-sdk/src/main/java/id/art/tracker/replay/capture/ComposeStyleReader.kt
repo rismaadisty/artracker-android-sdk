@@ -1,5 +1,6 @@
 package id.art.tracker.replay.capture
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -8,9 +9,10 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.LayoutInfo
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsConfiguration
-import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
@@ -61,14 +63,27 @@ internal class ComposeTextStyle(
 internal object ComposeStyleReader {
     private val fields = ConcurrentHashMap<String, Field?>()
 
-    fun boxStyle(node: SemanticsNode, density: Float): ComposeBoxStyle = try {
-        readBox(node, density)
+    fun boxStyle(info: LayoutInfo, density: Float): ComposeBoxStyle = try {
+        readBox(info, density)
     } catch (_: Throwable) {
         ComposeBoxStyle()
     }
 
-    private fun readBox(node: SemanticsNode, density: Float): ComposeBoxStyle {
-        val info = node.layoutInfo
+    /** True when the node paints a `Painter` (`Image`, `Icon`): it carries a `PainterElement` modifier. */
+    fun hasPainter(info: LayoutInfo): Boolean = try {
+        info.getModifierInfo().any { it.modifier.javaClass.name.endsWith("PainterElement") }
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** Bounds of [info] in the root's pixel space (clipped to the visible root), or null when not placed. */
+    fun boundsOf(info: LayoutInfo): Rect? = try {
+        if (info.isPlaced && info.isAttached) info.coordinates.boundsInRoot() else null
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun readBox(info: LayoutInfo, density: Float): ComposeBoxStyle {
         val size = Size(info.width.toFloat(), info.height.toFloat())
         val d = Density(density)
         var bg: Int? = null
@@ -230,6 +245,24 @@ internal object ComposeStyleReader {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    private val childrenGetters = ConcurrentHashMap<Class<*>, java.lang.reflect.Method?>()
+
+    /**
+     * The layout children of [info]. Compose's public `LayoutInfo` has no children accessor, so this calls the
+     * `LayoutNode` getter by name; any failure (other Compose version, R8) gives an empty list and the walker
+     * simply sees the semantics nodes only.
+     */
+    fun layoutChildren(info: LayoutInfo): List<LayoutInfo> = try {
+        val getter = childrenGetters.getOrPut(info.javaClass) {
+            info.javaClass.methods.firstOrNull {
+                it.name.startsWith("getChildren") && it.parameterCount == 0 && List::class.java.isAssignableFrom(it.returnType)
+            }
+        }
+        (getter?.invoke(info) as? List<*>)?.filterIsInstance<LayoutInfo>().orEmpty()
+    } catch (_: Throwable) {
+        emptyList()
     }
 
     private const val REGULAR = 400
