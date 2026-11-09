@@ -11,6 +11,7 @@ import java.net.ServerSocket
 import java.net.URL
 import java.util.zip.GZIPOutputStream
 import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -56,6 +57,92 @@ class InAppSinkTest {
         val text = (if (code < 400) conn.inputStream else conn.errorStream)?.bufferedReader()?.readText().orEmpty()
         conn.disconnect()
         return code to text
+    }
+
+    /** One request of the replay upload, the way the SDK's ReplayClient makes it (no Content-Encoding, plain or gzip body). */
+    private fun call(method: String, url: String, body: ByteArray, contentType: String): Pair<Int, String> {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.requestMethod = method
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", contentType)
+        conn.setRequestProperty("X-Artracker-Key", "art_live_" + "k".repeat(43))
+        conn.setFixedLengthStreamingMode(body.size)
+        conn.outputStream.use { it.write(body) }
+        val code = conn.responseCode
+        val text = (if (code < 400) conn.inputStream else conn.errorStream)?.bufferedReader()?.readText().orEmpty()
+        conn.disconnect()
+        return code to text
+    }
+
+    private fun base() = "http://localhost:${sink.port}"
+
+    private fun requestUploadUrl(seq: Int): String {
+        val body = "{\"session_id\":\"session-abc-123\",\"chunk_seq\":$seq,\"size_bytes\":10,\"environment\":\"test\"}"
+        val (code, text) = call("POST", base() + "/api/v1/replay/chunk-url", body.toByteArray(), "application/json")
+        assertEquals(200, code)
+        return JSONObject(text).getString("upload_url")
+    }
+
+    @Test
+    fun replayUpload_threeSteps_storesChunkAndExports() {
+        assertTrue(sink.start())
+        val uploadUrl = requestUploadUrl(seq = 7)
+        val events = "[{\"type\":4,\"timestamp\":1000},{\"type\":2,\"timestamp\":1001},{\"type\":3,\"timestamp\":2500}]"
+
+        assertEquals(200, call("PUT", uploadUrl, gzip(events.toByteArray()), "application/gzip").first)
+        val (ackCode, ackText) = call(
+            "POST", base() + "/api/v1/replay/chunk-ack",
+            "{\"session_id\":\"session-abc-123\",\"chunk_seq\":7}".toByteArray(), "application/json",
+        )
+        assertEquals(200, ackCode)
+        assertEquals("{\"status\":\"acknowledged\"}", ackText)
+
+        val file = sink.exportReplayChunks(tmp.newFolder("replay"))
+        val array = JSONArray(file!!.readText())
+        assertEquals(1, array.length())
+        val chunk = array.getJSONObject(0)
+        assertEquals(7, chunk.getInt("seq"))
+        assertEquals(1000L, chunk.getLong("start"))
+        assertEquals(2500L, chunk.getLong("end"))
+        assertTrue(chunk.getBoolean("full_snapshot"))
+        assertEquals("android", chunk.getString("platform"))
+        val stored = chunk.getJSONArray("events")
+        assertEquals(listOf(4, 2, 3), (0 until stored.length()).map { stored.getJSONObject(it).getInt("type") })
+        // The replay upload is not an ingest item: the Inspector does not list it.
+        assertEquals(0, ring.items.value.size)
+    }
+
+    @Test
+    fun replayUpload_neverStoresTheApiKey() {
+        assertTrue(sink.start())
+        requestUploadUrl(seq = 0)
+        val file = sink.exportReplayChunks(tmp.newFolder("nokey"))
+        assertFalse(file?.readText().orEmpty().contains("art_live_"))
+    }
+
+    @Test
+    fun replayUpload_oversizedBody_isRefused413() {
+        assertTrue(sink.start())
+        val uploadUrl = requestUploadUrl(seq = 1)
+
+        assertEquals(413, call("PUT", uploadUrl, gzip(ByteArray(5 * 1024 * 1024)), "application/gzip").first)
+        assertEquals("[]", sink.exportReplayChunks(tmp.newFolder("big"))!!.readText())
+    }
+
+    @Test
+    fun replayUpload_corruptGzip_is400() {
+        assertTrue(sink.start())
+        val uploadUrl = requestUploadUrl(seq = 1)
+
+        assertEquals(400, call("PUT", uploadUrl, "not gzip".toByteArray(), "application/gzip").first)
+        assertEquals(400, call("PUT", uploadUrl, gzip("{\"not\":\"an array\"}".toByteArray()), "application/gzip").first)
+    }
+
+    @Test
+    fun unknownPath_is404() {
+        assertTrue(sink.start())
+        assertEquals(404, call("POST", base() + "/api/v1/replay/nope", "{}".toByteArray(), "application/json").first)
+        assertEquals(404, call("PUT", base() + "/api/v1/replay/chunk-url", "{}".toByteArray(), "application/json").first)
     }
 
     @Test

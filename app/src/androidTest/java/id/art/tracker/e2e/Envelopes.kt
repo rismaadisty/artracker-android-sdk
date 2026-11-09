@@ -10,9 +10,19 @@ internal fun List<MockIngest.Recorded>.items(): List<JSONObject> = flatMap { r -
     (0 until array.length()).mapNotNull { array.optJSONObject(it) }
 }
 
-internal fun JSONObject.isChunk() = optString("type") == "session" && optString("name") == "replay_chunk"
-
-internal fun List<MockIngest.Recorded>.chunks(): List<JSONObject> = items().filter { it.isChunk() }
+/**
+ * The replay uploads, one per recorded `PUT`, shaped like the old chunk items (`attributes.events`) so [touches] and the
+ * assertions that count chunks keep working: the SDK now uploads replay to the Session Replay API instead of `/ingest`.
+ */
+internal fun List<MockIngest.Recorded>.chunks(): List<JSONObject> =
+    filter { it.method == "PUT" && it.path.substringBefore('?') == MockIngest.UPLOAD_PATH }
+        .mapNotNull { r ->
+            val events = runCatching { JSONArray(r.body) }.getOrNull() ?: return@mapNotNull null
+            JSONObject()
+                .put("type", "session")
+                .put("name", "replay_chunk")
+                .put("attributes", JSONObject().put("events", events))
+        }
 
 /** (kind, x, y) of every rrweb touch event in the chunks: kind 7 = touchstart, 9 = touchend. x and y are dp. */
 internal fun List<JSONObject>.touches(): List<Triple<Int, Int, Int>> = flatMap { chunk ->
