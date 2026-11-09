@@ -14,12 +14,16 @@ internal enum class TouchKind { DOWN, MOVE, UP }
  * Encodes wireframe frames as rrweb 2.x events (plain `Map`/`List`/`String`/`Number`/`Boolean`/`null`).
  * Stateful per replay session: it remembers which rrweb node id belongs to which [Wireframe.id].
  *
- * Reserved rrweb node ids: 1 document, 2 html, 3 head, 4 body, 5 doctype (6..9 spare). Wireframe nodes get
+ * Reserved rrweb node ids: 1 document, 2 html, 3 head, 4 body, 5 doctype, 6 default `<style>` and 7 its text
+ * (8..9 spare). Wireframe nodes get
  * ids from 10 in pre-order; a node's own text node takes the id right after the element's. Ids are never
  * reused within a snapshot generation: [fullSnapshot] and [reset] restart numbering at 10.
  *
+ * Every full snapshot carries a fixed default stylesheet ([DEFAULT_CSS]) in `<head>` so a chunk is self-contained
+ * in any rrweb player (sans-serif font, single-line text, readable buttons); inline styles still win over it.
+ *
  * Privacy: the only text this encoder writes is [Wireframe.displayText] (the wireframe's own, already masked
- * text, or a fixed placeholder label). Colors and sizes come from ints/floats only.
+ * text, or a fixed placeholder label) plus that constant stylesheet. Colors and sizes come from ints/floats only.
  */
 internal class RrwebEncoder {
     private class NodeState(
@@ -62,9 +66,14 @@ internal class RrwebEncoder {
             "childNodes" to listOf(tree),
             "id" to BODY_ID,
         )
+        val styleText = mapOf("type" to NODE_TEXT, "textContent" to DEFAULT_CSS, "id" to STYLE_TEXT_ID)
+        val style = mapOf(
+            "type" to NODE_ELEMENT, "tagName" to "style", "attributes" to emptyMap<String, Any?>(),
+            "childNodes" to listOf(styleText), "id" to STYLE_ID,
+        )
         val head = mapOf(
             "type" to NODE_ELEMENT, "tagName" to "head", "attributes" to emptyMap<String, Any?>(),
-            "childNodes" to emptyList<Any?>(), "id" to HEAD_ID,
+            "childNodes" to listOf(style), "id" to HEAD_ID,
         )
         val html = mapOf(
             "type" to NODE_ELEMENT, "tagName" to "html", "attributes" to emptyMap<String, Any?>(),
@@ -243,6 +252,8 @@ internal class RrwebEncoder {
         const val HEAD_ID = 3
         const val BODY_ID = 4
         const val DOCTYPE_ID = 5
+        const val STYLE_ID = 6
+        const val STYLE_TEXT_ID = 7
         const val MAX_CHAIN = 1_000
 
         const val TYPE_FULL_SNAPSHOT = 2
@@ -257,6 +268,24 @@ internal class RrwebEncoder {
         const val SOURCE_TOUCH_MOVE = 6
         const val TOUCH_START = 7
         const val TOUCH_END = 9
+
+        /** Constant, content-free wireframe theme for synthetic nodes; see the class doc. */
+        const val DEFAULT_CSS =
+            "html,body{margin:0;padding:0;font-family:Roboto,-apple-system,BlinkMacSystemFont,sans-serif;" +
+                "font-size:12px;line-height:1.25;color:#0f172a;background:#fafafa}" +
+                "[data-artracker-type]{box-sizing:border-box}" +
+                "[data-artracker-type=\"TEXT\"]{display:flex;align-items:center;font-size:11px;line-height:1.15;" +
+                "color:#1e293b;white-space:nowrap}" +
+                "[data-artracker-type=\"BUTTON\"],[data-artracker-type=\"CHIP\"],[data-artracker-type=\"TAB\"]{" +
+                "background:rgba(0,122,255,0.10);border:1px solid rgba(0,122,255,0.30);border-radius:8px}" +
+                "[data-artracker-type=\"TAB\"][data-artracker-selected=\"true\"]{background:rgba(0,122,255,0.22);" +
+                "border-color:rgba(0,122,255,0.6)}" +
+                "[data-artracker-type=\"TOGGLE\"]{border:1px solid #94a3b8;border-radius:6px}" +
+                "[data-artracker-type=\"TOGGLE\"][data-artracker-checked=\"true\"]{background:rgba(0,122,255,0.35)}" +
+                "[data-artracker-type=\"INPUT\"]{background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px}" +
+                "[data-artracker-type=\"CARD\"]{background:#ffffff;border:1px solid #e2e8f0;border-radius:12px}" +
+                "[data-artracker-type=\"TOOLBAR\"],[data-artracker-type=\"TABBAR\"]{background:#ffffff;" +
+                "border-color:#e2e8f0}"
 
         const val IMAGE_GREY = "#cccccc"
         const val BLOCKED_BACKGROUND =

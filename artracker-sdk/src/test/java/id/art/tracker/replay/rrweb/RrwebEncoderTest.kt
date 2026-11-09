@@ -58,7 +58,27 @@ class RrwebEncoderTest {
     private fun style(node: Map<String, Any?>) = (node["attributes"] as Map<String, Any?>)["style"] as String
 
     private fun textsOf(snapshot: Map<String, Any?>): List<String> =
-        allNodes(snapshot).filter { it["type"] == 3 }.map { it["textContent"] as String }
+        allNodes(snapshot).filter { it["type"] == 3 && it["id"] != STYLE_TEXT_NODE_ID }.map { it["textContent"] as String }
+
+    @Test
+    fun fullSnapshot_headCarriesSelfContainedStylesheet() {
+        val snap = encoder.fullSnapshot(box(2, 10, 20, 50, 40), 1234L)
+        val html = snap.map("data").map("node").list("childNodes").first { it["tagName"] == "html" }
+        val head = html.list("childNodes").first { it["tagName"] == "head" }
+        val style = head.list("childNodes").single()
+        assertEquals(2, style["type"])
+        assertEquals(STYLE_NODE_ID, style["id"])
+        val textNode = style.list("childNodes").single()
+        assertEquals(3, textNode["type"])
+        assertEquals(STYLE_TEXT_NODE_ID, textNode["id"])
+        val css = textNode["textContent"] as String
+        assertTrue(css, css.contains("font-family:Roboto"))
+        assertTrue(css, css.contains("[data-artracker-type=\"TEXT\"]"))
+        assertTrue(css, css.contains("white-space:nowrap"))
+        assertTrue(css, css.contains("[data-artracker-type=\"BUTTON\"]"))
+        // Reserved ids stay clear of wireframe nodes (which start at 10).
+        assertTrue(allNodes(snap).filter { it !== style && it !== textNode }.none { it["id"] == STYLE_NODE_ID || it["id"] == STYLE_TEXT_NODE_ID })
+    }
 
     @Test
     fun fullSnapshot_structure() {
@@ -76,7 +96,8 @@ class RrwebEncoderTest {
         val htmlKids = html.list("childNodes")
         assertEquals(listOf("head", "body"), htmlKids.map { it["tagName"] })
         assertEquals(listOf(3, 4), htmlKids.map { it["id"] })
-        assertTrue(htmlKids[0].list("childNodes").isEmpty())
+        val headKids = htmlKids[0].list("childNodes")
+        assertEquals(listOf("style"), headKids.map { it["tagName"] })
         val bodyStyle = style(htmlKids[1])
         assertTrue(bodyStyle, bodyStyle.contains("margin:0;position:relative;width:50px;height:40px;overflow:hidden"))
         val div = firstDiv(snap)
@@ -345,7 +366,7 @@ class RrwebEncoderTest {
     fun fullSnapshot_assignsSequentialIdsFrom10InPreOrder() {
         val snap = encoder.fullSnapshot(root(box(2, 0, 0, 10, 10, label(3, "a")), box(4)), 0L)
         val ids = allNodes(snap).map { it["id"] }
-        assertEquals(listOf(1, 2, 3, 4, 5, 10, 11, 12, 13, 14), ids.map { it as Int }.sorted())
+        assertEquals(listOf(1, 2, 3, 4, 5, STYLE_NODE_ID, STYLE_TEXT_NODE_ID, 10, 11, 12, 13, 14), ids.map { it as Int }.sorted())
         assertEquals(10, elementFor(snap, 1)["id"])
         assertEquals(11, elementFor(snap, 2)["id"])
         assertEquals(12, elementFor(snap, 3)["id"])
@@ -607,5 +628,10 @@ class RrwebEncoderTest {
             enc.mutation(WireframeDiffer.diff(frames[i - 1], frames[i]), i.toLong())?.let { dom.apply(it) }
             assertEquals("frame $i", Dom(RrwebEncoder().fullSnapshot(frames[i], 0L)).normalized(), dom.normalized())
         }
+    }
+
+    private companion object {
+        const val STYLE_NODE_ID = 6
+        const val STYLE_TEXT_NODE_ID = 7
     }
 }

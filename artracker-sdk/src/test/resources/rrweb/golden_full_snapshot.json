@@ -20,7 +20,21 @@
               "type": 2,
               "tagName": "head",
               "attributes": {},
-              "childNodes": [],
+              "childNodes": [
+                {
+                  "type": 2,
+                  "tagName": "style",
+                  "attributes": {},
+                  "childNodes": [
+                    {
+                      "type": 3,
+                      "textContent": "html,body{margin:0;padding:0;font-family:Roboto,-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;line-height:1.25;color:#0f172a;background:#fafafa}[data-artracker-type]{box-sizing:border-box}[data-artracker-type=\"TEXT\"]{display:flex;align-items:center;font-size:11px;line-height:1.15;color:#1e293b;white-space:nowrap}[data-artracker-type=\"BUTTON\"],[data-artracker-type=\"CHIP\"],[data-artracker-type=\"TAB\"]{background:rgba(0,122,255,0.10);border:1px solid rgba(0,122,255,0.30);border-radius:8px}[data-artracker-type=\"TAB\"][data-artracker-selected=\"true\"]{background:rgba(0,122,255,0.22);border-color:rgba(0,122,255,0.6)}[data-artracker-type=\"TOGGLE\"]{border:1px solid #94a3b8;border-radius:6px}[data-artracker-type=\"TOGGLE\"][data-artracker-checked=\"true\"]{background:rgba(0,122,255,0.35)}[data-artracker-type=\"INPUT\"]{background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px}[data-artracker-type=\"CARD\"]{background:#ffffff;border:1px solid #e2e8f0;border-radius:12px}[data-artracker-type=\"TOOLBAR\"],[data-artracker-type=\"TABBAR\"]{background:#ffffff;border-color:#e2e8f0}",
+                      "id": 7
+                    }
+                  ],
+                  "id": 6
+                }
+              ],
               "id": 3
             },
             {
