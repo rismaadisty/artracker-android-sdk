@@ -13,6 +13,7 @@ import androidx.compose.ui.semantics.getOrNull
 import id.art.tracker.privacy.ComposeMaskRules
 import id.art.tracker.privacy.MaskDecision
 import id.art.tracker.privacy.MaskingPolicy
+import id.art.tracker.replay.model.ImageFit
 import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
 import id.art.tracker.replay.model.WireframeType
@@ -57,6 +58,7 @@ internal class ComposeWalker(
     private val policy: MaskingPolicy,
     private val semanticsAccess: SemanticsAccess = ReflectiveSemanticsAccess,
     private val maxNodes: Int = 2000,
+    private val icons: IconRasterizer = IconRasterizer.shared,
 ) : ComposeWalkerApi {
 
     override fun walk(view: View, parentMasked: Boolean): Wireframe? = try {
@@ -133,6 +135,7 @@ internal class ComposeWalker(
             children.addAll(visualOnlyUnder(node.layoutInfo, depth, masked))
             for (child in kids) node(child, depth + 1, masked)?.let(children::add)
             val box = ComposeStyleReader.boxStyle(node.layoutInfo, density)
+            val image = if (masked) null else iconOf(node.layoutInfo, w, h)
             val textStyle = if (type == WireframeType.TEXT || type == WireframeType.INPUT) {
                 ComposeStyleReader.textStyle(config, density)
             } else {
@@ -145,6 +148,7 @@ internal class ComposeWalker(
                 fontFamily = textStyle?.fontFamily, italic = textStyle?.italic ?: false,
                 textAlign = textStyle?.align, wrap = textStyle?.wrap ?: false,
                 lineHeightDp = textStyle?.lineHeightDp?.takeIf { textStyle.wrap },
+                image = image, imageFit = if (image != null) ImageFit.CONTAIN else null,
             ).takeIf { it != EMPTY_VISUAL }
             return Wireframe(
                 id, x, y, w, h, type, text = text,
@@ -155,6 +159,12 @@ internal class ComposeWalker(
         }
 
         private fun dp(px: Float): Int = (px / density).roundToInt()
+
+        private fun iconOf(info: LayoutInfo, wDp: Int, hDp: Int): String? =
+            ComposeStyleReader.painterOf(info)?.let { iconOf(it, info, wDp, hDp) }
+
+        private fun iconOf(p: ComposeStyleReader.NodePainter, info: LayoutInfo, wDp: Int, hDp: Int): String? =
+            ComposeStyleReader.iconUri(icons, p, wDp, hDp, info.layoutDirection)
 
         private fun collectIds(n: SemanticsNode, out: MutableSet<Int>) {
             out.add(n.id)
@@ -181,8 +191,8 @@ internal class ComposeWalker(
 
         private fun visualOnlyNode(info: LayoutInfo, nested: List<Wireframe>, parentMasked: Boolean): Wireframe? {
             val box = ComposeStyleReader.boxStyle(info, density)
-            val painter = ComposeStyleReader.hasPainter(info)
-            if (box.background == null && box.gradient == null && box.borderWidthDp == null && !painter) return null
+            val painter = ComposeStyleReader.painterOf(info)
+            if (box.background == null && box.gradient == null && box.borderWidthDp == null && painter == null) return null
             val bounds = ComposeStyleReader.boundsOf(info) ?: return null
             if (bounds.width <= 0f || bounds.height <= 0f) return null
             val x = dp(originX + bounds.left)
@@ -196,12 +206,14 @@ internal class ComposeWalker(
                 return Wireframe(id, x, y, w, h, WireframeType.CONTAINER, summarized = true)
             }
             count++
+            val image = if (parentMasked || painter == null) null else iconOf(painter, info, w, h)
             val visual = VisualStyle(
                 gradient = box.gradient, radiiDp = box.radiiDp, borderWidthDp = box.borderWidthDp,
                 borderColor = box.borderColor, shadowDp = box.shadowDp, clip = box.clip,
+                image = image, imageFit = if (image != null) ImageFit.CONTAIN else null,
             ).takeIf { it != EMPTY_VISUAL }
             return Wireframe(
-                id, x, y, w, h, if (painter) WireframeType.IMAGE else WireframeType.CONTAINER,
+                id, x, y, w, h, if (painter != null) WireframeType.IMAGE else WireframeType.CONTAINER,
                 background = box.background, alpha = box.alpha, visual = visual, masked = parentMasked, children = nested,
             )
         }

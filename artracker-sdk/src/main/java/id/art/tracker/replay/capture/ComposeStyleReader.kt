@@ -4,10 +4,14 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.isSpecified
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.LayoutInfo
@@ -69,11 +73,49 @@ internal object ComposeStyleReader {
         ComposeBoxStyle()
     }
 
-    /** True when the node paints a `Painter` (`Image`, `Icon`): it carries a `PainterElement` modifier. */
-    fun hasPainter(info: LayoutInfo): Boolean = try {
-        info.getModifierInfo().any { it.modifier.javaClass.name.endsWith("PainterElement") }
+    /** A node's `Painter` (`Image`, `Icon`) and the `ColorFilter` that tints it. */
+    class NodePainter(val painter: Painter, val colorFilter: ColorFilter?)
+
+    /** The painter of the node's `PainterElement` modifier, or null when it paints none (or it cannot be read). */
+    fun painterOf(info: LayoutInfo): NodePainter? = try {
+        info.getModifierInfo().lastOrNull { it.modifier.javaClass.name.endsWith("PainterElement") }?.modifier?.let { m ->
+            (field(m, "painter") as? Painter)?.let { NodePainter(it, field(m, "colorFilter") as? ColorFilter) }
+        }
     } catch (_: Throwable) {
-        false
+        null
+    }
+
+    /**
+     * Icon URI of a node's painter at [widthDp] x [heightDp], or null. Only vector painters, solid colors and
+     * bitmaps of at most [IconRasterizer.MAX_ICON_DP] px are icons; any other painter (an image loader's, a custom
+     * one) is arbitrary content and stays a placeholder.
+     */
+    fun iconUri(icons: IconRasterizer, p: NodePainter, widthDp: Int, heightDp: Int, dir: androidx.compose.ui.unit.LayoutDirection): String? = try {
+        if (!isIconPainter(p.painter)) {
+            null
+        } else {
+            val variant = "$widthDp x $heightDp|${p.colorFilter?.hashCode()}|$dir"
+            icons.render(p.painter, variant, widthDp, heightDp) { androidCanvas ->
+                CanvasDrawScope().draw(
+                    Density(1f), dir, androidx.compose.ui.graphics.Canvas(androidCanvas),
+                    Size(widthDp.toFloat(), heightDp.toFloat()),
+                ) {
+                    with(p.painter) { draw(size, 1f, p.colorFilter) }
+                }
+            }
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun isIconPainter(p: Painter): Boolean = when (p.javaClass.name) {
+        "androidx.compose.ui.graphics.vector.VectorPainter",
+        "androidx.compose.ui.graphics.painter.ColorPainter",
+        -> true
+        "androidx.compose.ui.graphics.painter.BitmapPainter" -> (field(p, "image") as? ImageBitmap)?.let {
+            it.width <= IconRasterizer.MAX_ICON_DP && it.height <= IconRasterizer.MAX_ICON_DP
+        } == true
+        else -> false
     }
 
     /** Bounds of [info] in the root's pixel space (clipped to the visible root), or null when not placed. */
