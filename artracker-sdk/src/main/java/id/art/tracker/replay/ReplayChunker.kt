@@ -4,7 +4,7 @@ import androidx.annotation.VisibleForTesting
 import id.art.tracker.core.Json
 
 /**
- * Groups rrweb events into `replay_chunk` attributes `{seq, start, end, full_snapshot, platform, [oversized],
+ * Groups rrweb events into chunks `{seq, start, end, full_snapshot, platform, [oversized],
  * events}` (ARCHITECTURE.md section 6.5).
  *
  * - A chunk is closed (returned by [add]) once it reaches [flushAtBytes], before an event that would push it over

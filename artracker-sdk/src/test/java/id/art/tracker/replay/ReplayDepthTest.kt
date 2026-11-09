@@ -7,14 +7,14 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.PrivacyConfig
-import id.art.tracker.core.ItemFactory
-import id.art.tracker.core.Json
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.replay.capture.ViewWalker
 import id.art.tracker.replay.rrweb.RrwebEncoder
 import id.art.tracker.testutil.FakeClock
-import id.art.tracker.toJson
-import org.json.JSONObject
+import id.art.tracker.transport.NewReplayBatch
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
+import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -31,7 +31,7 @@ class ReplayDepthTest {
     private val context: Application = ApplicationProvider.getApplicationContext()
 
     @Test
-    fun fortyLevelViewTree_isFullyNestedInTheSentItem() {
+    fun fortyLevelViewTree_isFullyNestedInTheUploadedBatch() {
         val root = FrameLayout(context)
         var parent: ViewGroup = root
         repeat(39) {
@@ -63,14 +63,17 @@ class ReplayDepthTest {
         chunker.add(encoder.meta("android://Deep", 400, 400, 1_000), false)
         chunker.add(encoder.fullSnapshot(wireframe, 1_000), true)
         val chunk = chunker.drain().single()
-        val json = ItemFactory(FakeClock(2_000), { "s1" }, { null }).session("replay_chunk", chunk).toJson()
 
-        assertFalse(json.contains("[max_depth]"))
-        assertTrue(json.contains("deepest-node-text"))
-        val parsed = JSONObject(json)
+        val batches = ArrayList<NewReplayBatch>()
+        val batcher = ReplayBatcher(ReplaySink { batches += it }, FakeClock(2_000), "test", { null })
+        batcher.add("session-deep-1", chunk)
+        batcher.close()
+        val body = GZIPInputStream(ByteArrayInputStream(batches.single().gzipBody)).use { String(it.readBytes(), Charsets.UTF_8) }
+
+        assertFalse(body.contains("[max_depth]"))
+        assertTrue(body.contains("deepest-node-text"))
         // Walk the parsed snapshot down to the text node: every level is a real object.
-        var node = parsed.getJSONObject("attributes").getJSONArray("events").getJSONObject(1)
-            .getJSONObject("data").getJSONObject("node")
+        var node = JSONArray(body).getJSONObject(1).getJSONObject("data").getJSONObject("node")
         var found = false
         while (true) {
             val kids = node.optJSONArray("childNodes") ?: break
@@ -82,9 +85,5 @@ class ReplayDepthTest {
             }
         }
         assertTrue(found)
-        // The chunker measured exactly what is sent: the attributes as serialized inside the item.
-        val attributesJson = Json.encode(chunk, Json.REPLAY_MAX_DEPTH)
-        assertTrue(json.contains(",\"attributes\":$attributesJson}"))
-        assertEquals(attributesJson.toByteArray(Charsets.UTF_8).size, chunker.lastChunkBytes)
     }
 }

@@ -176,7 +176,7 @@ class EventPipelineTest {
     }
 
     @Test
-    fun replayChunk_skipsRedactor() = runTest {
+    fun itemNamedReplayChunk_isRedactedLikeAnyOtherItem() = runTest {
         val p = pipeline()
         val chunk = factory.session("replay_chunk", mapOf("data" to "a@b.com"))
         val other = factory.event("other", mapOf("data" to "a@b.com"))
@@ -184,8 +184,8 @@ class EventPipelineTest {
         p.enqueue(other)
         p.awaitIdle()
 
-        assertTrue(payloadOf(chunk.id).contains("a@b.com"))
-        assertEquals(3, queue.stored.first { it.id == chunk.id }.priority)
+        assertFalse(payloadOf(chunk.id).contains("a@b.com"))
+        assertEquals(2, queue.stored.first { it.id == chunk.id }.priority)
         assertFalse(payloadOf(other.id).contains("a@b.com"))
     }
 
@@ -614,7 +614,7 @@ class EventPipelineTest {
     }
 
     @Test
-    fun replayChunk_nameAndMessage_stayUntouched() = runTest {
+    fun itemNamedReplayChunk_messageIsRedacted_nameIsKept() = runTest {
         val p = pipeline()
         val chunk = factory.session("replay_chunk", mapOf("data" to "a@b.com"))
         val withMessage = chunk.copy(message = "a@b.com")
@@ -623,7 +623,7 @@ class EventPipelineTest {
 
         val json = JSONObject(payloadOf(withMessage.id))
         assertEquals("replay_chunk", json.getString("name"))
-        assertEquals("a@b.com", json.getString("message"))
+        assertFalse(json.getString("message").contains("a@b.com"))
     }
 
     @Test

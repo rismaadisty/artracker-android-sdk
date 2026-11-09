@@ -40,25 +40,13 @@ internal fun TelemetryItem.toJson(): String {
     sb.append(",\"timestamp\":").append(Json.encode(Iso8601.format(timestampMs)))
     sb.append(",\"session_id\":").append(Json.encode(sessionId))
     if (userId != null) sb.append(",\"user_id\":").append(Json.encode(userId))
-    val depth = if (isReplayChunk()) Json.REPLAY_MAX_DEPTH else Json.MAX_DEPTH
-    sb.append(",\"attributes\":").append(Json.encode(attributes, depth))
+    sb.append(",\"attributes\":").append(Json.encode(attributes))
     sb.append('}')
     return sb.toString()
 }
 
-/** Name of the SDK's session replay item. */
-internal const val REPLAY_CHUNK_NAME: String = "replay_chunk"
-
-/**
- * The SDK's own replay chunk: a `session` item (the public API cannot create those) named `replay_chunk`. Its
- * content is masked by the walker, so it skips the attribute redactor and gets [Json.REPLAY_MAX_DEPTH]; a user
- * event that merely borrows the name gets neither.
- */
-internal fun TelemetryItem.isReplayChunk(): Boolean = type == ItemType.SESSION && name == REPLAY_CHUNK_NAME
-
 internal fun TelemetryItem.priority(): Int = when {
     level == LogLevel.FATAL -> 0
     level == LogLevel.ERROR -> 1
-    isReplayChunk() -> 3
     else -> 2
 }
