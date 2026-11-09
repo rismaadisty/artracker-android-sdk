@@ -157,6 +157,7 @@ public object ARTracker {
                 ARTrackerCore.instanceOrNull()?.shutdown()
                 ARTrackerCore.clear()
                 FlusherRegistry.current = null
+                FlusherRegistry.replay = null
                 SdkLog.enabled = false
                 lastNotInitializedWarningMs.set(0)
             }

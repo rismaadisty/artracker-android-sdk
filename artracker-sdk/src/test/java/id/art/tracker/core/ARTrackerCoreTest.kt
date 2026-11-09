@@ -13,7 +13,18 @@ import androidx.navigation.createGraph
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.ARTracker
 import id.art.tracker.ARTrackerConfig
+import android.app.Activity
+import android.widget.TextView
+import id.art.tracker.LogLevel
+import id.art.tracker.ReplayConfig
 import id.art.tracker.BeforeSend
+import id.art.tracker.privacy.MaskingPolicy
+import id.art.tracker.replay.ManualDispatcher
+import id.art.tracker.replay.ReplayController
+import id.art.tracker.replay.capture.ViewWalker
+import id.art.tracker.testutil.FakeReplayBackend
+import id.art.tracker.transport.NewReplayBatch
+import id.art.tracker.transport.ReplayStore
 import id.art.tracker.TelemetryItem
 import id.art.tracker.lifecycle.AnnotatedActivity
 import id.art.tracker.lifecycle.FragmentSupport
@@ -46,12 +57,17 @@ class ARTrackerCoreTest {
     private val seen = CopyOnWriteArrayList<TelemetryItem>()
     private val config = configWith()
 
-    private fun configWith(sessionTimeoutMs: Long = 1_800_000) = ARTrackerConfig(
-        endpoint = "http://127.0.0.1:9",
+    private fun configWith(
+        sessionTimeoutMs: Long = 1_800_000,
+        endpoint: String = "http://127.0.0.1:9",
+        replay: ReplayConfig = ReplayConfig(),
+    ) = ARTrackerConfig(
+        endpoint = endpoint,
         apiKey = "art_live_" + "a".repeat(43),
         environment = "test",
         appVersion = "1.0",
         sessionTimeoutMs = sessionTimeoutMs,
+        replay = replay,
         beforeSend = BeforeSend { it.also(seen::add) },
     )
 
@@ -68,6 +84,7 @@ class ARTrackerCoreTest {
         ClassAvailability.resetOverrides()
         ProcessLifecycleTestUtil.stop()
         app.deleteDatabase("artracker.db")
+        app.deleteDatabase(ReplayStore.DB_NAME)
     }
 
     @After
@@ -76,6 +93,7 @@ class ARTrackerCoreTest {
         ClassAvailability.resetOverrides()
         ProcessLifecycleTestUtil.stop()
         app.deleteDatabase("artracker.db")
+        app.deleteDatabase(ReplayStore.DB_NAME)
     }
 
     private fun core(): ARTrackerCore = ARTrackerCore.instanceOrNull()!!
@@ -97,6 +115,98 @@ class ARTrackerCoreTest {
             "androidx.compose.ui.platform.AndroidComposeView",
             "androidx.navigation.NavController",
         ).forEach { ClassAvailability.overrides[it] = false }
+    }
+
+    private fun replayBatch(session: String = "session-xyz-1") =
+        NewReplayBatch(session, byteArrayOf(1, 2, 3), 1, 1_000, 2_000, false, null, "test")
+
+    @Test
+    fun optOut_clearsStoredReplayBatches() {
+        val backend = FakeReplayBackend()
+        val store = ReplayStore(app, Clock.SYSTEM)
+        try {
+            store.enqueue(replayBatch())
+            store.enqueue(replayBatch())
+            ARTracker.init(app, configWith(endpoint = backend.endpoint))
+
+            ARTracker.optOut(true)
+            settle()
+
+            assertEquals(0, store.pendingCount())
+            assertTrue(backend.requests.isEmpty())
+        } finally {
+            store.close()
+            backend.shutdown()
+        }
+    }
+
+    @Test
+    fun init_resetsOrphanedAndPurgesOldReplayBatches() {
+        val clock = FakeClock(1_700_000_000_000L)
+        val store = ReplayStore(app, clock)
+        try {
+            clock.advance(-8L * 24 * 60 * 60 * 1000)
+            store.enqueue(replayBatch("session-old-1"))
+            clock.advance(8L * 24 * 60 * 60 * 1000)
+            store.enqueue(replayBatch("session-orphan-1"))
+            // Both claimed by a process that died before it settled them.
+            assertEquals("session-old-1", store.claim()!!.sessionId)
+            assertEquals("session-orphan-1", store.claim()!!.sessionId)
+            assertEquals(0, store.pendingCount())
+
+            startCoreWith(clock)
+            settle()
+
+            assertEquals(1, store.pendingCount())
+            assertEquals("session-orphan-1", store.claim()!!.sessionId)
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun replayStoreNotCreated_whenReplayNeverUsed() {
+        ARTracker.init(app, config)
+        ARTracker.flush()
+        settle()
+
+        assertFalse(app.getDatabasePath(ReplayStore.DB_NAME).exists())
+    }
+
+    @Test
+    fun errorLogItem_marksOpenReplayBatchHasError() {
+        val backend = FakeReplayBackend()
+        try {
+            val dispatcher = ManualDispatcher()
+            val core = ARTrackerCore(
+                app,
+                configWith(endpoint = backend.endpoint, replay = ReplayConfig(enabled = true, sampleRate = 1.0)),
+                replayFactory = { c, handler ->
+                    ReplayController.create(c, ViewWalker(MaskingPolicy(c.config.privacy)), handler, { _, _ -> true }, dispatcher)
+                },
+            )
+            ARTrackerCore.install(core)
+            core.start()
+            ProcessLifecycleTestUtil.start()
+            val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+            activity.setContentView(TextView(activity).apply { text = "hello replay" })
+            shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1_000))
+            core.replayController!!.captureFrame()
+            dispatcher.runAll()
+
+            ARTracker.log(LogLevel.ERROR, "something broke")
+            settle()
+            dispatcher.runAll()
+            core.replayController!!.flushChunks()
+            dispatcher.runAll()
+
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15)
+            while (backend.requestsTo(FakeReplayBackend.ACK).isEmpty() && System.nanoTime() < deadline) Thread.sleep(20)
+            val ack = backend.requestsTo(FakeReplayBackend.ACK).single().json()
+            assertTrue(ack.getBoolean("has_error"))
+        } finally {
+            backend.shutdown()
+        }
     }
 
     @Test

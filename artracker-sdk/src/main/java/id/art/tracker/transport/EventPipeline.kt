@@ -2,6 +2,7 @@ package id.art.tracker.transport
 
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.BeforeSend
+import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.Clock
 import id.art.tracker.core.MAX_MESSAGE
@@ -56,6 +57,11 @@ internal class EventPipeline(
     private val beforeSend: BeforeSend?,
     private val flushIntervalMs: Long,
     private val flushContext: CoroutineContext = EmptyCoroutineContext,
+    /**
+     * Called on the caller's thread for every ERROR / FATAL item the pipeline accepts (the replay recorder flags its
+     * open batch with it). Must be cheap; a throwing hook never affects [enqueue].
+     */
+    private val onItemAccepted: ((TelemetryItem) -> Unit)? = null,
 ) {
     /** Idle accounting: [settled] counts items fully handled (persisted, dropped, or evicted from the channel). */
     private data class Progress(
@@ -109,6 +115,7 @@ internal class EventPipeline(
         val seq = accepted.incrementAndGet()
         return try {
             if (channel.trySend(Queued(item, seq)).isSuccess) {
+                notifyAccepted(item)
                 true
             } else {
                 settle(1)
@@ -118,6 +125,12 @@ internal class EventPipeline(
             settle(1)
             false
         }
+    }
+
+    private fun notifyAccepted(item: TelemetryItem) {
+        val hook = onItemAccepted ?: return
+        if (item.level != LogLevel.ERROR && item.level != LogLevel.FATAL) return
+        runCatching { hook(item) }
     }
 
     /** Starts the foreground flush timer; flushes only when something is pending. Idempotent. */

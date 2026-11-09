@@ -34,6 +34,10 @@ import id.art.tracker.transport.Flusher
 import id.art.tracker.transport.FlusherRegistry
 import id.art.tracker.transport.IngestClient
 import id.art.tracker.transport.PayloadEncoder
+import id.art.tracker.transport.ReplayClient
+import id.art.tracker.transport.ReplayFlusher
+import id.art.tracker.transport.ReplayKicker
+import id.art.tracker.transport.ReplayStore
 import id.art.tracker.transport.TransportConfigStore
 import id.art.tracker.transport.WorkManagerScheduler
 import java.io.File
@@ -64,12 +68,9 @@ internal class ARTrackerCore(
     val clock: Clock = Clock.SYSTEM,
     /** Builds the replay controller (tests inject one); must not link Compose types. */
     private val replayFactory: (ARTrackerCore, Handler) -> ReplayController = ReplayControllerFactory::create,
-    /** Where closed replay batches go; tests inject one. The default is wired in a later step. */
+    /** Where closed replay batches go; tests inject one. The default queues them for upload (see [replaySink]). */
     replaySink: ReplaySink? = null,
 ) {
-    /** Receives every closed replay batch from the replay controller's batcher. */
-    internal val replaySink: ReplaySink = replaySink ?: ReplaySink { }
-
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
             Dispatchers.IO.limitedParallelism(1) +
@@ -204,6 +205,38 @@ internal class ARTrackerCore(
         scheduler = scheduler,
     )
 
+    /**
+     * Replay uploads. All three are lazy so the replay database is never opened (or created) unless replay is used.
+     * The first use, off the main thread (the replay processing context or [scope]), recovers batches orphaned by a
+     * dead process and purges the expired ones.
+     */
+    private val replayStoreLazy = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        ReplayStore(app, clock).also {
+            it.resetOrphaned()
+            it.purgeOlderThan(clock.nowMs() - RETENTION_MS)
+        }
+    }
+    private val replayQueue: ReplayStore by replayStoreLazy
+    private val replayFlusherLazy = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        // Always the built-in transport: ARTrackerSender's contract is POST-only, and the upload needs a PUT.
+        ReplayFlusher(replayQueue, ReplayClient(config.endpoint, config.apiKey), killSwitch, clock, Backoff(), scheduler)
+            .also { FlusherRegistry.replay = it }
+    }
+    private val replayFlusher: ReplayFlusher by replayFlusherLazy
+    private val replayKicker by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        // The upload blocks on HTTP, so it runs on Dispatchers.IO rather than on the single-threaded [scope] thread.
+        ReplayKicker(scope, Dispatchers.IO, replayFlusher)
+    }
+
+    /** Receives every closed replay batch from the replay controller's batcher: queued, then uploaded in the background. */
+    internal val replaySink: ReplaySink = replaySink ?: ReplaySink { batch ->
+        if (!isDisabled() && replayQueue.enqueue(batch)) replayKicker.kick()
+    }
+
+    /** Last launched replay housekeeping (opt-out clearing, kicking); awaited by [awaitIdle]. */
+    @Volatile
+    private var replayJob: Job? = null
+
     val pipeline: EventPipeline
 
     @Volatile
@@ -232,6 +265,8 @@ internal class ARTrackerCore(
             beforeSend = config.beforeSend,
             flushIntervalMs = config.flushIntervalMs,
             flushContext = Dispatchers.IO,
+            // An error in the session flags the replay batch it happened in (the viewer jumps to it).
+            onItemAccepted = { replay?.noteError() },
         )
     }
 
@@ -355,6 +390,8 @@ internal class ARTrackerCore(
         // Only here: a batch still marked in-flight belongs to a dead process (never reset it elsewhere).
         runCatching { queue.resetOrphanedBatches() }
         runCatching { queue.purgeOlderThan(clock.nowMs() - RETENTION_MS) }
+        // Only when replay data exists: touching the lazy store would create the database.
+        if (replayDatabaseExists()) runCatching { replayQueue }.onFailure { SdkLog.w("opening replay store failed", it) }
         runCatching {
             TransportConfigStore(transportPrefs).save(
                 endpoint = config.endpoint,
@@ -440,6 +477,17 @@ internal class ARTrackerCore(
     fun flush() {
         if (isDisabled()) return
         pipeline.flushNow()
+        kickReplayIfAny()
+    }
+
+    private fun replayDatabaseExists(): Boolean = app.getDatabasePath(ReplayStore.DB_NAME).exists()
+
+    /** Uploads queued replay batches, if a replay database exists at all (never creates one). Off the caller's thread. */
+    private fun kickReplayIfAny() {
+        replayJob = scope.launch {
+            runCatching { if (replayDatabaseExists()) replayKicker.kick() }
+                .onFailure { SdkLog.w("starting the replay upload failed", it) }
+        }
     }
 
     /** `ARTracker.startReplay()`: records regardless of `replay.enabled` and sampling (never while disabled). */
@@ -480,6 +528,7 @@ internal class ARTrackerCore(
         if (enabled) {
             pipeline.stopTimer()
             pipeline.discardAll()
+            clearReplayBatches()
         } else if (foreground) {
             pipeline.startTimer()
         }
@@ -487,6 +536,14 @@ internal class ARTrackerCore(
             persistJob = scope.launch { persistOptOut() }
         } else {
             persistOptOut()
+        }
+    }
+
+    /** Opting out also discards the replay batches waiting for upload (the open batch is dropped by the controller). */
+    private fun clearReplayBatches() {
+        replayJob = scope.launch {
+            runCatching { if (replayDatabaseExists()) replayQueue.clear() }
+                .onFailure { SdkLog.w("clearing replay batches failed", it) }
         }
     }
 
@@ -529,6 +586,7 @@ internal class ARTrackerCore(
         pipeline.stopTimer()
         if (active) {
             pipeline.flushNow()
+            kickReplayIfAny()
             scope.launch { scheduler.scheduleFlush() }
         }
         session.onBackground()
@@ -554,6 +612,7 @@ internal class ARTrackerCore(
     suspend fun awaitIdle() {
         persistJob?.join()
         backgroundInitJob?.join()
+        replayJob?.join()
         pipeline.awaitIdle()
     }
 
@@ -569,6 +628,8 @@ internal class ARTrackerCore(
         runCatching { crashHandler?.uninstall() }
         scope.cancel()
         if (FlusherRegistry.current === flusher) FlusherRegistry.current = null
+        if (replayFlusherLazy.isInitialized() && FlusherRegistry.replay === replayFlusherLazy.value) FlusherRegistry.replay = null
+        if (replayStoreLazy.isInitialized()) replayStoreLazy.value.close()
         queue.close()
     }
 

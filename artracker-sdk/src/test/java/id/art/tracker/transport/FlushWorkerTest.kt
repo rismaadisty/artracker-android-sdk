@@ -14,6 +14,7 @@ import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SharedPrefsStore
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.FakeQueue
+import id.art.tracker.testutil.FakeReplayBackend
 import id.art.tracker.testutil.InMemoryStore
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
@@ -34,10 +35,14 @@ class FlushWorkerTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val server = MockWebServer()
 
+    private val backend by lazy { FakeReplayBackend() }
+
     @Before
     fun setUp() {
         FlusherRegistry.current = null
+        FlusherRegistry.replay = null
         context.deleteDatabase("artracker.db")
+        context.deleteDatabase(ReplayStore.DB_NAME)
     }
 
     private var workManagerInitialised = false
@@ -50,7 +55,10 @@ class FlushWorkerTest {
     @After
     fun tearDown() {
         FlusherRegistry.current = null
+        FlusherRegistry.replay = null
         runCatching { server.shutdown() }
+        runCatching { backend.shutdown() }
+        context.deleteDatabase(ReplayStore.DB_NAME)
         if (workManagerInitialised) {
             // Release WorkManager's Room database so Robolectric's CloseGuard stays quiet.
             // Room is only a runtime (not compile) dependency here, hence reflection.
@@ -169,6 +177,61 @@ class FlushWorkerTest {
         } finally {
             seed.close()
         }
+    }
+
+    private fun seedReplayBatches(count: Int) {
+        TransportConfigStore(SharedPrefsStore(context, TransportConfigStore.PREFS_NAME))
+            .save(backend.endpoint, "art_live_" + "k".repeat(32), "staging", "9.9")
+        val store = ReplayStore(context, Clock.SYSTEM)
+        try {
+            repeat(count) {
+                store.enqueue(NewReplayBatch("session-fresh-1", byteArrayOf(1, 2, 3), 1, 1_000, 2_000, false, null, "staging"))
+            }
+        } finally {
+            store.close()
+        }
+    }
+
+    private fun pendingReplayBatches(): Int {
+        val store = ReplayStore(context, Clock.SYSTEM)
+        try {
+            return store.pendingCount()
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun freshProcess_uploadsPendingReplayBatches() {
+        seedReplayBatches(2)
+
+        assertEquals(ListenableWorker.Result.success(), doWork())
+
+        assertEquals(2, backend.requestsTo(FakeReplayBackend.ACK).size)
+        assertEquals(
+            listOf(0, 1),
+            backend.requestsTo(FakeReplayBackend.CHUNK_URL).map { it.json().getInt("chunk_seq") },
+        )
+        assertEquals(0, pendingReplayBatches())
+    }
+
+    @Test
+    fun replayRetry_returnsWorkerRetry() {
+        seedReplayBatches(1)
+        backend.chunkUrl = { MockResponse().setResponseCode(503) }
+
+        assertEquals(ListenableWorker.Result.retry(), doWork())
+        assertEquals(1, pendingReplayBatches())
+    }
+
+    @Test
+    fun noReplayDatabase_doesNotCreateOne() {
+        TransportConfigStore(SharedPrefsStore(context, TransportConfigStore.PREFS_NAME))
+            .save(backend.endpoint, "art_live_" + "k".repeat(32), "staging", "9.9")
+
+        assertEquals(ListenableWorker.Result.success(), doWork())
+
+        assertTrue(!context.getDatabasePath(ReplayStore.DB_NAME).exists())
     }
 
     private fun flusher(queue: ItemQueue, clock: Clock, send: () -> SendResult) = Flusher(
