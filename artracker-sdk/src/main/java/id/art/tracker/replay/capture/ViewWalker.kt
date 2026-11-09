@@ -1,6 +1,8 @@
 package id.art.tracker.replay.capture
 
-import android.graphics.drawable.ColorDrawable
+import android.view.Gravity
+import android.graphics.Typeface
+import android.os.Build
 import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
@@ -13,6 +15,8 @@ import android.widget.VideoView
 import id.art.tracker.privacy.MaskDecision
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.privacy.ViewMaskRules
+import id.art.tracker.replay.model.TextAlignment
+import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
 import id.art.tracker.replay.model.WireframeType
 import kotlin.math.min
@@ -99,17 +103,39 @@ internal class ViewWalker(
         var text: String? = null
         var textColor: Int? = null
         var textSizeSp: Float? = null
+        var fontWeight: Int? = null
+        var italic = false
+        var textAlign: TextAlignment? = null
+        var wrap = false
+        var lineHeightDp: Float? = null
         if (view is TextView) {
             val raw: CharSequence? = view.text
+            val useHint = raw.isNullOrEmpty() && !masked && !view.hint.isNullOrEmpty()
+            val shown: CharSequence? = if (useHint) view.hint else raw
             text = when {
-                raw == null -> null
-                masked -> MaskingPolicy.maskText(raw)
-                else -> raw.subSequence(0, min(raw.length, MAX_TEXT_LENGTH)).toString()
+                shown == null -> null
+                masked -> MaskingPolicy.maskText(shown)
+                else -> shown.subSequence(0, min(shown.length, MAX_TEXT_LENGTH)).toString()
             }
-            textColor = view.currentTextColor
+            textColor = if (useHint) view.currentHintTextColor else view.currentTextColor
             textSizeSp = view.textSize / (density * view.resources.configuration.fontScale)
+            val typeface = view.typeface
+            fontWeight = weightOf(typeface)?.takeIf { it != REGULAR_WEIGHT }
+            italic = typeface != null && typeface.style and Typeface.ITALIC != 0
+            textAlign = alignOf(view)
+            wrap = view.lineCount > 1
+            if (wrap) lineHeightDp = view.lineHeight / density
         }
-        val background = (view.background as? ColorDrawable)?.color
+        val look = DrawableStyleReader.read(view, density)
+        val background = look?.color
+        val elevationDp = (view.elevation / density).takeIf { it > 0f }
+        val clip = view.clipToOutline
+        val visual = VisualStyle(
+            gradient = look?.gradient, radiiDp = look?.radiiDp,
+            borderWidthDp = look?.borderWidthDp, borderColor = look?.borderColor,
+            shadowDp = elevationDp, clip = clip,
+            italic = italic, textAlign = textAlign, lineHeightDp = lineHeightDp, wrap = wrap,
+        ).takeIf { it != EMPTY_VISUAL }
 
         val children = if (view is ViewGroup) {
             val childCount = view.childCount
@@ -126,9 +152,26 @@ internal class ViewWalker(
         return Wireframe(
             id = id, x = x, y = y, width = w, height = h,
             type = typeOf(view),
-            text = text, textColor = textColor, textSizeSp = textSizeSp,
-            background = background, alpha = alpha, masked = masked, children = children,
+            text = text, textColor = textColor, textSizeSp = textSizeSp, fontWeight = fontWeight,
+            visual = visual, background = background, alpha = alpha, masked = masked, children = children,
         )
+    }
+
+    /** CSS weight of [typeface]: the real weight on API 28+, else bold/regular from its style. */
+    private fun weightOf(typeface: Typeface?): Int? {
+        if (typeface == null) return null
+        val real = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) typeface.weight else 0
+        return if (real > 0) real else if (typeface.style and Typeface.BOLD != 0) BOLD_WEIGHT else REGULAR_WEIGHT
+    }
+
+    /** Null for the default (left); only center and right need to be written. */
+    private fun alignOf(view: TextView): TextAlignment? {
+        val absolute = Gravity.getAbsoluteGravity(view.gravity, view.layoutDirection) and Gravity.HORIZONTAL_GRAVITY_MASK
+        return when (absolute) {
+            Gravity.CENTER_HORIZONTAL -> TextAlignment.CENTER
+            Gravity.RIGHT -> TextAlignment.RIGHT
+            else -> null
+        }
     }
 
     private fun typeOf(view: View): WireframeType = when {
@@ -216,6 +259,9 @@ internal class ViewWalker(
     }
 
     private companion object {
+        val EMPTY_VISUAL = VisualStyle()
+        const val REGULAR_WEIGHT = 400
+        const val BOLD_WEIGHT = 700
         const val MAX_TEXT_LENGTH = 200
         const val COMPOSE_HOST_CLASS = "androidx.compose.ui.platform.AndroidComposeView"
     }
