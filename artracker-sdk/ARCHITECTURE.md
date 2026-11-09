@@ -218,7 +218,7 @@ Modifier.artrackerMask() / Modifier.artrackerUnmask()
 
 | Opsi | Kelebihan | Kekurangan |
 | --- | --- | --- |
-| **A. Wireframe → event rrweb** *(direkomendasikan)* | Player rrweb di dashboard bisa langsung memutarnya; ukuran kecil (target <45 KB/menit, sesuai klaim landing page); masking struktural (teks diganti sebelum keluar); sesuai batas 24 KB/item | Visual tidak *pixel-perfect* (gambar = placeholder, custom drawing tidak terekam) |
+| **A. Wireframe → event rrweb** *(direkomendasikan)* | Player rrweb di dashboard bisa langsung memutarnya; ukuran kecil (target <45 KB/menit, sesuai klaim landing page); masking struktural (teks diganti sebelum keluar); sesuai batas 24 KB/item | Visual tidak *pixel-perfect* (foto/gambar besar = placeholder, custom drawing tidak terekam; warna, bentuk, font, dan icon kecil terekam) |
 | B. Screenshot (PixelCopy) | Pixel-perfect | 30–100 KB/frame WebP sehingga melanggar soft cap 24 KB per item dan kuota event; masking butuh menggambar kotak di bitmap (rawan bocor bila koordinat meleset); biaya CPU/baterai tinggi |
 
 Mode screenshot dicatat sebagai pekerjaan masa depan (§13), bukan v1.
@@ -226,8 +226,8 @@ Mode screenshot dicatat sebagai pekerjaan masa depan (§13), bukan v1.
 ### 6.2 Capture
 
 - **Root windows**: `RootViewLocator` memakai `WindowManagerGlobal.mViews` (reflection, dibungkus `runCatching`) agar dialog, bottom sheet, dan popup ikut terekam. Fallback: `decorView` activity aktif.
-- **ViewWalker** (main thread, read-only): per `View` yang `VISIBLE` dan berukuran >0 diambil `id` stabil (`System.identityHashCode`), bounds di layar (`getLocationOnScreen`, dalam dp), tipe (`text`, `input`, `image`, `button`, `container`, `web`, `surface`), warna background (`ColorDrawable`), teks (`TextView`, setelah masking), warna/ukuran font, alpha, dan clip.
-- **ComposeWalker**: untuk `AndroidComposeView`, baca `(view as ViewRootForTest).semanticsOwner.unmergedRootSemanticsNode` lalu ambil `boundsInWindow`, `Text`, `EditableText`, `Role`, `Password`, dan key mask kustom. Pembacaan dilakukan lewat reflection-safe wrapper. Bila API berubah, node Compose dirender sebagai satu blok placeholder dan app tidak crash.
+- **ViewWalker** (main thread, read-only): per `View` yang `VISIBLE` dan berukuran >0 diambil `id` stabil (`System.identityHashCode`), bounds di layar (`getLocationOnScreen`, dalam dp), tipe (`text`, `input`, `image`, `button`, `container`, `web`, `surface`), gaya background (`ColorDrawable`, `GradientDrawable` termasuk gradien/radius/stroke, `MaterialShapeDrawable` dibaca lewat nama kelas, dibuka dari Ripple/Layer/StateList/Inset, plus `backgroundTint`), elevasi (shadow) dan `clipToOutline`, teks (`TextView`, setelah masking; hint hanya bila tidak di-mask), warna/ukuran/ketebalan/miring/perataan font, alpha, dan icon kecil (lihat tabel privasi).
+- **ComposeWalker**: untuk `AndroidComposeView`, baca `(view as ViewRootForTest).semanticsOwner.unmergedRootSemanticsNode` lalu ambil `boundsInWindow`, `Text`, `EditableText`, `Role`, `Password`, dan key mask kustom. Pembacaan dilakukan lewat reflection-safe wrapper. Bila API berubah, node Compose dirender sebagai satu blok placeholder dan app tidak crash. Gaya visual dibaca dari `TextLayoutResult.layoutInput.style` (ukuran, berat, warna, miring, family generik, perataan, line height), `Shape.createOutline` (radius sudut), dan elemen modifier `BackgroundElement`/`BorderModifierNodeElement`/`GraphicsLayerElement`/`ShadowGraphicsLayerElement`/`PainterElement` lewat nama field (bukan API publik; bila berubah atau di-R8, gaya itu hilang tanpa error). Node layout tanpa semantics (mis. `Box` + `background`, `Icon` tanpa `contentDescription`) ikut diambil lewat penelusuran `LayoutNode` (getter anak dipanggil dengan refleksi).
 - Batas: maksimum **2000 node** per frame dan kedalaman 50. Bila terlampaui, subtree dirangkum sebagai blok.
 
 ### 6.3 Framing rate control (`FrameScheduler`)
@@ -276,7 +276,7 @@ Masking diterapkan **di walker** (lapis 1), lalu redaksi atribut berjalan di pip
 | Tag view | — | Padanan Android dari `data-artracker-mask`: `android:tag="artracker-mask"` di XML, `view.setTag(R.id.artracker_mask, true)`, atau `view.artrackerMask()`. Berlaku untuk **seluruh subtree**. `artracker-unmask` sebagai kebalikannya |
 | Compose | — | `Modifier.artrackerMask()` = `semantics { this[ARTrackerMaskKey] = true }` |
 | Kelas kustom | — | `PrivacyConfig.sensitiveViewClasses = setOf(CardInputView::class.java)` (cocok via `isInstance`) |
-| Selalu diblok | — | `WebView` (isi DOM tidak terlihat dari hierarki View), `SurfaceView`, `TextureView`, `VideoView`, MapView: dirender sebagai blok berlabel. `ImageView`: placeholder warna netral; bitmap tidak pernah direkam |
+| Selalu diblok | — | `WebView` (isi DOM tidak terlihat dari hierarki View), `SurfaceView`, `TextureView`, `VideoView`, MapView: dirender sebagai blok berlabel. `ImageView`/`Image`: placeholder warna netral. **Pengecualian: icon kecil** (vector drawable/`VectorPainter`, atau bitmap maksimal 64×64 px yang tampil maksimal 64×64 dp) dirasterisasi 1x ke WebP lossless (API 30+) atau PNG dan dikirim sebagai `background-image` data URI (maks 6 KB per icon); foto, thumbnail, gambar besar, painter pihak ketiga (Coil/Glide) dan semua node yang di-mask tidak pernah dirasterisasi |
 
 **Bentuk masking:** teks diganti `*` dengan panjang sama (maks 32 karakter) **di dalam walker**, jadi `String` asli tidak pernah masuk `Wireframe`. Prioritas keputusan: `password` > `unmask` eksplisit > `mask` eksplisit/kelas > aturan default.
 
