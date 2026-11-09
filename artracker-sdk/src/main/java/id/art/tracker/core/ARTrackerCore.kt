@@ -17,6 +17,7 @@ import id.art.tracker.lifecycle.ScreenTracker
 import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.ReplayControllerFactory
+import id.art.tracker.replay.ReplayIntake
 import id.art.tracker.replay.ReplaySink
 import id.art.tracker.telemetry.Breadcrumbs
 import id.art.tracker.telemetry.CrashHandler
@@ -229,9 +230,8 @@ internal class ARTrackerCore(
     }
 
     /** Receives every closed replay batch from the replay controller's batcher: queued, then uploaded in the background. */
-    internal val replaySink: ReplaySink = replaySink ?: ReplaySink { batch ->
-        if (!isDisabled() && replayQueue.enqueue(batch)) replayKicker.kick()
-    }
+    internal val replaySink: ReplaySink =
+        replaySink ?: ReplayIntake(::isDisabled, { replayQueue }, { replayKicker.kick() })
 
     /** Last launched replay housekeeping (opt-out clearing, kicking); awaited by [awaitIdle]. */
     @Volatile
@@ -390,8 +390,9 @@ internal class ARTrackerCore(
         // Only here: a batch still marked in-flight belongs to a dead process (never reset it elsewhere).
         runCatching { queue.resetOrphanedBatches() }
         runCatching { queue.purgeOlderThan(clock.nowMs() - RETENTION_MS) }
-        // Only when replay data exists: touching the lazy store would create the database.
-        if (replayDatabaseExists()) runCatching { replayQueue }.onFailure { SdkLog.w("opening replay store failed", it) }
+        // Only when replay data exists: touching the lazy store would create the database. The flusher is created too
+        // (it registers itself in FlusherRegistry), so the background worker reuses it instead of building a second one.
+        if (replayDatabaseExists()) runCatching { replayFlusher }.onFailure { SdkLog.w("opening replay store failed", it) }
         runCatching {
             TransportConfigStore(transportPrefs).save(
                 endpoint = config.endpoint,

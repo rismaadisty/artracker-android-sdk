@@ -9,6 +9,8 @@ import androidx.work.WorkManager
 import androidx.work.impl.WorkManagerImpl
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
+import id.art.tracker.ARTracker
+import id.art.tracker.ARTrackerConfig
 import id.art.tracker.core.Clock
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SharedPrefsStore
@@ -54,6 +56,7 @@ class FlushWorkerTest {
 
     @After
     fun tearDown() {
+        ARTracker.resetForTest()
         FlusherRegistry.current = null
         FlusherRegistry.replay = null
         runCatching { server.shutdown() }
@@ -221,6 +224,22 @@ class FlushWorkerTest {
         backend.chunkUrl = { MockResponse().setResponseCode(503) }
 
         assertEquals(ListenableWorker.Result.retry(), doWork())
+        assertEquals(1, pendingReplayBatches())
+    }
+
+    @Test
+    fun liveCore_withoutARegisteredReplayFlusher_leavesTheUploadToTheCore() {
+        seedReplayBatches(1)
+        // A core of this process owns the replay queue; a second flusher next to it would double the uploads in flight.
+        ARTracker.init(
+            context as android.app.Application,
+            ARTrackerConfig(endpoint = backend.endpoint, apiKey = "art_live_" + "k".repeat(32), environment = "staging"),
+        )
+        FlusherRegistry.replay = null
+
+        assertEquals(ListenableWorker.Result.success(), doWork())
+
+        assertTrue(backend.requestsTo(FakeReplayBackend.CHUNK_URL).isEmpty())
         assertEquals(1, pendingReplayBatches())
     }
 

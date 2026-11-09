@@ -3,6 +3,7 @@ package id.art.tracker.transport
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.Clock
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.core.SdkLog
@@ -93,6 +94,9 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
      */
     private suspend fun flushReplay(config: TransportConfigStore.Saved?): FlushOutcome? {
         FlusherRegistry.replay?.let { return it.flushAll() }
+        // A live core owns the replay queue and uploads it itself: a second flusher beside it would double the uploads in
+        // flight and make two SQLite connections compete for the write lock.
+        if (ARTrackerCore.instanceOrNull() != null) return null
         config ?: return null
         if (!applicationContext.getDatabasePath(ReplayStore.DB_NAME).exists()) return null
         val clock = Clock.SYSTEM

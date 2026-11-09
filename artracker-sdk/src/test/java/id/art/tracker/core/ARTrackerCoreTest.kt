@@ -23,6 +23,7 @@ import id.art.tracker.replay.ManualDispatcher
 import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.capture.ViewWalker
 import id.art.tracker.testutil.FakeReplayBackend
+import id.art.tracker.transport.FlusherRegistry
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayStore
 import id.art.tracker.TelemetryItem
@@ -162,6 +163,30 @@ class ARTrackerCoreTest {
         } finally {
             store.close()
         }
+    }
+
+    @Test
+    fun init_registersTheReplayFlusher_whenAReplayDatabaseAlreadyExists() {
+        val store = ReplayStore(app, Clock.SYSTEM)
+        try {
+            store.enqueue(replayBatch())
+            ARTracker.init(app, configWith(endpoint = "http://127.0.0.1:9"))
+            settle()
+
+            // The background worker must find the live flusher instead of building a second one next to it.
+            assertTrue(FlusherRegistry.replay != null)
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun init_doesNotRegisterAReplayFlusher_whenThereIsNoReplayDatabase() {
+        ARTracker.init(app, config)
+        settle()
+
+        assertEquals(null, FlusherRegistry.replay)
+        assertFalse(app.getDatabasePath(ReplayStore.DB_NAME).exists())
     }
 
     @Test
