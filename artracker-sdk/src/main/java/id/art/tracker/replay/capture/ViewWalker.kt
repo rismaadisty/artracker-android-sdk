@@ -135,17 +135,21 @@ internal class ViewWalker(
         val clip = view.clipToOutline
         var image: String? = null
         var imageFit: ImageFit? = null
+        var imagePadding: List<Float>? = null
         if (!masked && view is ImageView) {
             val d = view.drawable
-            if (d != null) image = icons.forDrawable(d, view.imageTintList, view.drawableState, w, h)
-            if (image != null) imageFit = fitOf(view.scaleType)
+            if (d != null) image = icons.forDrawable(d, view.imageTintList, view.drawableState, w, h, density)
+            if (image != null) {
+                imageFit = fitOf(view.scaleType)
+                imagePadding = listOf(view.paddingTop, view.paddingRight, view.paddingBottom, view.paddingLeft).map { it / density }
+            }
         }
         val visual = VisualStyle(
             gradient = look?.gradient, radiiDp = look?.radiiDp,
             borderWidthDp = look?.borderWidthDp, borderColor = look?.borderColor,
             shadowDp = elevationDp, clip = clip,
             italic = italic, textAlign = textAlign, lineHeightDp = lineHeightDp, wrap = wrap,
-            image = image, imageFit = imageFit,
+            image = image, imageFit = imageFit, paddingDp = imagePadding,
         ).takeIf { it != EMPTY_VISUAL }
 
         var children: List<Wireframe> = if (view is ViewGroup) {
@@ -191,7 +195,7 @@ internal class ViewWalker(
             val hPx = d.bounds.height()
             val w = dp(wPx, density)
             val h = dp(hPx, density)
-            val uri = icons.forDrawable(d, tint, view.drawableState, w, h) ?: return@forEachIndexed
+            val uri = icons.forDrawable(d, tint, view.drawableState, w, h, density) ?: return@forEachIndexed
             val innerW = view.width - view.compoundPaddingLeft - view.compoundPaddingRight
             val innerH = view.height - view.compoundPaddingTop - view.compoundPaddingBottom
             val (ox, oy) = when (index) {

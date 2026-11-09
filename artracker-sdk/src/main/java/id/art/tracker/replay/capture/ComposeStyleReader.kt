@@ -1,11 +1,11 @@
 package id.art.tracker.replay.capture
 
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutInfo
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsConfiguration
@@ -23,6 +24,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
+import id.art.tracker.replay.model.ImageFit
 import id.art.tracker.replay.model.TextAlignment
 import java.lang.reflect.Field
 import java.util.concurrent.ConcurrentHashMap
@@ -74,31 +76,57 @@ internal object ComposeStyleReader {
     }
 
     /** A node's `Painter` (`Image`, `Icon`) and the `ColorFilter` that tints it. */
-    class NodePainter(val painter: Painter, val colorFilter: ColorFilter?)
+    class NodePainter(val painter: Painter, val colorFilter: ColorFilter?, val contentScale: ContentScale?) {
+        /** How the web player should fit the icon in its box. */
+        fun fit(): ImageFit = when (contentScale) {
+            ContentScale.Crop -> ImageFit.COVER
+            ContentScale.FillBounds -> ImageFit.FILL
+            else -> ImageFit.CONTAIN
+        }
+    }
 
     /** The painter of the node's `PainterElement` modifier, or null when it paints none (or it cannot be read). */
     fun painterOf(info: LayoutInfo): NodePainter? = try {
         info.getModifierInfo().lastOrNull { it.modifier.javaClass.name.endsWith("PainterElement") }?.modifier?.let { m ->
-            (field(m, "painter") as? Painter)?.let { NodePainter(it, field(m, "colorFilter") as? ColorFilter) }
+            (field(m, "painter") as? Painter)?.let {
+                NodePainter(it, field(m, "colorFilter") as? ColorFilter, field(m, "contentScale") as? ContentScale)
+            }
         }
     } catch (_: Throwable) {
         null
     }
 
     /**
-     * Icon URI of a node's painter at [widthDp] x [heightDp], or null. Only vector painters, solid colors and
-     * bitmaps of at most [IconRasterizer.MAX_ICON_DP] px are icons; any other painter (an image loader's, a custom
-     * one) is arbitrary content and stays a placeholder.
+     * Icon URI of a node's painter, or null. Only vector painters and solid colors are icons: a bitmap painter is
+     * never one (a 24 px bitmap is what an image loader makes of a 24 dp avatar), and neither is any other painter
+     * (an image loader's, a custom one): arbitrary content stays a placeholder.
+     *
+     * The icon is drawn at the painter's own size when it has one (else at the node's [boxWidthDp] x [boxHeightDp],
+     * the UNCLIPPED size: a list item half scrolled out is still the same icon), so a non-square box does not
+     * stretch it; the web player places it with CSS. Not drawn on the app's painter copy: `Painter.draw` is stateless
+     * for these two classes.
      */
-    fun iconUri(icons: IconRasterizer, p: NodePainter, widthDp: Int, heightDp: Int, dir: androidx.compose.ui.unit.LayoutDirection): String? = try {
+    fun iconUri(
+        icons: IconRasterizer,
+        p: NodePainter,
+        boxWidthDp: Int,
+        boxHeightDp: Int,
+        dir: androidx.compose.ui.unit.LayoutDirection,
+        density: Float,
+    ): String? = try {
         if (!isIconPainter(p.painter)) {
             null
         } else {
-            val variant = "$widthDp x $heightDp|${p.colorFilter?.hashCode()}|$dir"
-            icons.render(p.painter, variant, widthDp, heightDp) { androidCanvas ->
+            val intrinsic = p.painter.intrinsicSize
+            val sized = intrinsic.isSpecified && intrinsic.width.isFinite() && intrinsic.height.isFinite() &&
+                intrinsic.width > 0f && intrinsic.height > 0f
+            val wDp = if (sized) kotlin.math.ceil(intrinsic.width / density).toInt() else boxWidthDp
+            val hDp = if (sized) kotlin.math.ceil(intrinsic.height / density).toInt() else boxHeightDp
+            val variant = "$wDp x $hDp|${p.colorFilter?.hashCode()}|$dir"
+            icons.render(p.painter, variant, wDp, hDp) { androidCanvas ->
                 CanvasDrawScope().draw(
                     Density(1f), dir, androidx.compose.ui.graphics.Canvas(androidCanvas),
-                    Size(widthDp.toFloat(), heightDp.toFloat()),
+                    Size(wDp.toFloat(), hDp.toFloat()),
                 ) {
                     with(p.painter) { draw(size, 1f, p.colorFilter) }
                 }
@@ -112,9 +140,6 @@ internal object ComposeStyleReader {
         "androidx.compose.ui.graphics.vector.VectorPainter",
         "androidx.compose.ui.graphics.painter.ColorPainter",
         -> true
-        "androidx.compose.ui.graphics.painter.BitmapPainter" -> (field(p, "image") as? ImageBitmap)?.let {
-            it.width <= IconRasterizer.MAX_ICON_DP && it.height <= IconRasterizer.MAX_ICON_DP
-        } == true
         else -> false
     }
 

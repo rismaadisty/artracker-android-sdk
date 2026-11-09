@@ -189,6 +189,18 @@ class RrwebEncoderTest {
     }
 
     @Test
+    fun visual_imagePadding_keepsTheIconInsideTheContentBox() {
+        val uri = "data:image/webp;base64,AAAA"
+        val s = styleOfNode(
+            Wireframe(2, 0, 0, 48, 48, WireframeType.IMAGE, visual = VisualStyle(image = uri, imageFit = ImageFit.CONTAIN, paddingDp = listOf(8f, 12f, 8f, 12f))),
+        )
+        assertTrue(s, s.contains("padding:8px 12px 8px 12px;background-origin:content-box;"))
+        // Padding only exists to place an icon: without one it is not written.
+        val none = styleOfNode(Wireframe(2, 0, 0, 48, 48, WireframeType.IMAGE, visual = VisualStyle(paddingDp = listOf(8f, 8f, 8f, 8f))))
+        assertFalse(none, none.contains("padding"))
+    }
+
+    @Test
     fun visual_untrustedStrings_areNeverWrittenIntoCss() {
         val evil = Wireframe(
             2, 0, 0, 24, 24, WireframeType.CONTAINER,

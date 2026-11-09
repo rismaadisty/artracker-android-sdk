@@ -204,4 +204,15 @@ class ViewVisualStyleTest {
         assertEquals(700, wf.fontWeight)
         assertFalse(wf.text!!.contains("secret"))
     }
+
+    @Test
+    fun reflection_isLookedUpOnce_notPerViewPerFrame() {
+        DrawableStyleReader.resetLookupCount()
+        repeat(10) {
+            walk(box(GradientDrawable().apply { setColor(Color.RED); setStroke(2, Color.GREEN) }))
+            walk(box(MaterialShapeDrawable(ColorStateList.valueOf(Color.RED), null, 0f, 4f, 4f, 4f, 4f)))
+        }
+        // 2 fields of GradientState + the 7 Material getters, each resolved once for the whole process.
+        assertTrue("lookups=${DrawableStyleReader.lookupCount()}", DrawableStyleReader.lookupCount() <= 9)
+    }
 }

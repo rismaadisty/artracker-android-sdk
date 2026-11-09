@@ -135,7 +135,8 @@ internal class ComposeWalker(
             children.addAll(visualOnlyUnder(node.layoutInfo, depth, masked))
             for (child in kids) node(child, depth + 1, masked)?.let(children::add)
             val box = ComposeStyleReader.boxStyle(node.layoutInfo, density)
-            val image = if (masked) null else iconOf(node.layoutInfo, w, h)
+            val nodePainter = if (masked) null else ComposeStyleReader.painterOf(node.layoutInfo)
+            val image = nodePainter?.let { iconOf(it, node.layoutInfo) }
             val textStyle = if (type == WireframeType.TEXT || type == WireframeType.INPUT) {
                 ComposeStyleReader.textStyle(config, density)
             } else {
@@ -148,7 +149,7 @@ internal class ComposeWalker(
                 fontFamily = textStyle?.fontFamily, italic = textStyle?.italic ?: false,
                 textAlign = textStyle?.align, wrap = textStyle?.wrap ?: false,
                 lineHeightDp = textStyle?.lineHeightDp?.takeIf { textStyle.wrap },
-                image = image, imageFit = if (image != null) ImageFit.CONTAIN else null,
+                image = image, imageFit = if (image != null) nodePainter?.fit() else null,
             ).takeIf { it != EMPTY_VISUAL }
             return Wireframe(
                 id, x, y, w, h, type, text = text,
@@ -160,11 +161,10 @@ internal class ComposeWalker(
 
         private fun dp(px: Float): Int = (px / density).roundToInt()
 
-        private fun iconOf(info: LayoutInfo, wDp: Int, hDp: Int): String? =
-            ComposeStyleReader.painterOf(info)?.let { iconOf(it, info, wDp, hDp) }
-
-        private fun iconOf(p: ComposeStyleReader.NodePainter, info: LayoutInfo, wDp: Int, hDp: Int): String? =
-            ComposeStyleReader.iconUri(icons, p, wDp, hDp, info.layoutDirection)
+        /** The node's full (unclipped) size is the icon's box, whatever part of it is visible right now. */
+        private fun iconOf(p: ComposeStyleReader.NodePainter, info: LayoutInfo): String? = ComposeStyleReader.iconUri(
+            icons, p, dp(info.width.toFloat()), dp(info.height.toFloat()), info.layoutDirection, density,
+        )
 
         private fun collectIds(n: SemanticsNode, out: MutableSet<Int>) {
             out.add(n.id)
@@ -206,11 +206,11 @@ internal class ComposeWalker(
                 return Wireframe(id, x, y, w, h, WireframeType.CONTAINER, summarized = true)
             }
             count++
-            val image = if (parentMasked || painter == null) null else iconOf(painter, info, w, h)
+            val image = if (parentMasked || painter == null) null else iconOf(painter, info)
             val visual = VisualStyle(
                 gradient = box.gradient, radiiDp = box.radiiDp, borderWidthDp = box.borderWidthDp,
                 borderColor = box.borderColor, shadowDp = box.shadowDp, clip = box.clip,
-                image = image, imageFit = if (image != null) ImageFit.CONTAIN else null,
+                image = image, imageFit = if (image != null) painter?.fit() else null,
             ).takeIf { it != EMPTY_VISUAL }
             return Wireframe(
                 id, x, y, w, h, if (painter != null) WireframeType.IMAGE else WireframeType.CONTAINER,

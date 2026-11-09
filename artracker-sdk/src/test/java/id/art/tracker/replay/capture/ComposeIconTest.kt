@@ -16,8 +16,11 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.ColorPainter
+import id.art.tracker.replay.model.ImageFit
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
@@ -46,8 +49,10 @@ class ComposeIconTest {
     val rule = createAndroidComposeRule<ComponentActivity>()
 
     private var encodeCalls = 0
+    private val encodedSizes = ArrayList<Pair<Int, Int>>()
     private val encoder: (Bitmap) -> IconRasterizer.Encoded? = {
         encodeCalls++
+        encodedSizes += it.width to it.height
         IconRasterizer.Encoded("webp", byteArrayOf(9, 9, 9))
     }
 
@@ -96,14 +101,24 @@ class ComposeIconTest {
     }
 
     @Test
-    fun bigVector_isAPlaceholder() {
-        val wf = capture { Image(rememberVectorPainter(star), null, Modifier.size(100.dp)) }
+    fun vectorWithABigIntrinsicSize_isAPlaceholder() {
+        val big = ImageVector.Builder(defaultWidth = 200.dp, defaultHeight = 200.dp, viewportWidth = 24f, viewportHeight = 24f)
+            .path(fill = SolidColor(Color.Black)) { moveTo(0f, 0f); lineTo(24f, 0f); lineTo(24f, 24f); close() }.build()
+        val wf = capture { Image(rememberVectorPainter(big), null, Modifier.size(100.dp)) }
         assertNull(wf.all().single { it.type == WireframeType.IMAGE }.visual?.image)
         assertEquals(0, encodeCalls)
     }
 
     @Test
-    fun smallBitmapPainter_isAnIcon_butAPhotoIsNot() {
+    fun smallVectorShownBig_isStillAnIcon_drawnAtItsOwnSize() {
+        val wf = capture { Image(rememberVectorPainter(star), null, Modifier.size(100.dp)) }
+        assertNotNull(wf.all().single { it.type == WireframeType.IMAGE }.visual?.image)
+        assertEquals(listOf(24 to 24), encodedSizes)
+    }
+
+    @Test
+    fun bitmapPainters_areNeverIcons() {
+        // A 24 px bitmap is what an image loader produces for a 24 dp avatar: pixels cannot tell an icon from a photo.
         val small = BitmapPainter(ImageBitmap(24, 24))
         val photo = BitmapPainter(ImageBitmap(300, 300))
         val wf = capture {
@@ -112,9 +127,42 @@ class ComposeIconTest {
                 Image(photo, null, Modifier.size(24.dp))
             }
         }
+        assertEquals(2, wf.all().count { it.type == WireframeType.IMAGE })
+        assertTrue(wf.all().none { it.visual?.image != null })
+        assertEquals(0, encodeCalls)
+    }
+
+    @Test
+    fun aClippedIcon_isDrawnAtItsFullSize_notAtTheVisibleSlice() {
+        // At a list edge only part of the icon is visible; every scroll frame would otherwise be a new size.
+        val wf = capture {
+            Box(Modifier.size(12.dp).clipToBounds()) { Image(rememberVectorPainter(star), null, Modifier.size(24.dp)) }
+        }
+        assertTrue(wf.all().any { it.visual?.image != null })
+        assertEquals(listOf(24 to 24), encodedSizes)
+    }
+
+    @Test
+    fun iconInANonSquareBox_keepsItsAspect_andContentScaleSelectsTheFit() {
+        val wf = capture {
+            Column {
+                Image(rememberVectorPainter(star), null, Modifier.size(60.dp, 30.dp))
+                Image(rememberVectorPainter(star), null, Modifier.size(60.dp, 30.dp), contentScale = ContentScale.Crop)
+                Image(rememberVectorPainter(star), null, Modifier.size(60.dp, 30.dp), contentScale = ContentScale.FillBounds)
+            }
+        }
         val images = wf.all().filter { it.type == WireframeType.IMAGE }
-        assertEquals(2, images.size)
-        assertEquals(1, images.count { it.visual?.image != null })
+        assertEquals(listOf(ImageFit.CONTAIN, ImageFit.COVER, ImageFit.FILL), images.map { it.visual!!.imageFit })
+        assertTrue(encodedSizes.all { it == 24 to 24 })
+    }
+
+    @Test
+    fun iconsOfEveryListRow_shareOneEncode() {
+        // Each LazyColumn item remembers its own painter instance: the cache must follow the pixels, not the instance.
+        val wf = capture { Column { repeat(5) { Image(rememberVectorPainter(star), null, Modifier.size(24.dp)) } } }
+        val uris = wf.all().mapNotNull { it.visual?.image }
+        assertEquals(5, uris.size)
+        assertEquals(1, uris.toSet().size)
         assertEquals(1, encodeCalls)
     }
 

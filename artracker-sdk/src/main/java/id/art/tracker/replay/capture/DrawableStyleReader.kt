@@ -28,6 +28,12 @@ internal class DrawableLook(
  * hides it just loses the border.
  */
 internal object DrawableStyleReader {
+    private val lookups = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Reflection lookups performed so far (tests prove they are cached, not repeated per view per frame). */
+    internal fun lookupCount(): Int = lookups.get()
+    internal fun resetLookupCount() = lookups.set(0)
+
     private const val MAX_DEPTH = 4
     private const val MATERIAL_SHAPE = "com.google.android.material.shape.MaterialShapeDrawable"
 
@@ -90,13 +96,35 @@ internal object DrawableStyleReader {
     /** `GradientDrawable.mGradientState.mStrokeWidth` / `mStrokeColors`: no public getter exists. */
     private fun strokeOf(d: GradientDrawable): Pair<Float, Int>? = try {
         val state = d.constantState ?: return null
-        fun field(name: String) = state.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(state)
-        val width = (field("mStrokeWidth") as? Int)?.toFloat() ?: 0f
-        val colors = field("mStrokeColors") as? ColorStateList
+        val fields = strokeFields.getOrPut(state.javaClass) {
+            // Looked up once per class; a platform that hides the fields is remembered, not retried per view per frame.
+            try {
+                lookups.addAndGet(2)
+                val w = state.javaClass.getDeclaredField("mStrokeWidth").apply { isAccessible = true }
+                val c = state.javaClass.getDeclaredField("mStrokeColors").apply { isAccessible = true }
+                StrokeFields(w, c)
+            } catch (_: Throwable) {
+                StrokeFields(null, null)
+            }
+        }
+        val width = (fields.width?.get(state) as? Int)?.toFloat() ?: 0f
+        val colors = fields.colors?.get(state) as? ColorStateList
         if (width > 0f && colors != null) width to colors.defaultColor else null
     } catch (_: Throwable) {
         null
     }
+
+    private class StrokeFields(val width: java.lang.reflect.Field?, val colors: java.lang.reflect.Field?)
+    private val strokeFields = java.util.concurrent.ConcurrentHashMap<Class<*>, StrokeFields>()
+
+    private val MATERIAL_GETTERS = listOf(
+        "getFillColor", "getStrokeColor", "getStrokeWidth", "getTopLeftCornerResolvedSize",
+        "getTopRightCornerResolvedSize", "getBottomRightCornerResolvedSize", "getBottomLeftCornerResolvedSize",
+    )
+
+    /** The 7 getters of one `MaterialShapeDrawable` class, resolved once; null (remembered) when any is missing. */
+    private class MaterialGetters(val methods: Map<String, java.lang.reflect.Method>?)
+    private val materialGetters = java.util.concurrent.ConcurrentHashMap<Class<*>, MaterialGetters>()
 
     private fun isMaterialShape(d: Drawable): Boolean {
         var c: Class<*>? = d.javaClass
@@ -108,14 +136,19 @@ internal object DrawableStyleReader {
     }
 
     private fun readMaterial(d: Drawable, state: IntArray, density: Float): DrawableLook? = try {
-        fun call(name: String): Any? = d.javaClass.getMethod(name).invoke(d)
+        val getters = materialGetters.getOrPut(d.javaClass) {
+            try {
+                lookups.addAndGet(MATERIAL_GETTERS.size)
+                MaterialGetters(MATERIAL_GETTERS.associateWith { d.javaClass.getMethod(it) })
+            } catch (_: Throwable) {
+                MaterialGetters(null)
+            }
+        }.methods ?: return null
+        fun call(name: String): Any? = getters.getValue(name).invoke(d)
         val fill = (call("getFillColor") as? ColorStateList)?.let { it.getColorForState(state, it.defaultColor) }
         val stroke = (call("getStrokeColor") as? ColorStateList)?.let { it.getColorForState(state, it.defaultColor) }
         val strokeWidth = (call("getStrokeWidth") as? Float)?.div(density)
-        val radii = listOf(
-            "getTopLeftCornerResolvedSize", "getTopRightCornerResolvedSize",
-            "getBottomRightCornerResolvedSize", "getBottomLeftCornerResolvedSize",
-        ).map { (call(it) as? Float ?: 0f) / density }
+        val radii = MATERIAL_GETTERS.drop(3).map { (call(it) as? Float ?: 0f) / density }
         DrawableLook(
             color = fill, radiiDp = radii.takeIf { r -> r.any { it > 0f } },
             borderWidthDp = strokeWidth?.takeIf { it > 0f && stroke != null }, borderColor = stroke,

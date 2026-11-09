@@ -253,6 +253,7 @@ internal class RrwebEncoder {
             val fit = (v.imageFit ?: id.art.tracker.replay.model.ImageFit.CONTAIN).css
             sb.append("background-image:url(\"").append(image).append("\");background-size:").append(fit)
                 .append(";background-repeat:no-repeat;background-position:center;")
+            paddingCss(v.paddingDp)?.let { sb.append("padding:").append(it).append(";background-origin:content-box;") }
         } else {
             v.gradient?.takeIf { GRADIENT.matches(it) && !it.contains("url", ignoreCase = true) }
                 ?.let { sb.append("background-image:").append(it).append(';') }
@@ -269,6 +270,14 @@ internal class RrwebEncoder {
             v.textAlign?.let { sb.append("justify-content:").append(it.flex).append(';') }
         }
         v.lineHeightDp?.takeIf { it > 0f }?.let(::number)?.let { sb.append("line-height:").append(it).append("px;") }
+    }
+
+    /** `top right bottom left` in px; null unless 4 finite values >= 0, at least one above 0. */
+    private fun paddingCss(p: List<Float>?): String? {
+        if (p == null || p.size != 4) return null
+        val parts = p.map(::number)
+        if (parts.any { it == null } || parts.all { it == "0" }) return null
+        return parts.joinToString(" ") { "${it}px" }
     }
 
     /** One value when all four corners match, else the four in CSS order; null for anything not 4 finite, >= 0. */

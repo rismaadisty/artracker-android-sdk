@@ -38,6 +38,8 @@ internal data class VisualStyle(
     val wrap: Boolean = false,
     val image: String? = null,
     val imageFit: ImageFit? = null,
+    /** Padding (top, right, bottom, left) that keeps the [image] inside the content box, as the view lays it out. */
+    val paddingDp: List<Float>? = null,
 )
 
 /**
