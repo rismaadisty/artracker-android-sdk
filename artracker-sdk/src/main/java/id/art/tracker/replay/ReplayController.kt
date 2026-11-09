@@ -6,9 +6,7 @@ import android.os.Looper
 import android.view.View
 import android.view.Window
 import androidx.annotation.VisibleForTesting
-import id.art.tracker.REPLAY_CHUNK_NAME
 import id.art.tracker.core.ARTrackerCore
-import id.art.tracker.core.ItemFactory
 import id.art.tracker.core.SdkLog
 import id.art.tracker.effectiveFps
 import id.art.tracker.lifecycle.ActivityTracker
@@ -52,14 +50,14 @@ import kotlinx.coroutines.launch
  *
  * Output: Meta + FullSnapshot at the first frame, on screen change (raw name, kept in memory only) or size change, every [CHECKOUT_MS], after a
  * dropped frame, after a session change or a restart; otherwise a Mutation when the diff is not empty. Chunks are
- * enqueued as `session`/`replay_chunk` items stamped with the session they were recorded in, every
- * [FLUSH_INTERVAL_MS], at 20 KB, and when recording stops.
+ * handed to the [ReplayBatcher] (stamped with the session they were recorded in) every [FLUSH_INTERVAL_MS], at 64 KB,
+ * and when recording stops; the batcher merges them into upload batches that go to `core.replaySink`.
  *
  * Privacy: the only text in the output comes from the walker (already masked) and the encoder's fixed labels; the
  * controller adds only the `href`, built by [ReplayHref] (redacted, path ids masked, URL-safe), and never reads view
  * text itself.
  *
- * Memory: the last processed [Wireframe] (diff base), one pending frame and the open chunk.
+ * Memory: the last processed [Wireframe] (diff base), one pending frame, the open chunk and the open batch.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class ReplayController(
@@ -135,6 +133,7 @@ internal class ReplayController(
     private var baseHeight = 0
     private var chunkSessionId: String? = null
     private var forceFullAfterFailure = false
+    private val batcher = ReplayBatcher(core.replaySink, core.clock, core.config.environment, { core.identity.userId })
     // endregion
 
     /** Main-thread view of whether recording is active (tests and diagnostics). */
@@ -270,6 +269,7 @@ internal class ReplayController(
         pendingFrame.set(null)
         submit {
             drainChunks()
+            closeBatch()
             if (flushPipeline) core.pipeline.flushNow()
             resetDiffState()
         }
@@ -281,7 +281,10 @@ internal class ReplayController(
             halt(flushPipeline = false)
             return
         }
-        submit { drainChunks() }
+        submit {
+            drainChunks()
+            closeBatchIfDue()
+        }
         if (core.clock.nowMs() - lastFullAtMs >= CHECKOUT_MS) {
             forceFullNext = true
             scheduler.requestSoon()
@@ -407,6 +410,7 @@ internal class ReplayController(
         if (frame.sessionId != chunkSessionId) {
             // Everything recorded so far belongs to the previous session.
             drainChunks()
+            closeBatch()
             chunkSessionId = frame.sessionId
             base = null
         }
@@ -460,9 +464,21 @@ internal class ReplayController(
     }
 
     private fun emit(chunks: List<Map<String, Any?>>, sessionId: String) {
-        if (chunks.isEmpty() || core.isDisabled()) return
-        val items = ItemFactory(core.clock, { sessionId }, { core.identity.userId })
-        for (chunk in chunks) core.pipeline.enqueue(items.session(REPLAY_CHUNK_NAME, chunk))
+        if (chunks.isEmpty()) return
+        if (core.isDisabled()) {
+            batcher.discard()
+            return
+        }
+        for (chunk in chunks) batcher.add(sessionId, chunk)
+    }
+
+    /** Closes the open batch now; with the SDK disabled (opt-out / kill-switch) it is dropped instead. */
+    private fun closeBatch() {
+        if (core.isDisabled()) batcher.discard() else batcher.close()
+    }
+
+    private fun closeBatchIfDue() {
+        if (core.isDisabled()) batcher.discard() else batcher.closeIfDue()
     }
 
     // endregion
@@ -483,9 +499,19 @@ internal class ReplayController(
 
     // endregion
 
-    /** Test hook: closes the open chunk now (as the 5 s timer would). */
+    /** An error was logged: the open replay batch (or the next one) is flagged `has_error`. */
+    internal fun noteError() {
+        submit { batcher.markError() }
+    }
+
+    /** Test hook: closes the open chunk and the open batch now (the timer closes the batch only after its window). */
     @VisibleForTesting
-    internal fun flushChunks() = onMain { submit { drainChunks() } }
+    internal fun flushChunks() = onMain {
+        submit {
+            drainChunks()
+            closeBatch()
+        }
+    }
 
     /** Test hook: suspends until everything submitted so far has been processed. */
     @VisibleForTesting

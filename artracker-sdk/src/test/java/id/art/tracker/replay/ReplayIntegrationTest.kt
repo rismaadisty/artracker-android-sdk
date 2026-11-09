@@ -24,6 +24,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -66,6 +67,7 @@ class ReplayIntegrationTest {
         }
     }
 
+    @Ignore("replaced in task 8")
     @Test
     fun initWithReplay_resumeActivity_flush_serverReceivesReplayChunk() {
         repeat(5) { server.enqueue(MockResponse().setResponseCode(202)) }

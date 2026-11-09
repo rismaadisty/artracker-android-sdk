@@ -17,6 +17,7 @@ import id.art.tracker.lifecycle.ScreenTracker
 import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.ReplayControllerFactory
+import id.art.tracker.replay.ReplaySink
 import id.art.tracker.telemetry.Breadcrumbs
 import id.art.tracker.telemetry.CrashHandler
 import id.art.tracker.telemetry.CrashItemBuilder
@@ -63,7 +64,12 @@ internal class ARTrackerCore(
     val clock: Clock = Clock.SYSTEM,
     /** Builds the replay controller (tests inject one); must not link Compose types. */
     private val replayFactory: (ARTrackerCore, Handler) -> ReplayController = ReplayControllerFactory::create,
+    /** Where closed replay batches go; tests inject one. The default is wired in a later step. */
+    replaySink: ReplaySink? = null,
 ) {
+    /** Receives every closed replay batch from the replay controller's batcher. */
+    internal val replaySink: ReplaySink = replaySink ?: ReplaySink { }
+
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
             Dispatchers.IO.limitedParallelism(1) +

@@ -21,8 +21,8 @@ import id.art.tracker.core.Json
  * Not thread-safe: one caller (the replay processing thread). Memory: only the open chunk's events.
  */
 internal class ReplayChunker(
-    private val maxBytes: Int = 24 * 1024,
-    private val flushAtBytes: Int = 20 * 1024,
+    private val maxBytes: Int = 512 * 1024,
+    private val flushAtBytes: Int = 64 * 1024,
 ) {
     private class Entry(val event: Map<String, Any?>, val bytes: Int, val ts: Long?)
 
