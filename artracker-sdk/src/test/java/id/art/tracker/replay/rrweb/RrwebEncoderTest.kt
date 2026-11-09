@@ -3,6 +3,9 @@ package id.art.tracker.replay.rrweb
 import id.art.tracker.core.Json
 import id.art.tracker.replay.diff.WireframeDiff
 import id.art.tracker.replay.diff.WireframeDiffer
+import id.art.tracker.replay.model.ImageFit
+import id.art.tracker.replay.model.TextAlignment
+import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
 import id.art.tracker.replay.model.WireframeType
 import org.json.JSONArray
@@ -75,7 +78,7 @@ class RrwebEncoderTest {
         assertTrue(css, css.contains("font-family:Roboto"))
         assertTrue(css, css.contains("[data-artracker-type=\"TEXT\"]"))
         assertTrue(css, css.contains("white-space:nowrap"))
-        assertTrue(css, css.contains("[data-artracker-type=\"BUTTON\"]"))
+        assertFalse("the default sheet must not invent fills or borders", css.contains("border:") || css.contains("border-radius") || css.contains("rgba("))
         // Reserved ids stay clear of wireframe nodes (which start at 10).
         assertTrue(allNodes(snap).filter { it !== style && it !== textNode }.none { it["id"] == STYLE_NODE_ID || it["id"] == STYLE_TEXT_NODE_ID })
     }
@@ -118,6 +121,101 @@ class RrwebEncoderTest {
         assertTrue(style(child), style(child).contains("left:5px;top:7px;"))
     }
 
+    private fun styleOfNode(w: Wireframe): String = style(elementFor(encoder.fullSnapshot(root(w), 0L), w.id))
+
+    @Test
+    fun visual_shapeBorderShadowGradient() {
+        val card = Wireframe(
+            2, 12, 160, 296, 280, WireframeType.CONTAINER, background = 0xFFFFFFFF.toInt(),
+            visual = VisualStyle(
+                radiiDp = listOf(12f, 12f, 12f, 12f), borderWidthDp = 1f, borderColor = 0xFFE2E8F0.toInt(),
+                shadowDp = 2f, clip = true, gradient = "linear-gradient(180deg,#ffffff,#eeeeee)",
+            ),
+        )
+        val s = styleOfNode(card)
+        assertTrue(s, s.contains("border-radius:12px;"))
+        assertTrue(s, s.contains("border:1px solid #e2e8f0;"))
+        assertTrue(s, s.contains("box-shadow:0px 2px 4px rgba(0,0,0,0.14);"))
+        assertTrue(s, s.contains("background-image:linear-gradient(180deg,#ffffff,#eeeeee);"))
+        assertTrue(s, s.endsWith("overflow:hidden;"))
+    }
+
+    @Test
+    fun visual_unevenRadii_useCssCornerOrder() {
+        val s = styleOfNode(Wireframe(2, 0, 0, 80, 40, WireframeType.BUTTON, visual = VisualStyle(radiiDp = listOf(20f, 0f, 4.5f, 8f))))
+        assertTrue(s, s.contains("border-radius:20px 0px 4.5px 8px;"))
+    }
+
+    @Test
+    fun visual_textProperties_singleLine() {
+        val t = Wireframe(
+            2, 0, 0, 100, 22, WireframeType.TEXT, text = "Hi", textSizeSp = 16f, fontWeight = 600,
+            visual = VisualStyle(fontFamily = "serif", italic = true, textAlign = TextAlignment.CENTER, lineHeightDp = 22f),
+        )
+        val s = styleOfNode(t)
+        assertTrue(s, s.contains("font-size:16px;font-weight:600;"))
+        assertTrue(s, s.contains("font-family:serif;font-style:italic;justify-content:center;line-height:22px;"))
+        assertFalse(s, s.contains("white-space"))
+    }
+
+    @Test
+    fun visual_textProperties_multiLineWraps() {
+        val t = Wireframe(
+            2, 0, 0, 100, 44, WireframeType.TEXT, text = "a b c d",
+            visual = VisualStyle(wrap = true, textAlign = TextAlignment.RIGHT),
+        )
+        val s = styleOfNode(t)
+        assertTrue(s, s.contains("display:block;white-space:normal;text-align:right;"))
+        assertFalse(s, s.contains("justify-content"))
+    }
+
+    @Test
+    fun visual_textProperties_ignoredWithoutText() {
+        val s = styleOfNode(Wireframe(2, 0, 0, 10, 10, WireframeType.CONTAINER, visual = VisualStyle(italic = true, textAlign = TextAlignment.CENTER)))
+        assertFalse(s, s.contains("font-style"))
+        assertFalse(s, s.contains("justify-content"))
+    }
+
+    @Test
+    fun visual_image_isABackgroundImage_andBeatsGradient() {
+        val uri = "data:image/webp;base64,UklGRkYAAABXRUJQ+/=="
+        val s = styleOfNode(
+            Wireframe(2, 0, 0, 24, 24, WireframeType.IMAGE, visual = VisualStyle(image = uri, imageFit = ImageFit.CONTAIN, gradient = "linear-gradient(0deg,#000,#fff)")),
+        )
+        assertTrue(s, s.contains("background-image:url(\"$uri\");background-size:contain;background-repeat:no-repeat;background-position:center;"))
+        assertFalse(s, s.contains("linear-gradient"))
+        // An icon replaces the grey placeholder.
+        assertFalse(s, s.contains("#cccccc"))
+    }
+
+    @Test
+    fun visual_untrustedStrings_areNeverWrittenIntoCss() {
+        val evil = Wireframe(
+            2, 0, 0, 24, 24, WireframeType.CONTAINER,
+            visual = VisualStyle(
+                image = "data:image/webp;base64,AAAA\");background:url(http://evil/x",
+                gradient = "linear-gradient(0deg,red);background:url(http://evil/x)",
+                fontFamily = "x;background:url(http://evil/x)",
+            ),
+        )
+        val s = styleOfNode(evil)
+        assertFalse(s, s.contains("evil"))
+        assertFalse(s, s.contains("url("))
+    }
+
+    @Test
+    fun visual_nonFiniteOrNegativeNumbers_areDropped() {
+        val s = styleOfNode(
+            Wireframe(
+                2, 0, 0, 10, 10, WireframeType.CONTAINER,
+                visual = VisualStyle(radiiDp = listOf(Float.NaN, -1f, 3f, 3f), borderWidthDp = Float.POSITIVE_INFINITY, borderColor = 0xFF000000.toInt(), shadowDp = -2f),
+            ),
+        )
+        assertFalse(s, s.contains("border-radius"))
+        assertFalse(s, s.contains("border:"))
+        assertFalse(s, s.contains("box-shadow"))
+    }
+
     @Test
     fun fullSnapshot_styleDetails() {
         val styled = Wireframe(
@@ -127,7 +225,7 @@ class RrwebEncoderTest {
         val s = style(elementFor(encoder.fullSnapshot(root(styled), 0L), 2))
         assertEquals(
             "position:absolute;left:1px;top:2px;width:30px;height:40px;" +
-                "background-color:rgba(255,0,0,0.502);color:#102030;font-size:14px;opacity:0.5;overflow:hidden;",
+                "background-color:rgba(255,0,0,0.502);color:#102030;font-size:14px;opacity:0.5;overflow:visible;",
             s,
         )
         encoder.reset()

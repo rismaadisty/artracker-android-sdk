@@ -4,6 +4,7 @@ import id.art.tracker.privacy.UrlScrubber
 import id.art.tracker.replay.diff.WireframeDiffer
 import id.art.tracker.replay.diff.WireframeDiff
 import id.art.tracker.replay.diff.displayText
+import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
 import id.art.tracker.replay.model.WireframeType
 import java.util.Locale
@@ -20,7 +21,7 @@ internal enum class TouchKind { DOWN, MOVE, UP }
  * reused within a snapshot generation: [fullSnapshot] and [reset] restart numbering at 10.
  *
  * Every full snapshot carries a fixed default stylesheet ([DEFAULT_CSS]) in `<head>` so a chunk is self-contained
- * in any rrweb player (sans-serif font, single-line text, readable buttons); inline styles still win over it.
+ * in any rrweb player (sans-serif font, single-line text); inline styles still win over it.
  *
  * Privacy: the only text this encoder writes is [Wireframe.displayText] (the wireframe's own, already masked
  * text, or a fixed placeholder label) plus that constant stylesheet. Colors and sizes come from ints/floats only.
@@ -212,18 +213,71 @@ internal class RrwebEncoder {
         val sb = StringBuilder(96)
         sb.append("position:absolute;left:").append(relX).append("px;top:").append(relY).append("px;width:")
             .append(dim(w.width)).append("px;height:").append(dim(w.height)).append("px;")
+        val visual = w.visual
+        val image = visual?.image?.takeIf { IMAGE_URI.matches(it) }
         when (w.type) {
-            WireframeType.IMAGE -> sb.append("background-color:").append(IMAGE_GREY).append(';')
+            WireframeType.IMAGE -> if (image == null) sb.append("background-color:").append(IMAGE_GREY).append(';')
             WireframeType.WEB, WireframeType.SURFACE, WireframeType.COMPOSE_BLOCK -> sb.append(BLOCKED_BACKGROUND)
             else -> w.background?.let { sb.append("background-color:").append(css(it)).append(';') }
         }
-        if (w.displayText() != null) {
+        val hasText = w.displayText() != null
+        if (visual != null) appendShape(sb, visual, image)
+        if (hasText) {
             w.textColor?.let { sb.append("color:").append(css(it)).append(';') }
             w.textSizeSp?.let { size -> number(size)?.let { sb.append("font-size:").append(it).append("px;") } }
+            w.fontWeight?.let { sb.append("font-weight:").append(it.coerceIn(MIN_FONT_WEIGHT, MAX_FONT_WEIGHT)).append(';') }
+            if (visual != null) appendText(sb, visual)
         }
         if (w.alpha < 1f) number(w.alpha.coerceIn(0f, 1f))?.let { sb.append("opacity:").append(it).append(';') }
-        sb.append("overflow:hidden;")
+        // Text boxes are often measured shorter than their glyphs (parent clipping, font padding): clipping them
+        // again would cut letters in half. Boxes clip, so that scrolled-out items stay hidden.
+        sb.append(if (w.type == WireframeType.TEXT) "overflow:visible;" else "overflow:hidden;")
         return sb.toString()
+    }
+
+    /**
+     * Radius, border, shadow, gradient and icon. Every value is rebuilt from numbers or checked against a strict
+     * pattern before it reaches CSS: a malformed or hostile string is dropped, never written.
+     */
+    private fun appendShape(sb: StringBuilder, v: VisualStyle, image: String?) {
+        radiusCss(v.radiiDp)?.let { sb.append("border-radius:").append(it).append(';') }
+        val bw = v.borderWidthDp?.let(::number)
+        if (bw != null && bw != "0" && v.borderColor != null) {
+            sb.append("border:").append(bw).append("px solid ").append(css(v.borderColor)).append(';')
+        }
+        v.shadowDp?.takeIf { it > 0f }?.let { e ->
+            val blur = number(e * 2f)
+            number(e)?.let { sb.append("box-shadow:0px ").append(it).append("px ").append(blur).append("px rgba(0,0,0,0.14);") }
+        }
+        if (image != null) {
+            val fit = (v.imageFit ?: id.art.tracker.replay.model.ImageFit.CONTAIN).css
+            sb.append("background-image:url(\"").append(image).append("\");background-size:").append(fit)
+                .append(";background-repeat:no-repeat;background-position:center;")
+        } else {
+            v.gradient?.takeIf { GRADIENT.matches(it) && !it.contains("url", ignoreCase = true) }
+                ?.let { sb.append("background-image:").append(it).append(';') }
+        }
+    }
+
+    private fun appendText(sb: StringBuilder, v: VisualStyle) {
+        v.fontFamily?.takeIf { it in FONT_FAMILIES }?.let { sb.append("font-family:").append(it).append(';') }
+        if (v.italic) sb.append("font-style:italic;")
+        if (v.wrap) {
+            sb.append("display:block;white-space:normal;")
+            v.textAlign?.let { sb.append("text-align:").append(it.css).append(';') }
+        } else {
+            v.textAlign?.let { sb.append("justify-content:").append(it.flex).append(';') }
+        }
+        v.lineHeightDp?.takeIf { it > 0f }?.let(::number)?.let { sb.append("line-height:").append(it).append("px;") }
+    }
+
+    /** One value when all four corners match, else the four in CSS order; null for anything not 4 finite, >= 0. */
+    private fun radiusCss(radii: List<Float>?): String? {
+        if (radii == null || radii.size != 4) return null
+        val parts = radii.map(::number)
+        if (parts.any { it == null }) return null
+        if (parts.all { it == parts[0] }) return if (parts[0] == "0") null else "${parts[0]}px"
+        return parts.joinToString(" ") { "${it}px" }
     }
 
     private fun dim(v: Int): Int = if (v < 0) 0 else v
@@ -255,6 +309,11 @@ internal class RrwebEncoder {
         const val STYLE_ID = 6
         const val STYLE_TEXT_ID = 7
         const val MAX_CHAIN = 1_000
+        const val MIN_FONT_WEIGHT = 1
+        const val MAX_FONT_WEIGHT = 1000
+        val FONT_FAMILIES = setOf("sans-serif", "serif", "monospace", "cursive")
+        val IMAGE_URI = Regex("^data:image/(png|webp|jpeg);base64,[A-Za-z0-9+/=]{1,200000}$")
+        val GRADIENT = Regex("^linear-gradient\\([0-9a-zA-Z#.,%() \\-]{1,400}\\)$")
 
         const val TYPE_FULL_SNAPSHOT = 2
         const val TYPE_INCREMENTAL = 3
@@ -269,23 +328,16 @@ internal class RrwebEncoder {
         const val TOUCH_START = 7
         const val TOUCH_END = 9
 
-        /** Constant, content-free wireframe theme for synthetic nodes; see the class doc. */
+        /**
+         * Constant, content-free base theme: typography and box model only. Fills, borders and radii are never
+         * invented here: the walkers write the app's real ones inline, and a node without them is transparent.
+         */
         const val DEFAULT_CSS =
             "html,body{margin:0;padding:0;font-family:Roboto,-apple-system,BlinkMacSystemFont,sans-serif;" +
                 "font-size:12px;line-height:1.25;color:#0f172a;background:#fafafa}" +
                 "[data-artracker-type]{box-sizing:border-box}" +
                 "[data-artracker-type=\"TEXT\"]{display:flex;align-items:center;font-size:11px;line-height:1.15;" +
-                "color:#1e293b;white-space:nowrap}" +
-                "[data-artracker-type=\"BUTTON\"],[data-artracker-type=\"CHIP\"],[data-artracker-type=\"TAB\"]{" +
-                "background:rgba(0,122,255,0.10);border:1px solid rgba(0,122,255,0.30);border-radius:8px}" +
-                "[data-artracker-type=\"TAB\"][data-artracker-selected=\"true\"]{background:rgba(0,122,255,0.22);" +
-                "border-color:rgba(0,122,255,0.6)}" +
-                "[data-artracker-type=\"TOGGLE\"]{border:1px solid #94a3b8;border-radius:6px}" +
-                "[data-artracker-type=\"TOGGLE\"][data-artracker-checked=\"true\"]{background:rgba(0,122,255,0.35)}" +
-                "[data-artracker-type=\"INPUT\"]{background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px}" +
-                "[data-artracker-type=\"CARD\"]{background:#ffffff;border:1px solid #e2e8f0;border-radius:12px}" +
-                "[data-artracker-type=\"TOOLBAR\"],[data-artracker-type=\"TABBAR\"]{background:#ffffff;" +
-                "border-color:#e2e8f0}"
+                "color:#1e293b;white-space:nowrap}"
 
         const val IMAGE_GREY = "#cccccc"
         const val BLOCKED_BACKGROUND =
