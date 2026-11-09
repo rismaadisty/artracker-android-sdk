@@ -12,6 +12,7 @@ import androidx.compose.ui.semantics.getOrNull
 import id.art.tracker.privacy.ComposeMaskRules
 import id.art.tracker.privacy.MaskDecision
 import id.art.tracker.privacy.MaskingPolicy
+import id.art.tracker.replay.model.VisualStyle
 import id.art.tracker.replay.model.Wireframe
 import id.art.tracker.replay.model.WireframeType
 import kotlin.math.roundToInt
@@ -124,7 +125,26 @@ internal class ComposeWalker(
             val kids = node.children
             val children = ArrayList<Wireframe>(kids.size)
             for (child in kids) node(child, depth + 1, masked)?.let(children::add)
-            return Wireframe(id, x, y, w, h, type, text = text, masked = masked, children = children)
+            val box = ComposeStyleReader.boxStyle(node, density)
+            val textStyle = if (type == WireframeType.TEXT || type == WireframeType.INPUT) {
+                ComposeStyleReader.textStyle(config, density)
+            } else {
+                null
+            }
+            val visual = VisualStyle(
+                gradient = box.gradient, radiiDp = box.radiiDp,
+                borderWidthDp = box.borderWidthDp, borderColor = box.borderColor,
+                shadowDp = box.shadowDp, clip = box.clip,
+                fontFamily = textStyle?.fontFamily, italic = textStyle?.italic ?: false,
+                textAlign = textStyle?.align, wrap = textStyle?.wrap ?: false,
+                lineHeightDp = textStyle?.lineHeightDp?.takeIf { textStyle.wrap },
+            ).takeIf { it != EMPTY_VISUAL }
+            return Wireframe(
+                id, x, y, w, h, type, text = text,
+                textColor = textStyle?.color, textSizeSp = textStyle?.sizeSp, fontWeight = textStyle?.weight,
+                background = box.background, alpha = box.alpha, visual = visual,
+                masked = masked, children = children,
+            )
         }
 
         private fun dp(px: Float): Int = (px / density).roundToInt()
@@ -171,6 +191,7 @@ internal class ComposeWalker(
         }
 
     private companion object {
+        val EMPTY_VISUAL = VisualStyle()
         const val MAX_DEPTH = 50
         const val MAX_TEXT_LENGTH = 200
     }
