@@ -1,10 +1,10 @@
 # artracker-android-sdk
 Native Android SDK for session replay — capture UI layout states, touch events, and user flows
 
-Version `0.1.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
+Version `1.0.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
 [ARTracker](https://github.com/tiofani03/artracker) backend (`POST {endpoint}/api/v1/ingest`).
 
-> **Status: what is verified and what is NOT** (read this before adopting `0.1.0`)
+> **Status: what is verified and what is NOT** (read this before adopting `1.0.0`)
 >
 > | Area | State |
 > | --- | --- |
@@ -16,7 +16,7 @@ Version `0.1.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 > | Playback of replay chunks in the dashboard | **Not played.** Mask, scale and visual match were checked against `UiAutomation` screenshots on the device |
 > | Instrumented tests | Screenshot replay: **run on the device above** (`ScreenshotFlowTest`, `ScreenshotScreensTest`, `ScreenshotBudgetTest`) *before* wireframe mode and the remote replay config were removed; after that change `app/src/androidTest` compiles but was **NOT re-run** (the touch/replay-chunk helpers now read `artracker-screen-v1` chunks). Offline crash then relaunch on a device is **NOT written/run** |
 > | R8 with the consumer rules | Sample app minified build and a stand-alone R8 run without the optional libraries: **verified to succeed**. A minified app **executed** on a device, or a real AGP app without those libraries: **NOT run** (see "ProGuard / R8") |
-> | Release to a public repository | **NOT done.** Only `publishToMavenLocal` was exercised |
+> | Release to GitHub Packages | **Prepared, not published yet.** The artifact (AAR, POM, Gradle metadata) was validated in an isolated local Maven repository and consumed by throw-away apps (AGP 9, and AGP 8 + Kotlin 2.0.21); nothing was sent to GitHub Packages. It is published by [`.github/workflows/publish.yml`](.github/workflows/publish.yml) when a `v*` tag is pushed, see [`docs/releasing.md`](docs/releasing.md) |
 
 ## Requirements
 
@@ -28,32 +28,40 @@ Version `0.1.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 
 ## Installation
 
-Coordinates: `id.art.tracker:artracker-android:0.1.0`.
+Coordinates: `id.art.tracker:artracker-android:1.0.0`, published to **GitHub Packages**
+(`https://maven.pkg.github.com/rismaadisty/artracker-android-sdk`).
 
 ```kotlin
 // build.gradle.kts of the app module
 dependencies {
-    implementation("id.art.tracker:artracker-android:0.1.0")
+    implementation("id.art.tracker:artracker-android:1.0.0")
 }
 ```
 
-`0.1.0` is not published to a public repository yet. To use it, publish it to your local Maven repository from this
-repo and add `mavenLocal()`:
-
-```sh
-./gradlew :artracker-sdk:publishToMavenLocal      # writes to ~/.m2/repository/id/art/tracker/artracker-android/0.1.0/
-```
+GitHub Packages needs authentication to download, **even though this repository is public**: add the registry to
+`settings.gradle.kts` with a GitHub username and a token that has the `read:packages` scope (kept in
+`~/.gradle/gradle.properties` or a CI secret, never committed):
 
 ```kotlin
-// settings.gradle.kts of the consuming project
 dependencyResolutionManagement {
     repositories {
-        mavenLocal()
         google()
         mavenCentral()
+        maven {
+            url = uri("https://maven.pkg.github.com/rismaadisty/artracker-android-sdk")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(providers.environmentVariable("GPR_USER")).orNull
+                password = providers.gradleProperty("gpr.key").orElse(providers.environmentVariable("GPR_KEY")).orNull
+            }
+            content { includeGroup("id.art.tracker") }
+        }
     }
 }
 ```
+
+Step by step (creating the token, Groovy, version catalog, CI, troubleshooting): [`docs/github-packages.md`](docs/github-packages.md).
+To try an unreleased build instead, publish it to your local Maven repository and add `mavenLocal()`:
+`./gradlew :artracker-sdk:publishToMavenLocal` (writes to `~/.m2/repository/id/art/tracker/artracker-android/1.0.0/`).
 
 The SDK pulls in `kotlinx-coroutines-android`, `androidx.work:work-runtime-ktx`, `androidx.lifecycle:lifecycle-process`,
 `androidx.core:core-ktx` and the Kotlin stdlib. It has no Room, no kotlinx.serialization and no OkHttp dependency.
@@ -354,7 +362,7 @@ The AAR ships consumer rules (`consumer-rules.pro`); you need no rules of your o
 The public API (`ARTracker`, `ARTrackerConfig`, ...) is deliberately **not** kept: you call it directly, so R8 knows it
 is used.
 
-Obfuscated builds: stack traces are sent as they are (no symbolication in `0.1.0`). Screen names default to the class
+Obfuscated builds: stack traces are sent as they are (no symbolication in `1.0.0`). Screen names default to the class
 simple name, so a Fragment created in code, or a Compose destination, can show up as an obfuscated name such as `a`;
 use `@ARTrackerScreenName("...")`, `ARTracker.screen("...")` or a `-keepnames` rule for such classes. Activities
 declared in the manifest are kept by AGP's own rules.
@@ -514,4 +522,6 @@ Not covered by automated tests: anything that needs a device (see the status box
   deviations of the implementation from it.
 - [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md): performance measurement procedure (results NOT measured yet).
 - [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md): manual end-to-end checklist for the sample app.
+- [`docs/github-packages.md`](docs/github-packages.md): how an app (Alfagift, Apo, ...) consumes the SDK from GitHub Packages.
+- [`docs/releasing.md`](docs/releasing.md): how a release is validated and published (tag `v*`), and the one-time manual setup.
 - [`artracker-sdk/CHANGELOG.md`](artracker-sdk/CHANGELOG.md)

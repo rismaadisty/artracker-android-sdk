@@ -1,9 +1,25 @@
 # Changelog
 
 All notable changes to `id.art.tracker:artracker-android`. Format follows [Keep a Changelog](https://keepachangelog.com/);
-versions follow semantic versioning (`0.x`: the API may still change).
+versions follow semantic versioning.
 
-## [Unreleased]
+## [1.0.0] - unreleased (first GitHub Packages release; set the date when the tag is pushed)
+
+### Added (distribution)
+
+- Published to GitHub Packages as `id.art.tracker:artracker-android:1.0.0` (AAR, POM, Gradle module metadata, sources and
+  Javadoc jars) by `.github/workflows/publish.yml` on a `v*` tag; consumers authenticate with a `read:packages` token
+  even though the repository is public. See `docs/github-packages.md` and `docs/releasing.md`.
+- `scripts/verify-publication.sh` validates the publication in an isolated local Maven repository and builds throw-away
+  consumer apps against it before anything is published.
+
+### Fixed (distribution)
+
+- The published POM / Gradle metadata depended on `kotlin-stdlib:2.2.10` (AGP 9's built-in Kotlin), which made hosts on
+  Kotlin 2.0.x fail with "binary version of its metadata is 2.2.0, expected version is 2.0.0". The stdlib dependency is now
+  pinned to 2.0.21, the language level the AAR is compiled for.
+- The POM carries the real project url and scm instead of `TODO` placeholders. It declares no license yet: the repository
+  has no `LICENSE` file.
 
 ### Removed (breaking)
 

@@ -5,8 +5,8 @@ plugins {
 }
 
 // Single source of truth for the SDK version: it feeds BuildConfig.SDK_VERSION (User-Agent, envelope `sdk.version`)
-// and the Maven publication below.
-val sdkVersion = "0.1.0"
+// and the Maven publication below. Bump it here (and in CHANGELOG.md) before tagging a release.
+val sdkVersion = "1.0.0"
 
 android {
     namespace = "id.art.tracker.sdk"
@@ -46,6 +46,10 @@ android {
 
 kotlin {
     explicitApi()
+    // AGP 9's built-in Kotlin would publish `kotlin-stdlib:2.2.x` as a dependency of the AAR. A host on Kotlin 2.0.x then
+    // fails to compile ("binary version of its metadata is 2.2.0, expected version is 2.0.0"), because Gradle resolves
+    // the highest stdlib. The stdlib dependency (compile and POM/module metadata) is pinned to the language level.
+    coreLibrariesVersion = "2.0.21"
     compilerOptions {
         // AGP 9's built-in Kotlin compiles with 2.2.x by default, which writes Kotlin 2.2 metadata into the AAR and
         // breaks hosts on Kotlin 2.0.x. Pin language/API level so the AAR is readable by Kotlin 2.0.21.
@@ -100,9 +104,32 @@ val exportReleaseAar by tasks.registering(Copy::class) {
     rename { "artracker-android-$sdkVersion.aar" }
 }
 
-// Publishing: only mavenLocal by default (`./gradlew :artracker-sdk:publishToMavenLocal`). No remote repository and
-// no credentials are configured here.
+// Prints the SDK version and nothing else: the release workflow compares it with the pushed tag (v<version>).
+val printSdkVersion by tasks.registering {
+    group = "publishing"
+    description = "Prints the SDK version (the single source of truth for BuildConfig.SDK_VERSION and the publication)."
+    val version = sdkVersion
+    doLast { println(version) }
+}
+
+// Publishing to GitHub Packages (https://docs.github.com/packages/working-with-a-github-packages-registry/working-with-the-apache-maven-registry).
+//
+// Coordinates: id.art.tracker:artracker-android:<sdkVersion> (the group matches the code package `id.art.tracker`).
+// Targets:
+//   - `publishToMavenLocal`: local validation; add -Dmaven.repo.local=<dir> to keep ~/.m2 untouched
+//     (scripts/verify-publication.sh does exactly that).
+//   - `publishReleasePublicationToGitHubPackagesRepository`: remote; run by .github/workflows/publish.yml on a `v*` tag.
+//
+// Credentials are never committed. They come from the Gradle properties `gpr.user` / `gpr.key`
+// (~/.gradle/gradle.properties) or from the environment (`GITHUB_ACTOR` / `GITHUB_TOKEN`, provided by GitHub Actions).
+// Publishing needs a token with `write:packages` (the workflow's GITHUB_TOKEN with `packages: write` is enough).
+// GitHub Packages never overwrites a published version: a version can be published only once.
 afterEvaluate {
+    // "owner/repo" of the GitHub repository. GitHub Actions sets GITHUB_REPOSITORY; the default is this repository.
+    val githubRepository = providers.environmentVariable("GITHUB_REPOSITORY")
+        .orElse("rismaadisty/artracker-android-sdk")
+        .get()
+
     publishing {
         publications {
             register<MavenPublication>("release") {
@@ -117,38 +144,34 @@ afterEvaluate {
                         "Native Android SDK for ARTracker: events, logs, crash/ANR reporting, OkHttp network " +
                             "capture and privacy-masked session replay.",
                     )
-                    // TODO(owner): replace the url, license and scm placeholders before a public release.
-                    url.set("TODO(owner): https://github.com/<org>/<sdk-repo>")
-                    licenses {
-                        license {
-                            name.set("TODO(owner): license name")
-                            url.set("TODO(owner): license URL")
-                        }
-                    }
-                    developers {
-                        developer {
-                            id.set("TODO(owner)")
-                            name.set("TODO(owner)")
-                        }
-                    }
+                    url.set("https://github.com/$githubRepository")
+                    // TODO(owner): the repository has no LICENSE file yet. Pick a license, add the file, and declare it
+                    // here with a <licenses> block before telling external consumers they may redistribute the SDK.
                     scm {
-                        url.set("TODO(owner): https://github.com/<org>/<sdk-repo>")
+                        url.set("https://github.com/$githubRepository")
+                        connection.set("scm:git:https://github.com/$githubRepository.git")
+                        developerConnection.set("scm:git:ssh://git@github.com/$githubRepository.git")
+                    }
+                    issueManagement {
+                        system.set("GitHub Issues")
+                        url.set("https://github.com/$githubRepository/issues")
                     }
                 }
             }
         }
-        // Remote repository: TODO(owner) add one when a release target exists, with credentials from
-        // ~/.gradle/gradle.properties or CI secrets (never committed), for example:
-        //
-        // repositories {
-        //     maven {
-        //         name = "releases"
-        //         url = uri("https://TODO-owner.example/repository/releases/")
-        //         credentials {
-        //             username = providers.gradleProperty("artrackerRepoUser").orNull
-        //             password = providers.gradleProperty("artrackerRepoPassword").orNull
-        //         }
-        //     }
-        // }
+        repositories {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/$githubRepository")
+                credentials {
+                    username = providers.gradleProperty("gpr.user")
+                        .orElse(providers.environmentVariable("GITHUB_ACTOR"))
+                        .orNull
+                    password = providers.gradleProperty("gpr.key")
+                        .orElse(providers.environmentVariable("GITHUB_TOKEN"))
+                        .orNull
+                }
+            }
+        }
     }
 }
