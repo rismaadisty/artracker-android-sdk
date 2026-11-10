@@ -3,7 +3,6 @@ package id.art.tracker.replay.touch
 import android.app.Activity
 import android.view.MotionEvent
 import android.view.Window
-import id.art.tracker.replay.rrweb.TouchKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

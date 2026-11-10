@@ -5,7 +5,7 @@ import id.art.tracker.core.Clock
 import id.art.tracker.core.Json
 import id.art.tracker.core.SdkLog
 import id.art.tracker.replay.ReplaySink
-import id.art.tracker.replay.rrweb.TouchKind
+import id.art.tracker.replay.touch.TouchKind
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayFormat
 import java.io.ByteArrayOutputStream
@@ -14,7 +14,7 @@ import java.util.zip.GZIPOutputStream
 /** One masked, compressed screenshot. [width]/[height] are pixels of the JPEG, [viewportWidthDp]/[viewportHeightDp] the screen in dp. */
 internal class ScreenFrame(
     val ts: Long,
-    /** Sanitized screen name (the same form the wireframe Meta event uses). */
+    /** Sanitized screen name (redacted, path ids masked, URL-safe: see `ReplayHref`). */
     val screen: String,
     val width: Int,
     val height: Int,
@@ -38,7 +38,7 @@ internal class ScreenTouch(val ts: Long, val xDp: Int, val yDp: Int, val kind: T
  * the JPEG size plus a margin and the per-frame metadata); the closed body is measured and, in the rare case it is
  * still too big, dropped.
  *
- * Not thread-safe: one caller (the replay processing context), like `ReplayBatcher`.
+ * Not thread-safe: one caller (the replay processing context), like the encoder.
  */
 internal class ScreenChunker(
     private val sink: ReplaySink,

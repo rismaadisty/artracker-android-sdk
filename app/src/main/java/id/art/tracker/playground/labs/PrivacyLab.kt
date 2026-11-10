@@ -77,12 +77,6 @@ fun PrivacyLab(modifier: Modifier = Modifier) {
         }
         Text(stringResource(R.string.lab_privacy_redaction), style = MaterialTheme.typography.titleSmall)
         RedactionForm(remote)
-        if (LocalServersProvider.instance.sinkAvailable) {
-            ActionCard(stringResource(R.string.lab_privacy_export), stringResource(R.string.lab_privacy_export_desc)) {
-                val dir = context.getExternalFilesDir(null) ?: context.filesDir
-                LocalServersProvider.instance.exportReplayChunks(dir)?.let { "ditulis: ${it.absolutePath}" } ?: "gagal menulis ekspor"
-            }
-        }
     }
 }
 

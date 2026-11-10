@@ -13,7 +13,6 @@ object LocalServersProvider {
         override fun startSink(): Boolean = sink.start()
         override fun startTargets(): Boolean = targets.start()
         override val targetBaseUrl: String? get() = if (targets.boundAddress != null) targets.baseUrl else null
-        override fun exportReplayChunks(dir: File): File? = sink.exportReplayChunks(dir)
         override var screenshotAllowed: Boolean
             get() = sink.screenshotEnabled
             set(value) { sink.screenshotEnabled = value }

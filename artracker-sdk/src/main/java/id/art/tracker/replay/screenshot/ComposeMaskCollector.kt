@@ -5,16 +5,14 @@ import androidx.compose.ui.semantics.SemanticsNode
 import id.art.tracker.privacy.ComposeMaskRules
 import id.art.tracker.privacy.MaskDecision
 import id.art.tracker.privacy.MaskingPolicy
-import id.art.tracker.replay.capture.ReflectiveSemanticsAccess
-import id.art.tracker.replay.capture.SemanticsAccess
 import kotlin.math.roundToInt
 
 /**
  * Mask-only pass over a Compose host's unmerged semantics tree: the regions of password, sensitive and explicitly
- * masked nodes, and every text node when `maskAllText` is set ([ComposeMaskRules], the rules of `ComposeWalker`),
- * without reading any style. Main thread only.
+ * masked nodes, and every text node when `maskAllText` is set ([ComposeMaskRules]), without reading any style.
+ * Main thread only.
  *
- * Like `ComposeWalker`, this class links Compose types and must be created only behind `ClassAvailability.compose`
+ * This class links Compose types and must be created only behind `ClassAvailability.compose`
  * (see [ComposeMaskCollectorFactory]). Fails closed: a tree that cannot be read masks the whole host.
  */
 internal class ComposeMaskCollector(

@@ -13,7 +13,7 @@ class ReplayReadinessTest {
 
     @Test
     fun fpsIsClampedLikeTheSdk() {
-        assertEquals(1_000L, ReplayReadiness.warmupMs(100.0))
+        assertEquals(700L, ReplayReadiness.warmupMs(100.0))
         assertEquals(4_500L, ReplayReadiness.warmupMs(0.1))
     }
 

@@ -20,7 +20,6 @@ import id.art.tracker.PrivacyConfig
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.privacy.artrackerMask
 import id.art.tracker.privacy.artrackerUnmask
-import id.art.tracker.replay.capture.SemanticsAccess
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule

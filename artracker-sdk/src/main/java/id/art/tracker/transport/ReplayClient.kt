@@ -5,7 +5,6 @@ import id.art.tracker.SendRequest
 import id.art.tracker.core.Iso8601
 import id.art.tracker.core.Json
 import id.art.tracker.core.SdkInfo
-import id.art.tracker.replay.RemoteReplayConfig
 import id.art.tracker.core.SdkLog
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -43,7 +42,7 @@ internal fun interface ReplaySender {
     fun upload(upload: ReplayUpload): ReplayResult
 }
 
-internal enum class ReplayStep { CHUNK_URL, UPLOAD, ACK, CONFIG }
+internal enum class ReplayStep { CHUNK_URL, UPLOAD, ACK }
 
 /** Maps the HTTP status of one step to a [ReplayResult]; null means the step succeeded and the next one may run. */
 internal object ReplayResponse {
@@ -63,7 +62,6 @@ internal object ReplayResponse {
 internal object ReplayEndpoint {
     const val CHUNK_URL_PATH = "/api/v1/replay/chunk-url"
     const val CHUNK_ACK_PATH = "/api/v1/replay/chunk-ack"
-    const val CONFIG_PATH = "/api/v1/replay/config"
 
     /** `{endpoint}{path}`, or null when [endpoint] is not a valid http(s) URL (it can then never succeed). */
     fun url(endpoint: String, path: String): URL? =
@@ -99,7 +97,6 @@ internal class ReplayClient(
 ) : ReplaySender {
     private val chunkUrlUrl: URL? = ReplayEndpoint.url(endpoint, ReplayEndpoint.CHUNK_URL_PATH)
     private val chunkAckUrl: URL? = ReplayEndpoint.url(endpoint, ReplayEndpoint.CHUNK_ACK_PATH)
-    private val configUrl: URL? = ReplayEndpoint.url(endpoint, ReplayEndpoint.CONFIG_PATH)
     private val keyUsable: Boolean = IngestEndpoint.keyUsable(apiKey)
 
     /** A request that failed before or while talking to the server. */
@@ -136,16 +133,12 @@ internal class ReplayClient(
         if (upload.userId != null) body["user_id"] = upload.userId
         body["environment"] = upload.environment
         body["start_time"] = Iso8601.format(upload.startMs)
-        // Wireframe batches keep the original request; only a screenshot chunk names its format.
-        if (upload.format != ReplayFormat.RRWEB) body["format"] = upload.format
+        body["format"] = upload.format
 
         val response = send(ReplayStep.CHUNK_URL, target, "POST", jsonBody(body), authenticated = true, readBody = true)
-        // A 403 on a screenshot chunk whose reason is unreadable (a sender that returns no error bodies) counts as the
-        // owner's switch too: wrongly tripping the kill switch would silence the whole SDK, while a really revoked key
+        // A 403 whose reason is unreadable (a sender that returns no error bodies) counts as the owner's switch too: wrongly tripping the kill switch would silence the whole SDK, while a really revoked key
         // is caught by the next ingest 401 anyway.
-        if (upload.format == ReplayFormat.SCREEN_V1 && response.status == 403 &&
-            (isScreenshotDisabled(response.body) || response.body.isNullOrBlank())
-        ) {
+        if (response.status == 403 && (isScreenshotDisabled(response.body) || response.body.isNullOrBlank())) {
             SdkLog.d("replay chunk-url answered 403 screenshot_disabled")
             throw Failed(ReplayResult.ScreenshotDisabled)
         }
@@ -202,27 +195,6 @@ internal class ReplayClient(
         }
     }
 
-    /**
-     * `GET /api/v1/replay/config`: the owner's screenshot switch. Null when it cannot be known right now (offline,
-     * a non-2xx answer, a body without `screenshot_enabled`); the caller keeps what it had. Never throws.
-     */
-    fun fetchConfig(): RemoteReplayConfig? {
-        val target = configUrl ?: return null
-        if (!keyUsable) return null
-        return try {
-            val response = send(ReplayStep.CONFIG, target, "GET", ByteArray(0), authenticated = true, readBody = true)
-            if (response.status !in 200..299) return null
-            val json = JSONObject(response.body ?: return null)
-            val enabled = json.opt("screenshot_enabled") as? Boolean ?: return null
-            val maxFps = (json.opt("max_fps") as? Number)?.toDouble()?.takeIf { it.isFinite() && it > 0.0 }
-            RemoteReplayConfig(enabled, maxFps)
-        } catch (f: Failed) {
-            null
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     private fun parseUploadUrl(body: String?): String? {
         if (body.isNullOrBlank()) return null
         return try {
@@ -249,16 +221,13 @@ internal class ReplayClient(
             conn.connectTimeout = connectTimeoutMs
             conn.readTimeout = readTimeoutMs
             conn.instanceFollowRedirects = false
-            // A body on a GET would turn it into a POST: only requests that carry one get an output stream.
-            conn.doOutput = payload.isNotEmpty()
+            conn.doOutput = true
             conn.useCaches = false
             conn.setRequestProperty("Content-Type", contentType)
             conn.setRequestProperty("User-Agent", "artracker-android/${SdkInfo.VERSION}")
             if (authenticated) conn.setRequestProperty("X-Artracker-Key", apiKey)
-            if (payload.isNotEmpty()) {
-                conn.setFixedLengthStreamingMode(payload.size)
-                conn.outputStream.use { it.write(payload) }
-            }
+            conn.setFixedLengthStreamingMode(payload.size)
+            conn.outputStream.use { it.write(payload) }
 
             val status = conn.responseCode
             val retryAfter = conn.getHeaderField("Retry-After")

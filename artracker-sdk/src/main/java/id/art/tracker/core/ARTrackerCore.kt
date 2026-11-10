@@ -18,8 +18,6 @@ import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.ReplayControllerFactory
 import id.art.tracker.replay.ReplayIntake
-import id.art.tracker.replay.ReplayRemote
-import id.art.tracker.replay.ReplayRemoteConfigCache
 import id.art.tracker.replay.ReplaySink
 import id.art.tracker.telemetry.Breadcrumbs
 import id.art.tracker.telemetry.CrashHandler
@@ -39,7 +37,6 @@ import id.art.tracker.transport.IngestClient
 import id.art.tracker.transport.PayloadEncoder
 import id.art.tracker.transport.ReplayClient
 import id.art.tracker.transport.ReplayFlusher
-import id.art.tracker.transport.ReplayFormat
 import id.art.tracker.transport.ReplayKicker
 import id.art.tracker.transport.ReplayStore
 import id.art.tracker.transport.TransportConfigStore
@@ -221,8 +218,7 @@ internal class ARTrackerCore(
         }
     }
     private val replayQueue: ReplayStore by replayStoreLazy
-    // The host's ARTrackerSender (when set) carries the replay upload and the config request too, so pinning, proxy and
-    // Chucker apply.
+    // The host's ARTrackerSender (when set) carries the replay upload too, so pinning, proxy and Chucker apply.
     private val replayClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         ReplayClient(config.endpoint, config.apiKey, sender = config.network.sender)
     }
@@ -238,24 +234,9 @@ internal class ARTrackerCore(
         ReplayKicker(scope, Dispatchers.IO, replayFlusher)
     }
 
-    /** Receives every closed replay batch from the replay controller's batcher: queued, then uploaded in the background. */
+    /** Receives every closed replay chunk from the replay controller: queued, then uploaded in the background. */
     internal val replaySink: ReplaySink =
         replaySink ?: ReplayIntake(::isDisabled, { replayQueue }, { replayKicker.kick() })
-
-    /**
-     * The project owner's screenshot switch: the cached answer (survives restarts) and a blocking fetch of
-     * `GET /replay/config`, to be called off the main thread by the replay controller.
-     */
-    internal val replayRemote: ReplayRemote =
-        ReplayRemote(ReplayRemoteConfigCache(transportPrefs)) { replayClient.fetchConfig() }
-
-    /** The server switched screenshots off: queued screenshot chunks are deleted (the open ones are dropped by the controller). */
-    internal fun clearScreenshotChunks() {
-        replayJob = scope.launch {
-            runCatching { if (replayDatabaseExists()) replayQueue.clearFormat(ReplayFormat.SCREEN_V1) }
-                .onFailure { SdkLog.w("clearing queued screenshot chunks failed", it) }
-        }
-    }
 
     /** Last launched replay housekeeping (opt-out clearing, kicking); awaited by [awaitIdle]. */
     @Volatile

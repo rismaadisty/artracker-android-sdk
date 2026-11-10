@@ -10,7 +10,6 @@ import java.io.File
 import java.io.IOException
 import java.net.InetAddress
 import java.util.zip.GZIPInputStream
-import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -22,8 +21,8 @@ import okhttp3.mockwebserver.RecordedRequest
  * arrives is already redacted, so showing it in the Inspector exposes nothing the backend would not receive.
  *
  * It also plays the Session Replay API (`chunk-url`, `upload-chunk`, `chunk-ack`): the `upload_url` it hands out points
- * back at itself, and each uploaded batch is kept for the export. Those uploads are not ingest items, so the Inspector
- * does not list them.
+ * back at itself, and the screenshot frames of each uploaded chunk are kept for the export. Those uploads are not
+ * ingest items, so the Inspector does not list them.
  *
  * Binds IPv4 loopback only (never reachable from other devices). The `X-Artracker-Key` header is never read into any
  * stored structure. Bodies above [MAX_UNCOMPRESSED] bytes are refused with 413 and not parsed.
@@ -33,14 +32,13 @@ class InAppSink(
     private val ring: EventRing = Inspector.ring,
 ) {
     private var server: MockWebServer? = null
-    private val vault = ArrayDeque<String>()
 
     /** `object_key` -> `chunk_seq` from `chunk-url`, so the PUT knows which chunk it carries. */
     private val uploadKeys = object : LinkedHashMap<String, Int>() {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?): Boolean = size > MAX_UPLOAD_KEYS
     }
 
-    /** The answer to `GET /api/v1/replay/config`; when false a screenshot chunk is refused with `403 screenshot_disabled`. */
+    /** When false a chunk is refused with `403 screenshot_disabled` (what a project with screenshot replay off answers). */
     @Volatile
     var screenshotEnabled: Boolean = true
 
@@ -86,16 +84,6 @@ class InAppSink(
         boundAddress = null
     }
 
-    /**
-     * Writes the last [MAX_CHUNKS] replay chunks (masked, intact) as `replay-chunks.json` in [dir], one attribute object
-     * `{seq, start, end, full_snapshot, platform, events}` each, the format `tools/replay-viewer` reads.
-     */
-    fun exportReplayChunks(dir: File): File? = runCatching {
-        dir.mkdirs()
-        val snapshot = synchronized(vault) { vault.toList() }
-        File(dir, "replay-chunks.json").also { it.writeText(snapshot.joinToString(",", "[", "]")) }
-    }.getOrNull()
-
     private val dispatcher = object : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
             val path = request.path?.substringBefore('?')
@@ -103,10 +91,6 @@ class InAppSink(
                 request.method == "POST" && path == INGEST_PATH -> ingest(request)
                 request.method == "POST" && path == CHUNK_URL_PATH -> chunkUrl(request)
                 request.method == "PUT" && path == UPLOAD_PATH -> upload(request)
-                request.method == "GET" && path == CONFIG_PATH -> MockResponse()
-                    .setResponseCode(200)
-                    .setHeader("Content-Type", "application/json")
-                    .setBody("{\"screenshot_enabled\":$screenshotEnabled,\"max_fps\":4}")
                 request.method == "POST" && path == CHUNK_ACK_PATH -> MockResponse()
                     .setResponseCode(200)
                     .setHeader("Content-Type", "application/json")
@@ -123,7 +107,6 @@ class InAppSink(
             is Gunzip.Ok -> {
                 val items = EnvelopeParser.parse(result.text)
                 ring.addAll(items)
-                EnvelopeParser.replayChunkAttributes(result.text).forEach(::keepChunk)
                 MockResponse()
                     .setResponseCode(202)
                     .setHeader("Content-Type", "application/json")
@@ -137,7 +120,7 @@ class InAppSink(
         if (body.size > MAX_CONTROL_BODY) return MockResponse().setResponseCode(413)
         val json = runCatching { JSONObject(body.toString(Charsets.UTF_8)) }.getOrNull()
             ?: return MockResponse().setResponseCode(400)
-        if (json.optString("format") == FORMAT_SCREEN && !screenshotEnabled) {
+        if (!screenshotEnabled) {
             return MockResponse()
                 .setResponseCode(403)
                 .setHeader("Content-Type", "application/json")
@@ -159,7 +142,7 @@ class InAppSink(
             )
     }
 
-    /** The PUT body is the gzip of a JSON array of rrweb events: stored as one chunk in the export shape. */
+    /** The PUT body is the gzip of an `artracker-screen-v1` document. */
     private fun upload(request: RecordedRequest): MockResponse {
         val text = when (val result = gunzip(request.body.readByteArray())) {
             is Gunzip.Corrupt -> return MockResponse().setResponseCode(400)
@@ -168,33 +151,13 @@ class InAppSink(
         }
         val key = request.requestUrl?.queryParameter("key").orEmpty()
         val seq = synchronized(uploadKeys) { uploadKeys[key] } ?: return MockResponse().setResponseCode(404)
+        if (key.isEmpty() || synchronized(uploadKeys) { uploadKeys[key] } == null) return MockResponse().setResponseCode(404)
         val screen = runCatching { JSONObject(text) }.getOrNull()?.takeIf { it.optString("format") == FORMAT_SCREEN }
-        if (screen != null) return keepScreenChunk(screen, text.length)
-        val events = runCatching { JSONArray(text) }.getOrNull() ?: return MockResponse().setResponseCode(400)
-        var start = Long.MAX_VALUE
-        var end = Long.MIN_VALUE
-        var full = false
-        for (i in 0 until events.length()) {
-            val event = events.optJSONObject(i) ?: continue
-            if (event.optInt("type") == EVENT_FULL_SNAPSHOT) full = true
-            val ts = event.optLong("timestamp", -1)
-            if (ts >= 0) {
-                start = minOf(start, ts)
-                end = maxOf(end, ts)
-            }
-        }
-        if (start == Long.MAX_VALUE) {
-            start = 0
-            end = 0
-        }
-        keepChunk(
-            "{\"seq\":$seq,\"start\":$start,\"end\":$end,\"full_snapshot\":$full," +
-                "\"platform\":\"android\",\"events\":$events}",
-        )
-        return MockResponse().setResponseCode(200)
+            ?: return MockResponse().setResponseCode(400)
+        return keepScreenChunk(screen, text.length)
     }
 
-    /** An `artracker-screen-v1` chunk: only counted and its JPEG frames kept (the last [MAX_SHOTS]); no wireframe export. */
+    /** An `artracker-screen-v1` chunk: counted, and its JPEG frames kept (the last [MAX_SHOTS]). */
     private fun keepScreenChunk(chunk: JSONObject, size: Int): MockResponse {
         val frames = chunk.optJSONArray("frames") ?: return MockResponse().setResponseCode(400)
         val touches = chunk.optJSONArray("touches")?.length() ?: 0
@@ -250,13 +213,6 @@ class InAppSink(
         return out.toByteArray()
     }
 
-    private fun keepChunk(attributesJson: String) {
-        synchronized(vault) {
-            vault.addLast(attributesJson)
-            while (vault.size > MAX_CHUNKS) vault.removeFirst()
-        }
-    }
-
     private sealed interface Gunzip {
         class Ok(val text: String) : Gunzip
         object Corrupt : Gunzip
@@ -286,14 +242,11 @@ class InAppSink(
         const val CHUNK_URL_PATH = "/api/v1/replay/chunk-url"
         const val UPLOAD_PATH = "/api/v1/replay/upload-chunk"
         const val CHUNK_ACK_PATH = "/api/v1/replay/chunk-ack"
-        const val CONFIG_PATH = "/api/v1/replay/config"
         const val FORMAT_SCREEN = "artracker-screen-v1"
         const val MAX_SHOTS = 20
         const val MAX_UNCOMPRESSED = 4 * 1024 * 1024
         const val MAX_CONTROL_BODY = 16 * 1024
-        const val MAX_CHUNKS = 50
         const val MAX_UPLOAD_KEYS = 200
-        const val EVENT_FULL_SNAPSHOT = 2
         val SAFE_TOKEN = Regex("^[a-zA-Z0-9_-]{8,128}$")
         val SAFE_HOST = Regex("^[a-zA-Z0-9.\\-]{1,64}:[0-9]{1,5}$")
     }

@@ -21,8 +21,8 @@ import id.art.tracker.BeforeSend
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.replay.ManualDispatcher
 import id.art.tracker.replay.ReplayController
-import id.art.tracker.replay.capture.ViewWalker
 import id.art.tracker.testutil.FakeReplayBackend
+import id.art.tracker.testutil.testReplayController
 import id.art.tracker.transport.FlusherRegistry
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayStore
@@ -206,9 +206,7 @@ class ARTrackerCoreTest {
             val core = ARTrackerCore(
                 app,
                 configWith(endpoint = backend.endpoint, replay = ReplayConfig(enabled = true, sampleRate = 1.0)),
-                replayFactory = { c, handler ->
-                    ReplayController.create(c, ViewWalker(MaskingPolicy(c.config.privacy)), handler, { _, _ -> true }, dispatcher)
-                },
+                replayFactory = { c, handler -> testReplayController(c, handler, dispatcher) },
             )
             ARTrackerCore.install(core)
             core.start()

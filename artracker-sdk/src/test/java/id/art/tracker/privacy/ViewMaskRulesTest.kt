@@ -10,9 +10,6 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.PrivacyConfig
-import id.art.tracker.replay.model.Wireframe
-import id.art.tracker.replay.model.WireframeType
-import id.art.tracker.replay.model.toDebugString
 import id.art.tracker.sdk.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -244,19 +241,5 @@ class ViewMaskRulesTest {
         assertTrue(ViewMaskRules.isPassword(multi))
         assertEquals(MaskDecision.MASK, relaxedPolicy.forView(visible, parentMasked = false))
         assertEquals(MaskDecision.MASK, relaxedPolicy.forView(multi, parentMasked = false))
-    }
-
-    @Test
-    fun wireframeDebugString_containsAllFieldsIncludingChildren() {
-        val child = Wireframe(2, 1, 2, 3, 4, WireframeType.TEXT, text = "child-text", masked = false)
-        val root = Wireframe(
-            1, 0, 0, 10, 10, WireframeType.CONTAINER,
-            textColor = 0x11, textSizeSp = 14f, background = 0x22, alpha = 0.5f,
-            masked = true, summarized = true, children = listOf(child),
-        )
-        val s = root.toDebugString()
-        assertTrue(s, "child-text" in s)
-        assertTrue(s, "CONTAINER" in s && "masked=true" in s && "summarized=true" in s)
-        assertFalse("secret" in s)
     }
 }

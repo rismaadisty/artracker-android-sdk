@@ -7,7 +7,6 @@ import id.art.tracker.ExperimentalARTrackerApi
 import id.art.tracker.NetworkConfig
 import id.art.tracker.PrivacyConfig
 import id.art.tracker.ReplayConfig
-import id.art.tracker.ReplayMode
 import id.art.tracker.ReplayQuality
 
 /** Everything the playground lets the user change. The SDK config is immutable, so it takes effect after a restart. */
@@ -18,11 +17,6 @@ data class PlaygroundSettings(
     val replayEnabled: Boolean = true,
     val replaySampleRate: Double = 1.0,
     val replayFps: Double = 2.0,
-    /**
-     * The sample records real, masked screenshots so they can be tried out of the box (the SDK's own default is
-     * WIREFRAME, opt-in). The server can still switch screenshots off; Settings can switch back to wireframes.
-     */
-    val replayMode: ReplayMode = ReplayMode.SCREENSHOT,
     val replayQuality: ReplayQuality = ReplayQuality.STANDARD,
     val maskAllInputs: Boolean = true,
     val maskAllText: Boolean = false,
@@ -72,8 +66,7 @@ data class PlaygroundSettings(
             environment = environment,
             debug = debug,
             replay = ReplayConfig(
-                enabled = replayEnabled, sampleRate = replaySampleRate, framesPerSecond = replayFps,
-                mode = replayMode, quality = replayQuality,
+                enabled = replayEnabled, sampleRate = replaySampleRate, framesPerSecond = replayFps, quality = replayQuality,
             ),
             privacy = PrivacyConfig(maskAllInputs = maskAllInputs, maskAllText = maskAllText),
             network = NetworkConfig(

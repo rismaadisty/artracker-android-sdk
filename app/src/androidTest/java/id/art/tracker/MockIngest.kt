@@ -15,7 +15,7 @@ import okhttp3.mockwebserver.RecordedRequest
  * A MockWebServer on IPv4 loopback that plays the backend for the instrumented tests: it records every request and
  * answers `202 {"status":"accepted","queued":n}` to ingest unless a response was scripted (scripted responses apply to
  * ingest only). It also plays the three Session Replay API endpoints: the recorded body of a replay `PUT` is the
- * gunzipped JSON array of rrweb events, the `chunk-url` and `chunk-ack` bodies are their plain JSON.
+ * gunzipped `artracker-screen-v1` JSON document, the `chunk-url` and `chunk-ack` bodies are their plain JSON.
  */
 class MockIngest {
     class Recorded(val path: String, val headers: Headers, val body: String, val method: String = "POST")
@@ -23,10 +23,6 @@ class MockIngest {
     private val server = MockWebServer()
     private val recorded = CopyOnWriteArrayList<Recorded>()
     private val script = ConcurrentLinkedQueue<MockResponse>()
-
-    /** What `GET /api/v1/replay/config` answers: screenshot replay stays off unless a test turns it on. */
-    @Volatile
-    var screenshotEnabled: Boolean = false
 
     val url: String get() = "http://localhost:${server.port}"
     val port: Int get() = server.port
@@ -51,8 +47,6 @@ class MockIngest {
                         "{\"upload_url\":\"$url$UPLOAD_PATH?key=k&exp=1&sig=s\",\"object_key\":\"k\",\"expires_in\":300}",
                     )
                     UPLOAD_PATH, CHUNK_ACK_PATH -> MockResponse().setResponseCode(200)
-                    CONFIG_PATH -> MockResponse().setResponseCode(200)
-                        .setBody("{\"screenshot_enabled\":$screenshotEnabled,\"max_fps\":4}")
                     else -> script.poll()
                         ?: MockResponse().setResponseCode(202).setBody("{\"status\":\"accepted\",\"queued\":1}")
                 }
@@ -89,13 +83,11 @@ class MockIngest {
     fun clear() {
         recorded.clear()
         script.clear()
-        screenshotEnabled = false
     }
 
     companion object {
         const val CHUNK_URL_PATH = "/api/v1/replay/chunk-url"
         const val UPLOAD_PATH = "/api/v1/replay/upload-chunk"
         const val CHUNK_ACK_PATH = "/api/v1/replay/chunk-ack"
-        const val CONFIG_PATH = "/api/v1/replay/config"
     }
 }

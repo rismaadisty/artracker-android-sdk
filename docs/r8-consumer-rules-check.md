@@ -14,7 +14,7 @@ fail or merge the isolated holder classes. Temporary change, not committed:
 #   -printusage build/outputs/mapping/release/usage.txt
 #   -printconfiguration build/outputs/mapping/release/configuration.txt
 ./gradlew :app:assembleRelease
-grep -E "^id\.art\.tracker\.(lifecycle\.(FragmentSupport|NavBinder|FragmentTracker)|replay\.capture\.(ComposeWalker|ReflectiveSemanticsAccess)|replay\.screenshot\.(ComposeMaskCollector|ComposeMaskCollectorFactory)|privacy\.(ComposeMaskRules|ComposeMaskRulesKt)) ->" app/build/outputs/mapping/release/mapping.txt
+grep -E "^id\.art\.tracker\.(lifecycle\.(FragmentSupport|NavBinder|FragmentTracker)|replay\.screenshot\.(ReflectiveSemanticsAccess|ComposeMaskCollector|ComposeMaskCollectorFactory)|privacy\.(ComposeMaskRules|ComposeMaskRulesKt)) ->" app/build/outputs/mapping/release/mapping.txt
 ```
 
 The minified runs were done with the temporary local edits above (never committed; `git checkout app/build.gradle.kts

@@ -44,7 +44,15 @@ internal class ReplayStore(
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            if (oldVersion < 2) migrateV1ToV2(db)
+            // Every older layout only ever held wireframe (rrweb) batches, which the SDK can no longer produce or send.
+            // The row (and, on the next [resetOrphaned], its body file) goes; the per-session `seq` counters stay.
+            if (oldVersion < 2) {
+                db.execSQL("DROP TABLE replay_batches")
+                db.execSQL("DROP INDEX IF EXISTS idx_replay_pending")
+                createBatchesTable(db)
+            } else if (oldVersion < 3) {
+                db.execSQL("DELETE FROM replay_batches WHERE format <> ?", arrayOf<Any?>(ReplayFormat.SCREEN_V1))
+            }
         }
     }
 
@@ -62,54 +70,12 @@ internal class ReplayStore(
                 "user_id TEXT, " +
                 "environment TEXT NOT NULL, " +
                 "file TEXT NOT NULL, " +
-                "format TEXT NOT NULL DEFAULT '${ReplayFormat.RRWEB}', " +
+                "format TEXT NOT NULL DEFAULT '${ReplayFormat.SCREEN_V1}', " +
                 "size_bytes INTEGER NOT NULL, " +
                 "claimed INTEGER NOT NULL DEFAULT 0, " +
                 "attempts INTEGER NOT NULL DEFAULT 0)",
         )
         db.execSQL("CREATE INDEX idx_replay_pending ON replay_batches(claimed, created_at, seq)")
-    }
-
-    /** v1 kept the body in a BLOB column: write each one out to a file and move the row to the new table. */
-    private fun migrateV1ToV2(db: SQLiteDatabase) {
-        db.execSQL("ALTER TABLE replay_batches RENAME TO replay_batches_v1")
-        db.execSQL("DROP INDEX IF EXISTS idx_replay_pending")
-        createBatchesTable(db)
-        val ids = ArrayList<String>()
-        db.rawQuery("SELECT id FROM replay_batches_v1", null).use { c -> while (c.moveToNext()) ids += c.getString(0) }
-        for (id in ids) {
-            // One row at a time: a BLOB close to the CursorWindow limit must not share a window with other rows.
-            runCatching {
-                db.rawQuery(
-                    "SELECT session_id, seq, created_at, first_ts, last_ts, event_count, has_error, user_id, environment, " +
-                        "body, size_bytes, claimed, attempts FROM replay_batches_v1 WHERE id = ?",
-                    arrayOf(id),
-                ).use { c ->
-                    if (!c.moveToFirst()) return@use
-                    val name = fileNameFor(id)
-                    writeBody(name, c.getBlob(9))
-                    val values = ContentValues(15).apply {
-                        put("id", id)
-                        put("session_id", c.getString(0))
-                        put("seq", c.getInt(1))
-                        put("created_at", c.getLong(2))
-                        put("first_ts", c.getLong(3))
-                        put("last_ts", c.getLong(4))
-                        put("event_count", c.getInt(5))
-                        put("has_error", c.getInt(6))
-                        put("user_id", if (c.isNull(7)) null else c.getString(7))
-                        put("environment", c.getString(8))
-                        put("file", name)
-                        put("format", ReplayFormat.RRWEB)
-                        put("size_bytes", c.getLong(10))
-                        put("claimed", 0)
-                        put("attempts", c.getInt(12))
-                    }
-                    db.insertOrThrow("replay_batches", null, values)
-                }
-            }.onFailure { SdkLog.w("migrating replay batch failed (${it.javaClass.simpleName}); dropped") }
-        }
-        db.execSQL("DROP TABLE replay_batches_v1")
     }
 
     override fun enqueue(batch: NewReplayBatch): Boolean =
@@ -370,7 +336,7 @@ internal class ReplayStore(
 
     companion object {
         const val DB_NAME = "artracker_replay.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
         const val DEFAULT_MAX_BYTES: Long = 50L * 1024 * 1024
         private const val BODIES_PATH = "artracker/replay"
         private val EMPTY = ByteArray(0)

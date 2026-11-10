@@ -10,31 +10,17 @@ internal fun List<MockIngest.Recorded>.items(): List<JSONObject> = flatMap { r -
     (0 until array.length()).mapNotNull { array.optJSONObject(it) }
 }
 
-/**
- * The replay uploads, one per recorded `PUT`, shaped like the old chunk items (`attributes.events`) so [touches] and the
- * assertions that count chunks keep working: the SDK now uploads replay to the Session Replay API instead of `/ingest`.
- */
+/** The replay uploads, one per recorded `PUT`: the `artracker-screen-v1` documents (`frames`, `touches`). */
 internal fun List<MockIngest.Recorded>.chunks(): List<JSONObject> =
     filter { it.method == "PUT" && it.path.substringBefore('?') == MockIngest.UPLOAD_PATH }
-        .mapNotNull { r ->
-            val events = runCatching { JSONArray(r.body) }.getOrNull() ?: return@mapNotNull null
-            JSONObject()
-                .put("type", "session")
-                .put("name", "replay_chunk")
-                .put("attributes", JSONObject().put("events", events))
-        }
+        .mapNotNull { r -> runCatching { JSONObject(r.body) }.getOrNull()?.takeIf { it.optString("format") == "artracker-screen-v1" } }
 
-/** (kind, x, y) of every rrweb touch event in the chunks: kind 7 = touchstart, 9 = touchend. x and y are dp. */
-internal fun List<JSONObject>.touches(): List<Triple<Int, Int, Int>> = flatMap { chunk ->
-    val events = chunk.optJSONObject("attributes")?.optJSONArray("events") ?: JSONArray()
-    (0 until events.length()).mapNotNull { i ->
-        val e = events.optJSONObject(i) ?: return@mapNotNull null
-        val d = e.optJSONObject("data") ?: return@mapNotNull null
-        if (e.optInt("type") == 3 && d.optInt("source") == 2 && d.optInt("type") in listOf(7, 9)) {
-            Triple(d.optInt("type"), d.optInt("x"), d.optInt("y"))
-        } else {
-            null
-        }
+/** (kind, x, y) of every touch in the chunks: kind is `down`, `move` or `up`. x and y are dp. */
+internal fun List<JSONObject>.touches(): List<Triple<String, Int, Int>> = flatMap { chunk ->
+    val touches = chunk.optJSONArray("touches") ?: JSONArray()
+    (0 until touches.length()).mapNotNull { i ->
+        val t = touches.optJSONObject(i) ?: return@mapNotNull null
+        Triple(t.optString("kind"), t.optInt("x"), t.optInt("y"))
     }
 }
 

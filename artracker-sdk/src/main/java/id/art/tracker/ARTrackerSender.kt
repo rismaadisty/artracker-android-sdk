@@ -14,12 +14,10 @@ import java.io.IOException
  * - ingest: `POST {endpoint}/api/v1/ingest`, gzip JSON body;
  * - replay (only with session replay): `POST {endpoint}/api/v1/replay/chunk-url` (JSON; the response body carries the
  *   upload URL), then `PUT` of a gzip body to that signed URL, then `POST {endpoint}/api/v1/replay/chunk-ack` (JSON).
- *   The API key header is on the two `POST`s only, never on the `PUT`;
- * - replay in screenshot mode (`ReplayMode.SCREENSHOT`): `GET {endpoint}/api/v1/replay/config` (no body; the response body
- *   is `{"screenshot_enabled": ..., "max_fps": ...}`), with the API key header.
+ *   The API key header is on the two `POST`s only, never on the `PUT`.
  *
  * Contract:
- * - Honour [SendRequest.method] (`POST`, `PUT`, or `GET` with an empty body: send no body), the headers and the body exactly. A sender that always POSTs
+ * - Honour [SendRequest.method] (`POST` or `PUT`), the headers and the body exactly. A sender that always POSTs
  *   would break the replay upload.
  * - [send] is called on a background thread and may block, but should use timeouts (the defaults of the built-in
  *   transport are 10 s to connect and 15 s to read, 30 s to read for the replay upload); a hung sender stalls delivery.
@@ -43,7 +41,7 @@ public fun interface ARTrackerSender {
 /**
  * One delivery to make: send [body] to [url] with [method] and [headers]. [body] is already in its final form (gzip for
  * ingest and for the replay upload, plain JSON for the other replay steps); do not modify it and do not re-compress it.
- * [method] is `POST` for ingest and the replay `POST`s, `PUT` for the replay upload, `GET` (empty [body]) for the replay config.
+ * [method] is `POST` for ingest and the replay `POST`s, `PUT` for the replay upload.
  */
 @ExperimentalARTrackerApi
 public class SendRequest @JvmOverloads constructor(

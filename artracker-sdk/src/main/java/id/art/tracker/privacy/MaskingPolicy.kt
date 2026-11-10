@@ -5,7 +5,7 @@ import android.widget.TextView
 import id.art.tracker.PrivacyConfig
 import kotlin.math.min
 
-/** What the view walker must do with a node. */
+/** What the mask collector must do with a view or node. */
 internal enum class MaskDecision { NONE, MASK, BLOCK }
 
 /**

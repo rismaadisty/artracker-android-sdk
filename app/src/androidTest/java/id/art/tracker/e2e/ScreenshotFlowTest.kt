@@ -56,7 +56,6 @@ class ScreenshotFlowTest {
 
     @Test
     fun uploadedFrameMatchesTheDeviceScreenshot_outsideMaskedAreas() {
-        ingest.screenshotEnabled = true // the mock backend allows screenshots; the SDK reads it at the next replay start
         ARTracker.stopReplay()
         var maskBand: androidx.compose.ui.geometry.Rect? = null // where the masked box really is, in window pixels
         rule.setContent {

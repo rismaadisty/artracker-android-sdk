@@ -39,17 +39,6 @@ class EnvelopeParserTest {
     }
 
     @Test
-    fun replayChunkIsSummarisedAndNeverCarriesItsEvents() {
-        val events = (1..10_000).joinToString(",", "[", "]") { "{\"type\":3,\"i\":$it}" }
-        val chunk = "{\"seq\":3,\"start\":1,\"end\":2,\"full_snapshot\":true,\"platform\":\"android\",\"events\":$events,\"secret\":\"x\"}"
-        val item = EnvelopeParser.parse(envelope(itemJson("replay_chunk", type = "session", attributes = chunk))).single()
-        assertEquals("10000 events", item.attributes["events"])
-        assertEquals(setOf("seq", "start", "end", "full_snapshot", "platform", "events"), item.attributes.keys)
-        assertEquals("3", item.attributes["seq"])
-        assertTrue(item.truncated)
-    }
-
-    @Test
     fun invalidInputNeverThrowsAndYieldsNothing() {
         assertTrue(EnvelopeParser.parse("").isEmpty())
         assertTrue(EnvelopeParser.parse("not json").isEmpty())
@@ -63,16 +52,5 @@ class EnvelopeParserTest {
         val one = itemJson("e")
         val json = "{\"items\":[" + List(50_000) { one }.joinToString(",") + "]}"
         assertEquals(500, EnvelopeParser.parse(json).size)
-    }
-
-    @Test
-    fun replayChunkAttributesAreExtractedIntact() {
-        val chunk = "{\"seq\":1,\"events\":[{\"type\":4},{\"type\":2}]}"
-        val json = envelope(itemJson("e"), itemJson("replay_chunk", type = "session", attributes = chunk))
-        val out = EnvelopeParser.replayChunkAttributes(json)
-        assertEquals(1, out.size)
-        assertTrue(out[0].contains("\"events\""))
-        assertTrue(out[0].contains("\"seq\":1"))
-        assertFalse(EnvelopeParser.replayChunkAttributes("garbage").isNotEmpty())
     }
 }

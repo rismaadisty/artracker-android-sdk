@@ -31,7 +31,7 @@ internal val ARTrackerMaskKey: SemanticsPropertyKey<Boolean> =
  * here: a PIN or phone field is only masked through `maskAllInputs`, [Password][SemanticsProperties.Password]
  * semantics or `Modifier.artrackerMask()`.
  *
- * Fails closed: any exception yields [MaskDecision.MASK]. Loaded only together with the Compose walker.
+ * Fails closed: any exception yields [MaskDecision.MASK]. Loaded only together with the Compose mask collector.
  */
 internal object ComposeMaskRules {
     fun decide(config: PrivacyConfig, node: SemanticsConfiguration, parentMasked: Boolean): MaskDecision = try {
