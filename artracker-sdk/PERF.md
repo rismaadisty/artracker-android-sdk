@@ -161,9 +161,21 @@ mode) and `Replay watchdog: fps lowered to ...` when the watchdog fires.
 
 | Device / API | Quality | Minutes | Total chunk MB | Jank delta (pp) | Watchdog fired? |
 | --- | --- | --- | --- | --- | --- |
-| OPPO CPH2387, API 34, debug build, `ScreenshotBudgetTest` | STANDARD, 2 fps | 1 (partial) | 4.09 (110 frames; limit for 1 min: 5.00) | -3.92, but the baseline already had 83 % of frames over 16 ms (heavy list, debug build), so this says nothing about the 2-point limit | not recorded |
+| OPPO CPH2387, API 34, 60 Hz, debug build, `ScreenshotBudgetTest` | STANDARD, 2 fps | 5 | **16.91** (457 frames; limit 25) | **-10.74** (baseline 76.98 %, 13000/16888 frames over 16 ms; with replay 66.24 %, 11443/17275) | not recorded |
 
-Only the data budget of a one-minute run is measured (inside the limit). The 5-minute run and a jank comparison with a
-light, realistic baseline are still to do: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, install both
-with `adb install -r -t`, then `adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotBudgetTest -e durationMs 300000 id.art.tracker.test/id.art.tracker.PlaygroundTestRunner`
+Read of the result:
+
+- **Data budget: met.** 16.91 MB in 5 minutes of continuous scrolling, inside the 25 MB limit (the governor targets 5 MB
+  per minute).
+- **Jank: not worse with replay (limit +2 points), with a caveat.** The comparison is the share of frames whose
+  `FrameMetrics.TOTAL_DURATION` exceeds 16 ms, same scrolling with replay stopped and then with screenshot replay. On
+  this 60 Hz debug build that metric is saturated even without replay (77 % of frames), because the pipelined total
+  duration of a frame is often above one 16.7 ms period; so the number shows "no measurable extra cost", not a
+  release-build jank rate. A sharper run would count main-thread work only (layout + draw + animation durations) on a
+  release-like build. The one-minute run before this one gave 4.09 MB.
+- Not done here: the manual checklist of `docs/e2e-manual-test.md` section 6b (fonts, icons, photos, dialogs, bottom sheets
+  against a screen recording) and playing a wireframe recording in the dashboard's `rrweb-player`.
+
+Reproduce: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, `adb install -r -t` both APKs, then
+`adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotBudgetTest -e durationMs 300000 id.art.tracker.test/id.art.tracker.PlaygroundTestRunner`
 (it prints a `budget_report` line with the uploaded MB and both jank figures).
