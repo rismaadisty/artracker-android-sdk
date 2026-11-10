@@ -50,6 +50,7 @@ internal class ViewWalker(
     private var capped = false
     private val location = IntArray(2)
     private val composeHostCache = HashMap<Class<*>, Boolean>()
+    private val scrollHostCache = HashMap<Class<*>, Boolean>()
 
     fun walk(root: View): Wireframe? {
         count = 0
@@ -132,7 +133,7 @@ internal class ViewWalker(
         val look = DrawableStyleReader.read(view, density)
         val background = look?.color
         val elevationDp = (view.elevation / density).takeIf { it > 0f }
-        val clip = view.clipToOutline
+        val clip = view.clipToOutline || isScrollContainer(view)
         var image: String? = null
         var imageFit: ImageFit? = null
         var imagePadding: List<Float>? = null
@@ -172,6 +173,29 @@ internal class ViewWalker(
             text = text, textColor = textColor, textSizeSp = textSizeSp, fontWeight = fontWeight,
             visual = visual, background = background, alpha = alpha, masked = masked, children = children,
         )
+    }
+
+    /**
+     * Scroll containers clip what scrolls out of them. RecyclerView and NestedScrollView are matched by class name
+     * (the SDK does not depend on them).
+     */
+    private fun isScrollContainer(view: View): Boolean {
+        if (view is android.widget.ScrollView || view is android.widget.HorizontalScrollView || view is android.widget.AbsListView) {
+            return true
+        }
+        if (view !is ViewGroup) return false
+        return scrollHostCache.getOrPut(view.javaClass) {
+            var c: Class<*>? = view.javaClass
+            var found = false
+            while (c != null && c != ViewGroup::class.java) {
+                if (c.name == "androidx.recyclerview.widget.RecyclerView" || c.name == "androidx.core.widget.NestedScrollView") {
+                    found = true
+                    break
+                }
+                c = c.superclass
+            }
+            found
+        }
     }
 
     private fun fitOf(type: ImageView.ScaleType): ImageFit = when (type) {

@@ -28,6 +28,8 @@
 -keep,allowshrinking,allowobfuscation class id.art.tracker.lifecycle.NavBinder { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.replay.capture.ComposeWalker { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.replay.capture.ReflectiveSemanticsAccess { *; }
+-keep,allowshrinking,allowobfuscation class id.art.tracker.replay.screenshot.ComposeMaskCollector { *; }
+-keep,allowshrinking,allowobfuscation class id.art.tracker.replay.screenshot.ComposeMaskCollectorFactory { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.privacy.ComposeMaskRules { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.privacy.ComposeMaskRulesKt { *; }
 

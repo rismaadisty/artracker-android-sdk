@@ -27,6 +27,8 @@ internal class ReplayFlusher(
     private val clock: Clock,
     private val backoff: Backoff,
     private val scheduler: BackgroundScheduler,
+    /** The server said screenshot replay is off (`403 screenshot_disabled`); queued screenshot chunks are already gone. */
+    private val onScreenshotDisabled: () -> Unit = {},
 ) {
     private val lock = ReentrantLock()
 
@@ -41,7 +43,7 @@ internal class ReplayFlusher(
 
     /**
      * Short description of the last meaningful outcome, for diagnostics: `replay_uploaded`,
-     * `replay_dropped_<reason>`, `replay_unauthorized`, `replay_retry`, `replay_network_error`, `replay_disabled`.
+     * `replay_dropped_<reason>`, `replay_screenshot_disabled`, `replay_unauthorized`, `replay_retry`, `replay_network_error`, `replay_disabled`.
      * Idle (`EMPTY`) and still-paused calls leave it unchanged so the cause of the pause stays visible.
      */
     @Volatile
@@ -121,6 +123,13 @@ internal class ReplayFlusher(
             is ReplayResult.Drop -> {
                 complete(upload)
                 lastResult = "replay_dropped_${result.reason}"
+                Step(FlushOutcome.DROPPED, proceed = true)
+            }
+            ReplayResult.ScreenshotDisabled -> {
+                complete(upload)
+                queue.clearFormat(ReplayFormat.SCREEN_V1)
+                lastResult = "replay_screenshot_disabled"
+                runCatching(onScreenshotDisabled).onFailure { SdkLog.w("screenshot-disabled handler failed", it) }
                 Step(FlushOutcome.DROPPED, proceed = true)
             }
             ReplayResult.Unauthorized -> {

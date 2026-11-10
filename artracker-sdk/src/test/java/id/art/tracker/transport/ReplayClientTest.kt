@@ -183,4 +183,85 @@ class ReplayClientTest {
         assertTrue(client(apiKey = "key\r\nX-Evil: 1").upload(upload()) is ReplayResult.Drop)
         assertTrue(backend.requests.isEmpty())
     }
+
+    private fun screenUpload() = ReplayUpload(
+        id = "row-2", sessionId = "session_abc-123", seq = 0, gzipBody = gzip, eventCount = 3,
+        startMs = 1_700_000_000_000L, durationMs = 1_000L, hasError = false, userId = null,
+        environment = "staging", format = ReplayFormat.SCREEN_V1,
+    )
+
+    @Test
+    fun screenUpload_namesItsFormatInTheChunkUrlRequest() {
+        assertEquals(ReplayResult.Done, client().upload(screenUpload()))
+        val body = backend.requestsTo(FakeReplayBackend.CHUNK_URL).single().json()
+        assertEquals("artracker-screen-v1", body.getString("format"))
+        assertEquals(3, backend.requestsTo(FakeReplayBackend.ACK).single().json().getInt("event_count"))
+    }
+
+    @Test
+    fun wireframeUpload_sendsNoFormatField() {
+        client().upload(upload())
+        assertFalse(backend.requestsTo(FakeReplayBackend.CHUNK_URL).single().json().has("format"))
+    }
+
+    @Test
+    fun screenshotDisabled403_onChunkUrl_isNotAnAuthFailure() {
+        backend.chunkUrl = { MockResponse().setResponseCode(403).setBody("""{"error":"screenshot_disabled"}""") }
+        assertEquals(ReplayResult.ScreenshotDisabled, client().upload(screenUpload()))
+        assertEquals(1, backend.requests.size) // nothing was PUT
+    }
+
+    @Test
+    fun otherChunkUrl403_stillMeansUnauthorized_forScreenshotsToo() {
+        backend.chunkUrl = { MockResponse().setResponseCode(403).setBody("""{"error":"forbidden"}""") }
+        assertEquals(ReplayResult.Unauthorized, client().upload(screenUpload()))
+    }
+
+    @Test
+    fun a403WithoutAReadableBody_onAScreenshotChunkUrl_isTreatedAsScreenshotDisabled() {
+        // A sender that does not hand back error bodies must not turn "owner switched screenshots off" into a
+        // kill-switch trip for the whole SDK. A revoked key shows up on ingest (401) anyway.
+        backend.chunkUrl = { MockResponse().setResponseCode(403) }
+        assertEquals(ReplayResult.ScreenshotDisabled, client().upload(screenUpload()))
+        // ... but not for wireframe batches, which keep the key-revoked meaning
+        assertEquals(ReplayResult.Unauthorized, client().upload(upload()))
+    }
+
+    @Test
+    fun screenshotDisabled403_forAWireframeBatch_isStillUnauthorized() {
+        backend.chunkUrl = { MockResponse().setResponseCode(403).setBody("""{"error":"screenshot_disabled"}""") }
+        assertEquals(ReplayResult.Unauthorized, client().upload(upload()))
+    }
+
+    @Test
+    fun fetchConfig_getsTheSwitchWithTheKey() {
+        val cfg = client().fetchConfig()!!
+        assertTrue(cfg.screenshotEnabled)
+        assertEquals(4.0, cfg.maxFps!!, 0.0)
+        val call = backend.requestsTo(FakeReplayBackend.CONFIG).single()
+        assertEquals("GET", call.method)
+        assertEquals(key, call.header("X-Artracker-Key"))
+        assertEquals(0, call.body.size)
+    }
+
+    @Test
+    fun fetchConfig_disabledAndWithoutMaxFps() {
+        backend.config = { MockResponse().setResponseCode(200).setBody("""{"screenshot_enabled":false}""") }
+        val cfg = client().fetchConfig()!!
+        assertFalse(cfg.screenshotEnabled)
+        assertNull(cfg.maxFps)
+    }
+
+    @Test
+    fun fetchConfig_failuresAndGarbageGiveNull() {
+        backend.config = { MockResponse().setResponseCode(500) }
+        assertNull(client().fetchConfig())
+        backend.config = { MockResponse().setResponseCode(401) }
+        assertNull(client().fetchConfig())
+        backend.config = { MockResponse().setResponseCode(200).setBody("not json") }
+        assertNull(client().fetchConfig())
+        backend.config = { MockResponse().setResponseCode(200).setBody("""{"max_fps":2}""") }
+        assertNull(client().fetchConfig()) // no switch value: unknown
+        assertNull(ReplayClient("http://127.0.0.1:1", key, connectTimeoutMs = 200).fetchConfig())
+    }
 }

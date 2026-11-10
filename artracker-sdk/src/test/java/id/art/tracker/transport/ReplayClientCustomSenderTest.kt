@@ -122,4 +122,31 @@ class ReplayClientCustomSenderTest {
         assertTrue(ReplayClient("https://api.example.com", "bad\r\nkey", sender = sender).upload(upload) is ReplayResult.Drop)
         assertTrue(sender.requests.isEmpty())
     }
+
+    @Test
+    fun fetchConfig_goesThroughTheSender_asAGetWithTheKey() {
+        val sender = Scripted { SendResponse(200, null, """{"screenshot_enabled":true,"max_fps":3}""") }
+        val cfg = client(sender).fetchConfig()!!
+        assertTrue(cfg.screenshotEnabled)
+        assertEquals(3.0, cfg.maxFps!!, 0.0)
+        val request = sender.requests.single()
+        assertEquals("GET", request.method)
+        assertEquals("https://api.example.com/api/v1/replay/config", request.url)
+        assertEquals(key, request.headers["X-Artracker-Key"])
+        assertEquals(0, request.body.size)
+    }
+
+    @Test
+    fun screenshotDisabled403_throughTheSender() {
+        val sender = Scripted { SendResponse(403, null, """{"error":"screenshot_disabled"}""") }
+        val screen = ReplayUpload("row", "s", 0, gzip, 1, 1_000, 0, false, null, "staging", ReplayFormat.SCREEN_V1)
+        assertEquals(ReplayResult.ScreenshotDisabled, client(sender).upload(screen))
+    }
+
+    @Test
+    fun screenshot403_withTheBodyDroppedBySender_isStillScreenshotDisabled() {
+        val sender = Scripted { SendResponse(403, null, null) }
+        val screen = ReplayUpload("row", "s", 0, gzip, 1, 1_000, 0, false, null, "staging", ReplayFormat.SCREEN_V1)
+        assertEquals(ReplayResult.ScreenshotDisabled, client(sender).upload(screen))
+    }
 }

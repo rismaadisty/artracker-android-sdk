@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
@@ -75,6 +77,22 @@ class ComposeVisualStyleTest {
     private fun Modifier.node(): Modifier = semantics { role = Role.Button }
 
     private fun Wireframe.button() = all().single { it.type == WireframeType.BUTTON }
+
+    @Test
+    fun scrollableColumn_isAClippingNode() {
+        val wf = capture {
+            Column(Modifier.size(100.dp).node().verticalScroll(rememberScrollState())) {
+                Box(Modifier.size(300.dp))
+            }
+        }
+        assertTrue(wf.button().visual?.clip == true)
+    }
+
+    @Test
+    fun nonScrollingBox_isNotClipping() {
+        val wf = capture { Box(Modifier.size(40.dp).node().background(Color.Red)) }
+        assertFalse(wf.button().visual?.clip == true)
+    }
 
     @Test
     fun background_colorAndRoundedShape() {

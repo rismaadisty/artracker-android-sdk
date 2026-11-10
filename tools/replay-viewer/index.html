@@ -37,7 +37,12 @@
   <div id="status" role="status"></div>
   <div id="player"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/rrweb-player@2.0.0-alpha.18/dist/index.js"></script>
+  <!-- dist/index.js does not exist in this version (404); the ES module build is the one jsDelivr serves with a script MIME type. -->
+  <script type="module">
+    import('https://cdn.jsdelivr.net/npm/rrweb-player@2.0.0-alpha.18/dist/rrweb-player.js')
+      .then(function (m) { window.rrwebPlayer = m.default || m; })
+      .catch(function () { /* opening a file then says that rrweb-player did not load */ });
+  </script>
   <script>
     'use strict';
 

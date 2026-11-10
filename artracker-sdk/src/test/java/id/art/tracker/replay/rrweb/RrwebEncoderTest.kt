@@ -154,7 +154,7 @@ class RrwebEncoderTest {
         )
         val s = styleOfNode(t)
         assertTrue(s, s.contains("font-size:16px;font-weight:600;"))
-        assertTrue(s, s.contains("font-family:serif;font-style:italic;justify-content:center;line-height:22px;"))
+        assertTrue(s, s.contains("font-family:Roboto,serif;font-style:italic;justify-content:center;line-height:22px;"))
         assertFalse(s, s.contains("white-space"))
     }
 
@@ -237,12 +237,12 @@ class RrwebEncoderTest {
         val s = style(elementFor(encoder.fullSnapshot(root(styled), 0L), 2))
         assertEquals(
             "position:absolute;left:1px;top:2px;width:30px;height:40px;" +
-                "background-color:rgba(255,0,0,0.502);color:#102030;font-size:14px;opacity:0.5;overflow:visible;",
+                "background-color:rgba(255,0,0,0.502);color:#102030;font-size:14px;opacity:0.5;",
             s,
         )
         encoder.reset()
         val plain = style(elementFor(encoder.fullSnapshot(root(box(2)), 0L), 2))
-        assertEquals("position:absolute;left:0px;top:0px;width:100px;height:50px;overflow:hidden;", plain)
+        assertEquals("position:absolute;left:0px;top:0px;width:100px;height:50px;", plain)
         val opaque = Wireframe(2, 0, 0, 5, 5, WireframeType.CONTAINER, background = 0xFFAABBCC.toInt())
         encoder.reset()
         assertTrue(style(elementFor(encoder.fullSnapshot(root(opaque), 0L), 2)).contains("background-color:#aabbcc;"))
@@ -339,18 +339,81 @@ class RrwebEncoderTest {
         val id2 = elementFor(snap, 2)["id"]
         val id4 = elementFor(snap, 4)["id"]
         val data = encoder.mutation(WireframeDiffer.diff(prev, next), 1L)!!.map("data")
-        val add = data.list("adds").single()
-        assertEquals(id1, add["parentId"])
-        assertEquals(id4, add["nextId"])
-        val node = add.map("node")
-        assertEquals(2, node["type"])
-        assertEquals(13, node["id"])
-        assertEquals("n", node.list("childNodes").single().list("childNodes").single()["textContent"])
+        // One entry per node, pre-order: the box, its label span, the label's text node.
+        val adds = data.list("adds")
+        assertEquals(3, adds.size)
+        val boxAdd = adds[0]
+        assertEquals(id1, boxAdd["parentId"])
+        assertEquals(id4, boxAdd["nextId"])
+        val boxNode = boxAdd.map("node")
+        assertEquals(2, boxNode["type"])
+        assertEquals(13, boxNode["id"])
+        assertEquals(14, adds[1].map("node")["id"])
+        assertEquals(15, adds[2].map("node")["id"])
+        assertEquals("n", adds[2].map("node")["textContent"])
         assertNotNull(id2)
         // appended node: nextId null
         val appended = encoder.mutation(WireframeDiffer.diff(next, root(box(2), box(3, 0, 0, 10, 10, label(5, "n")), box(4), box(6))), 2L)!!
         assertNull(appended.map("data").list("adds").single()["nextId"])
         assertTrue(appended.map("data").list("adds").single().containsKey("nextId"))
+    }
+
+    @Test
+    fun mutation_addedSubtree_isOneFlatEntryPerNode_parentBeforeChild_nextIdOnlyOnTheRoot() {
+        val prev = root(box(2), box(4))
+        val subtree = box(3, 0, 0, 40, 40, label(5, "hi", 1, 1), box(6, 2, 2, 10, 10, label(7, "yo", 3, 3)))
+        val next = root(box(2), subtree, box(4))
+        val snap = encoder.fullSnapshot(prev, 0L)
+        val id1 = elementFor(snap, 1)["id"]
+        val id4 = elementFor(snap, 4)["id"]
+        val adds = encoder.mutation(WireframeDiffer.diff(prev, next), 1L)!!.map("data").list("adds")
+        // box3, span5, text(hi), box6, span7, text(yo)
+        assertEquals(6, adds.size)
+        val ids = adds.map { it.map("node")["id"] as Int }
+        assertEquals(ids.size, ids.toSet().size)
+        // element nodes carry no children of their own
+        for (a in adds) {
+            val node = a.map("node")
+            if (node["type"] == 2) assertTrue("element ${node["id"]} must not nest", (node["childNodes"] as? List<*>).orEmpty().isEmpty())
+        }
+        // parent always comes before its child
+        val seen = HashSet<Any?>()
+        seen += adds[0].map("node")["id"]
+        for (a in adds.drop(1)) {
+            assertTrue("parent ${a["parentId"]} added before child", a["parentId"] in seen || a["parentId"] == id1)
+            seen += a.map("node")["id"]
+        }
+        // nextId only on the subtree root
+        assertEquals(id4, adds[0]["nextId"])
+        assertTrue(adds.drop(1).all { it.containsKey("nextId") && it["nextId"] == null })
+        assertEquals(id1, adds[0]["parentId"])
+        // the text node is its own entry under the span
+        val span5 = adds[1].map("node")
+        assertEquals("span", span5["tagName"])
+        assertEquals(span5["id"], adds[2]["parentId"])
+        assertEquals("hi", adds[2].map("node")["textContent"])
+    }
+
+    @Test
+    fun container_withoutClip_doesNotClipItsChildren() {
+        val s = styleOfNode(box(2))
+        assertFalse(s, s.contains("overflow"))
+    }
+
+    @Test
+    fun container_withClip_clips() {
+        val s = styleOfNode(Wireframe(2, 0, 0, 10, 10, WireframeType.CONTAINER, visual = VisualStyle(clip = true)))
+        assertTrue(s, s.endsWith("overflow:hidden;"))
+    }
+
+    @Test
+    fun genericFamily_isPrefixedWithRoboto() {
+        for (family in listOf("sans-serif", "serif", "monospace", "cursive")) {
+            val s = styleOfNode(Wireframe(2, 0, 0, 50, 20, WireframeType.TEXT, text = "x", visual = VisualStyle(fontFamily = family)))
+            assertTrue(s, s.contains("font-family:Roboto,$family;"))
+        }
+        val unknown = styleOfNode(Wireframe(2, 0, 0, 50, 20, WireframeType.TEXT, text = "x", visual = VisualStyle(fontFamily = "evil;}")))
+        assertFalse(unknown, unknown.contains("font-family"))
     }
 
     @Test
@@ -430,7 +493,10 @@ class RrwebEncoderTest {
         val oldId = elementFor(snap, 5)["id"] as Int
         val data = encoder.mutation(WireframeDiffer.diff(prev, next), 1L)!!.map("data")
         assertEquals(oldId, data.list("removes").single()["id"])
-        assertTrue((data.list("adds").single().map("node")["id"] as Int) > oldId)
+        // the moved label (its span and its text node) is re-added flat, both with fresh ids
+        val adds = data.list("adds")
+        assertEquals(2, adds.size)
+        assertTrue(adds.all { (it.map("node")["id"] as Int) > oldId })
     }
 
     @Test

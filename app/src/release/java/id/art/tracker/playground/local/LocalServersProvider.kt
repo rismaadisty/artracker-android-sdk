@@ -11,5 +11,8 @@ object LocalServersProvider {
         override fun startTargets(): Boolean = false
         override val targetBaseUrl: String? = null
         override fun exportReplayChunks(dir: File): File? = null
+        override var screenshotAllowed: Boolean = false
+        override fun screenshotSummary(): String? = null
+        override fun exportScreenshots(dir: File): List<File>? = null
     }
 }

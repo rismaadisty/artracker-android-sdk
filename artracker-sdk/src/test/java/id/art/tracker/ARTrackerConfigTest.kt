@@ -83,6 +83,41 @@ class ARTrackerConfigTest {
     }
 
     @Test
+    fun replayDefaults_keepWireframeMode_andStandardQuality() {
+        val r = ReplayConfig()
+        assertEquals(ReplayMode.WIREFRAME, r.mode)
+        assertEquals(ReplayQuality.STANDARD, r.quality)
+        assertFalse(r.enabled)
+    }
+
+    @Test
+    fun screenshotMode_clampsFpsTo0_5Through10() {
+        assertEquals(10.0, ReplayConfig(framesPerSecond = 30.0, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
+        assertEquals(8.0, ReplayConfig(framesPerSecond = 8.0, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
+        assertEquals(0.5, ReplayConfig(framesPerSecond = 0.1, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
+        assertEquals(1.0, ReplayConfig(framesPerSecond = Double.NaN, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
+    }
+
+    @Test
+    fun wireframeMode_stillClampsFpsTo4() {
+        assertEquals(4.0, ReplayConfig(framesPerSecond = 8.0, mode = ReplayMode.WIREFRAME).effectiveFps(), 0.0)
+    }
+
+    @Test
+    fun qualityPresets_areShortSidePixelsAndJpegQuality() {
+        assertEquals(480 to 50, ReplayQuality.LOW.preset().let { it.shortSidePx to it.jpegQuality })
+        assertEquals(720 to 60, ReplayQuality.STANDARD.preset().let { it.shortSidePx to it.jpegQuality })
+        assertEquals(1080 to 75, ReplayQuality.HIGH.preset().let { it.shortSidePx to it.jpegQuality })
+    }
+
+    @Test
+    fun qualityLower_stepsDownOnePresetAndStopsAtLow() {
+        assertEquals(ReplayQuality.STANDARD, ReplayQuality.HIGH.lower())
+        assertEquals(ReplayQuality.LOW, ReplayQuality.STANDARD.lower())
+        assertEquals(null, ReplayQuality.LOW.lower())
+    }
+
+    @Test
     fun fps_nonFinite_isAValidationError() {
         for (bad in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
             val errors = config(replay = ReplayConfig(framesPerSecond = bad)).validate()

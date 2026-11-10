@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
@@ -32,6 +34,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import id.art.tracker.R
+import id.art.tracker.ReplayMode
+import id.art.tracker.ReplayQuality
 import id.art.tracker.playground.boot.BackendGrantStore
 import id.art.tracker.playground.settings.EndpointProfile
 import id.art.tracker.playground.settings.PlaygroundSettings
@@ -115,6 +119,22 @@ fun SettingsScreen(
         NumberRow("replayFps", presetVersion, stringResource(R.string.settings_replay_fps), d.replayFps.toString(), invalidFields, { invalidFields = it }) { text ->
             text.toDoubleOrNull()?.also { v -> editor.update { it.copy(replayFps = v) } } != null
         }
+        SwitchRow(stringResource(R.string.settings_replay_screenshot), d.replayMode == ReplayMode.SCREENSHOT) { v ->
+            editor.update { it.copy(replayMode = if (v) ReplayMode.SCREENSHOT else ReplayMode.WIREFRAME) }
+        }
+        if (d.replayMode == ReplayMode.SCREENSHOT) {
+            Text(stringResource(R.string.settings_replay_screenshot_note), style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.settings_replay_quality), style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReplayQuality.values().forEach { q ->
+                    FilterChip(
+                        selected = d.replayQuality == q,
+                        onClick = { editor.update { it.copy(replayQuality = q) } },
+                        label = { Text(q.name) },
+                    )
+                }
+            }
+        }
         SwitchRow(stringResource(R.string.settings_mask_inputs), d.maskAllInputs) { v -> editor.update { it.copy(maskAllInputs = v) } }
         SwitchRow(stringResource(R.string.settings_mask_text), d.maskAllText) { v -> editor.update { it.copy(maskAllText = v) } }
         NumberRow("networkSampleRate", presetVersion, stringResource(R.string.settings_network_rate), d.networkSampleRate.toString(), invalidFields, { invalidFields = it }) { text ->
@@ -190,9 +210,14 @@ private fun TextRow(label: String, value: String, onValue: (String) -> Unit) {
 
 @Composable
 private fun SwitchRow(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+    // The whole row toggles (bigger target, and the label is part of the switch for accessibility).
+    Row(
+        Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onChecked),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
         Text(label)
-        Switch(checked = checked, onCheckedChange = onChecked)
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

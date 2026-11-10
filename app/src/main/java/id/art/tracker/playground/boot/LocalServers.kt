@@ -20,4 +20,16 @@ interface LocalServers {
 
     /** Writes the last replay chunks the sink received (masked, as sent) to [dir]; null when unavailable. */
     fun exportReplayChunks(dir: File): File?
+
+    /**
+     * What the sink answers to `GET /api/v1/replay/config` (`screenshot_enabled`); false and ignored on builds without
+     * the sink. Turning it off also makes the sink answer `403 screenshot_disabled` to screenshot chunks.
+     */
+    var screenshotAllowed: Boolean
+
+    /** One line about the screenshot chunks the sink received so far; null when unavailable. */
+    fun screenshotSummary(): String?
+
+    /** Writes the last screenshot frames the sink received (masked JPEGs, as sent) to [dir]; null when unavailable. */
+    fun exportScreenshots(dir: File): List<File>?
 }

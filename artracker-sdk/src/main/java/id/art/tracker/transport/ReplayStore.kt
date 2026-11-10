@@ -7,9 +7,16 @@ import android.database.sqlite.SQLiteOpenHelper
 import id.art.tracker.core.Clock
 import id.art.tracker.core.SdkLog
 import id.art.tracker.core.UuidV7
+import java.io.File
+import java.io.IOException
 
 /**
  * SQLite [ReplayQueue] (`artracker_replay.db`). Thread-safe: every compound operation runs in one transaction.
+ *
+ * The table keeps the metadata and the NAME of a file; the gzip body lives in a file under [bodiesDir]
+ * (`noBackupFilesDir/artracker/replay/`). Android's `CursorWindow` is about 2 MB, so a large body stored as a BLOB
+ * can be written but never read back; screenshot chunks reach 2 MB. A body file is written before its row and removed
+ * with it (complete, eviction, clear, purge); [resetOrphaned] sweeps files no row points to.
  *
  * `seq` is allocated from `replay_seq`, which outlives the batches (complete/clear/eviction keep it), so a session that
  * continues after a process restart never reuses a `seq`: the server overwrites the stored object on a repeated `seq`
@@ -18,31 +25,15 @@ import id.art.tracker.core.UuidV7
 internal class ReplayStore(
     context: Context,
     private val clock: Clock,
-    private val maxBytes: Long = 20L * 1024 * 1024,
+    private val maxBytes: Long = DEFAULT_MAX_BYTES,
     private val maxBatches: Int = 200,
     private val maxAttempts: Int = 8,
     dbName: String = DB_NAME,
+    private val bodiesDir: File = File(context.applicationContext.noBackupFilesDir, BODIES_PATH),
 ) : ReplayQueue {
     private val helper = object : SQLiteOpenHelper(context.applicationContext, dbName, null, DB_VERSION) {
         override fun onCreate(db: SQLiteDatabase) {
-            db.execSQL(
-                "CREATE TABLE replay_batches (" +
-                    "id TEXT PRIMARY KEY, " +
-                    "session_id TEXT NOT NULL, " +
-                    "seq INTEGER NOT NULL, " +
-                    "created_at INTEGER NOT NULL, " +
-                    "first_ts INTEGER NOT NULL, " +
-                    "last_ts INTEGER NOT NULL, " +
-                    "event_count INTEGER NOT NULL, " +
-                    "has_error INTEGER NOT NULL, " +
-                    "user_id TEXT, " +
-                    "environment TEXT NOT NULL, " +
-                    "body BLOB NOT NULL, " +
-                    "size_bytes INTEGER NOT NULL, " +
-                    "claimed INTEGER NOT NULL DEFAULT 0, " +
-                    "attempts INTEGER NOT NULL DEFAULT 0)",
-            )
-            db.execSQL("CREATE INDEX idx_replay_pending ON replay_batches(claimed, created_at, seq)")
+            createBatchesTable(db)
             db.execSQL(
                 "CREATE TABLE replay_seq (" +
                     "session_id TEXT PRIMARY KEY, " +
@@ -52,16 +43,86 @@ internal class ReplayStore(
             )
         }
 
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            if (oldVersion < 2) migrateV1ToV2(db)
+        }
+    }
+
+    private fun createBatchesTable(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE replay_batches (" +
+                "id TEXT PRIMARY KEY, " +
+                "session_id TEXT NOT NULL, " +
+                "seq INTEGER NOT NULL, " +
+                "created_at INTEGER NOT NULL, " +
+                "first_ts INTEGER NOT NULL, " +
+                "last_ts INTEGER NOT NULL, " +
+                "event_count INTEGER NOT NULL, " +
+                "has_error INTEGER NOT NULL, " +
+                "user_id TEXT, " +
+                "environment TEXT NOT NULL, " +
+                "file TEXT NOT NULL, " +
+                "format TEXT NOT NULL DEFAULT '${ReplayFormat.RRWEB}', " +
+                "size_bytes INTEGER NOT NULL, " +
+                "claimed INTEGER NOT NULL DEFAULT 0, " +
+                "attempts INTEGER NOT NULL DEFAULT 0)",
+        )
+        db.execSQL("CREATE INDEX idx_replay_pending ON replay_batches(claimed, created_at, seq)")
+    }
+
+    /** v1 kept the body in a BLOB column: write each one out to a file and move the row to the new table. */
+    private fun migrateV1ToV2(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE replay_batches RENAME TO replay_batches_v1")
+        db.execSQL("DROP INDEX IF EXISTS idx_replay_pending")
+        createBatchesTable(db)
+        val ids = ArrayList<String>()
+        db.rawQuery("SELECT id FROM replay_batches_v1", null).use { c -> while (c.moveToNext()) ids += c.getString(0) }
+        for (id in ids) {
+            // One row at a time: a BLOB close to the CursorWindow limit must not share a window with other rows.
+            runCatching {
+                db.rawQuery(
+                    "SELECT session_id, seq, created_at, first_ts, last_ts, event_count, has_error, user_id, environment, " +
+                        "body, size_bytes, claimed, attempts FROM replay_batches_v1 WHERE id = ?",
+                    arrayOf(id),
+                ).use { c ->
+                    if (!c.moveToFirst()) return@use
+                    val name = fileNameFor(id)
+                    writeBody(name, c.getBlob(9))
+                    val values = ContentValues(15).apply {
+                        put("id", id)
+                        put("session_id", c.getString(0))
+                        put("seq", c.getInt(1))
+                        put("created_at", c.getLong(2))
+                        put("first_ts", c.getLong(3))
+                        put("last_ts", c.getLong(4))
+                        put("event_count", c.getInt(5))
+                        put("has_error", c.getInt(6))
+                        put("user_id", if (c.isNull(7)) null else c.getString(7))
+                        put("environment", c.getString(8))
+                        put("file", name)
+                        put("format", ReplayFormat.RRWEB)
+                        put("size_bytes", c.getLong(10))
+                        put("claimed", 0)
+                        put("attempts", c.getInt(12))
+                    }
+                    db.insertOrThrow("replay_batches", null, values)
+                }
+            }.onFailure { SdkLog.w("migrating replay batch failed (${it.javaClass.simpleName}); dropped") }
+        }
+        db.execSQL("DROP TABLE replay_batches_v1")
     }
 
     override fun enqueue(batch: NewReplayBatch): Boolean =
         guarded("enqueue") { db ->
-            db.inTransaction {
-                val now = clock.nowMs()
+            val now = clock.nowMs()
+            val id = UuidV7.generate(now)
+            val name = fileNameFor(id)
+            writeBody(name, batch.gzipBody)
+            try {
+                db.inTransaction {
                 val seq = nextSeq(db, batch, now)
-                val values = ContentValues(14).apply {
-                    put("id", UuidV7.generate(now))
+                val values = ContentValues(15).apply {
+                    put("id", id)
                     put("session_id", batch.sessionId)
                     put("seq", seq)
                     put("created_at", now)
@@ -71,13 +132,18 @@ internal class ReplayStore(
                     put("has_error", if (batch.hasError) 1 else 0)
                     put("user_id", batch.userId)
                     put("environment", batch.environment)
-                    put("body", batch.gzipBody)
+                    put("file", name)
+                    put("format", batch.format)
                     put("size_bytes", batch.gzipBody.size)
                     put("claimed", 0)
                     put("attempts", 0)
                 }
                 db.insertOrThrow("replay_batches", null, values)
                 evictIfNeeded(db)
+                }
+            } catch (e: Exception) {
+                deleteBody(name) // no row will ever point to it
+                throw e
             }
             true
         } ?: false
@@ -85,37 +151,61 @@ internal class ReplayStore(
     override fun claim(): ReplayUpload? =
         guarded("claim") { db ->
             db.inTransaction {
-                db.delete("replay_batches", "claimed = 0 AND attempts >= ?", arrayOf(maxAttempts.toString()))
-                val upload = db.rawQuery(
-                    "SELECT b.id, b.session_id, b.seq, b.body, b.event_count, b.first_ts, b.last_ts, b.has_error, " +
-                        "b.user_id, b.environment, s.start_ms " +
-                        "FROM replay_batches b LEFT JOIN replay_seq s ON s.session_id = b.session_id " +
-                        "WHERE b.claimed = 0 ORDER BY b.created_at, b.seq, b.rowid LIMIT 1",
-                    null,
-                ).use { c ->
-                    if (!c.moveToFirst()) return@use null
-                    val firstTs = c.getLong(5)
-                    val start = if (c.isNull(10)) firstTs else c.getLong(10)
-                    ReplayUpload(
-                        id = c.getString(0),
-                        sessionId = c.getString(1),
-                        seq = c.getInt(2),
-                        gzipBody = c.getBlob(3),
-                        eventCount = c.getInt(4),
-                        startMs = start,
-                        durationMs = (c.getLong(6) - start).coerceAtLeast(0L),
-                        hasError = c.getInt(7) != 0,
-                        userId = if (c.isNull(8)) null else c.getString(8),
-                        environment = c.getString(9),
-                    )
-                } ?: return@inTransaction null
-                db.execSQL("UPDATE replay_batches SET claimed = 1 WHERE id = ?", arrayOf<Any?>(upload.id))
-                upload
+                deleteRows(db, "claimed = 0 AND attempts >= ?", arrayOf(maxAttempts.toString()))
+                var claimed: ReplayUpload? = null
+                while (claimed == null) {
+                    val row = nextPending(db) ?: break
+                    val body = readBody(row.file)
+                    if (body == null) {
+                        // The file is gone or unreadable: the batch can never be uploaded.
+                        SdkLog.w("replay batch body missing; dropped")
+                        deleteRows(db, "id = ?", arrayOf(row.upload.id))
+                        continue
+                    }
+                    db.execSQL("UPDATE replay_batches SET claimed = 1 WHERE id = ?", arrayOf<Any?>(row.upload.id))
+                    claimed = row.upload.withBody(body)
+                }
+                claimed
             }
         }
 
+    private class Pending(val upload: ReplayUpload, val file: String)
+
+    private fun ReplayUpload.withBody(body: ByteArray) = ReplayUpload(
+        id, sessionId, seq, body, eventCount, startMs, durationMs, hasError, userId, environment, format,
+    )
+
+    private fun nextPending(db: SQLiteDatabase): Pending? =
+        db.rawQuery(
+            "SELECT b.id, b.session_id, b.seq, b.file, b.event_count, b.first_ts, b.last_ts, b.has_error, " +
+                "b.user_id, b.environment, b.format, s.start_ms " +
+                "FROM replay_batches b LEFT JOIN replay_seq s ON s.session_id = b.session_id " +
+                "WHERE b.claimed = 0 ORDER BY b.created_at, b.seq, b.rowid LIMIT 1",
+            null,
+        ).use { c ->
+            if (!c.moveToFirst()) return@use null
+            val firstTs = c.getLong(5)
+            val start = if (c.isNull(11)) firstTs else c.getLong(11)
+            Pending(
+                ReplayUpload(
+                    id = c.getString(0),
+                    sessionId = c.getString(1),
+                    seq = c.getInt(2),
+                    gzipBody = EMPTY,
+                    eventCount = c.getInt(4),
+                    startMs = start,
+                    durationMs = (c.getLong(6) - start).coerceAtLeast(0L),
+                    hasError = c.getInt(7) != 0,
+                    userId = if (c.isNull(8)) null else c.getString(8),
+                    environment = c.getString(9),
+                    format = c.getString(10),
+                ),
+                c.getString(3),
+            )
+        }
+
     override fun complete(id: String) {
-        guarded("complete") { db -> db.delete("replay_batches", "id = ?", arrayOf(id)) }
+        guarded("complete") { db -> deleteRows(db, "id = ?", arrayOf(id)) }
     }
 
     override fun release(id: String) {
@@ -136,18 +226,25 @@ internal class ReplayStore(
         } ?: 0
 
     override fun resetOrphaned() {
-        guarded("resetOrphaned") { db -> db.execSQL("UPDATE replay_batches SET claimed = 0 WHERE claimed = 1") }
+        guarded("resetOrphaned") { db ->
+            db.execSQL("UPDATE replay_batches SET claimed = 0 WHERE claimed = 1")
+            sweepOrphanFiles(db)
+        }
     }
 
     override fun clear() {
-        guarded("clear") { db -> db.inTransaction { db.delete("replay_batches", null, null) } }
+        guarded("clear") { db -> db.inTransaction { deleteRows(db, null, null) } }
+    }
+
+    override fun clearFormat(format: String) {
+        guarded("clearFormat") { db -> db.inTransaction { deleteRows(db, "claimed = 0 AND format = ?", arrayOf(format)) } }
     }
 
     override fun purgeOlderThan(cutoffMs: Long) {
         guarded("purgeOlderThan") { db ->
             db.inTransaction {
                 val arg = arrayOf(cutoffMs.toString())
-                db.delete("replay_batches", "created_at < ?", arg)
+                deleteRows(db, "created_at < ?", arg)
                 db.delete("replay_seq", "updated_at < ?", arg)
             }
         }
@@ -191,12 +288,14 @@ internal class ReplayStore(
         }
         if (count <= maxBatches && bytes <= maxBytes) return
         val victims = ArrayList<String>()
+        val files = ArrayList<String>()
         db.rawQuery(
-            "SELECT id, size_bytes FROM replay_batches WHERE claimed = 0 ORDER BY created_at ASC, seq ASC, rowid ASC",
+            "SELECT id, size_bytes, file FROM replay_batches WHERE claimed = 0 ORDER BY created_at ASC, seq ASC, rowid ASC",
             null,
         ).use { c ->
             while ((count > maxBatches || bytes > maxBytes) && c.moveToNext()) {
                 victims += c.getString(0)
+                files += c.getString(2)
                 count--
                 bytes -= c.getLong(1)
             }
@@ -207,7 +306,47 @@ internal class ReplayStore(
                 chunk.toTypedArray(),
             )
         }
+        files.forEach(::deleteBody)
         if (victims.isNotEmpty()) SdkLog.d("evicted ${victims.size} queued replay batches")
+    }
+
+    /** Deletes the rows matching [where] and their body files. Call inside a transaction. */
+    private fun deleteRows(db: SQLiteDatabase, where: String?, args: Array<String>?) {
+        val files = ArrayList<String>()
+        db.rawQuery("SELECT file FROM replay_batches" + (where?.let { " WHERE $it" } ?: ""), args).use { c ->
+            while (c.moveToNext()) files += c.getString(0)
+        }
+        db.delete("replay_batches", where, args)
+        files.forEach(::deleteBody)
+    }
+
+    private fun fileNameFor(id: String): String = "$id.gz"
+
+    private fun writeBody(name: String, body: ByteArray) {
+        if (!bodiesDir.isDirectory && !bodiesDir.mkdirs() && !bodiesDir.isDirectory) throw IOException("cannot create body directory")
+        val tmp = File(bodiesDir, "$name.tmp")
+        tmp.writeBytes(body)
+        if (!tmp.renameTo(File(bodiesDir, name))) {
+            tmp.delete()
+            throw IOException("cannot store body")
+        }
+    }
+
+    private fun readBody(name: String): ByteArray? = try {
+        File(bodiesDir, name).takeIf { it.isFile }?.readBytes()
+    } catch (e: IOException) {
+        null
+    }
+
+    private fun deleteBody(name: String) {
+        runCatching { File(bodiesDir, name).delete() }
+    }
+
+    /** Files that no row names (a crash between the file write and the row insert) are deleted. */
+    private fun sweepOrphanFiles(db: SQLiteDatabase) {
+        val known = HashSet<String>()
+        db.rawQuery("SELECT file FROM replay_batches", null).use { c -> while (c.moveToNext()) known += c.getString(0) }
+        bodiesDir.listFiles()?.forEach { f -> if (f.name !in known) runCatching { f.delete() } }
     }
 
     private inline fun <T> guarded(op: String, block: (SQLiteDatabase) -> T): T? =
@@ -231,7 +370,10 @@ internal class ReplayStore(
 
     companion object {
         const val DB_NAME = "artracker_replay.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
+        const val DEFAULT_MAX_BYTES: Long = 50L * 1024 * 1024
+        private const val BODIES_PATH = "artracker/replay"
+        private val EMPTY = ByteArray(0)
         private const val SQL_VARIABLE_CHUNK = 500
     }
 }

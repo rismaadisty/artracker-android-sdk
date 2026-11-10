@@ -31,6 +31,7 @@ class ReplayIntakeTest {
         override fun pendingCount(): Int = 0
         override fun resetOrphaned() = Unit
         override fun purgeOlderThan(cutoffMs: Long) = Unit
+        override fun clearFormat(format: String) = Unit
     }
 
     @Test

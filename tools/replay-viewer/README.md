@@ -5,7 +5,7 @@ uses, and checks the recording's structure without a browser.
 
 | File | What it is |
 | --- | --- |
-| `index.html` | Self-contained page. Loads `rrweb-player@2.0.0-alpha.18` (CSS + JS pinned, from jsDelivr). Needs internet access to the CDN. |
+| `index.html` | Self-contained page. Loads `rrweb-player@2.0.0-alpha.18` (CSS + the ES module build `dist/rrweb-player.js`, pinned, from jsDelivr). Needs internet access to the CDN. (An earlier version asked for `dist/index.js`, which does not exist for that version: the viewer could not load the player.) |
 | `validate-chunks.mjs` | Node script (no dependencies, Node 18+): structural checks of the rrweb events, no browser. |
 | `validate-chunks.test.mjs` | Self-test of that script: `node --test tools/replay-viewer/validate-chunks.test.mjs`. |
 
@@ -64,3 +64,21 @@ recording (pass the password you typed). Timestamps that go backwards are only w
 
 This proves the structure, not the pixels: whether `rrweb-player` renders it correctly still has to be checked by
 opening it in `index.html`.
+
+## Screenshot chunks
+
+The viewer and `validate-chunks.mjs` handle rrweb (wireframe) chunks only. Screenshot replay
+(`ReplayMode.SCREENSHOT`) uploads `artracker-screen-v1` chunks (gzipped JSON of base64 JPEG frames and touches); play them
+in the dashboard, or decode one by hand: `gunzip -c chunk.gz | jq '.frames[0] | {ts, screen, w, h, vw, vh, masked}'` and
+`jq -r '.frames[0].data' | base64 -d > frame.jpg`.
+
+## Checking a recording without a person: headless Chrome
+
+The wireframe recording of the test run above (`ReplayChunkExportTest`, a Login to Feed session of 14 events and 2
+mutations) was played in `rrweb-player@2.0.0-alpha.18` with headless Chrome: a page that embeds the events, loads the
+player the way `index.html` does, calls `getReplayer().play(0)`, seeks to the end of the recording (`pause(totalTime)`)
+so every mutation is applied, records `console.warn` / `console.error` and counts the nodes rendered in the player's
+iframe, then prints the result with `chrome --headless=new --virtual-time-budget=40000 --dump-dom page.html`.
+Result: the player loaded, the final Feed screen rendered (10 nodes, with the texts of the feed), and **no warning or
+error at all** (no `Node ... not found`). rrweb prints that warning through `console.warn` when a mutation names a node
+that does not exist, which is what the old nested `adds` of the encoder caused. Rerun it after changing the encoder.

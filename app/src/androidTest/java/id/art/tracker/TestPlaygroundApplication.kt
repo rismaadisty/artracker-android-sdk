@@ -1,6 +1,8 @@
 package id.art.tracker
 
 import android.app.Application
+import id.art.tracker.ReplayMode
+import id.art.tracker.ReplayQuality
 import id.art.tracker.playground.local.LocalServersProvider
 import id.art.tracker.playground.scenario.ActivityHolder
 import id.art.tracker.playground.settings.EndpointGuard
@@ -21,7 +23,12 @@ class TestPlaygroundApplication : Application() {
         check(LocalServersProvider.instance.startTargets()) { "target server could not start (port busy?)" }
         SampleApp.initTracker(
             this, ingest.url, EndpointGuard.DUMMY_KEY, debug = true,
-            settings = PlaygroundSettings.DEFAULT.copy(flushIntervalMs = 1_000), beforeSend = null,
+            settings = PlaygroundSettings.DEFAULT.copy(
+                flushIntervalMs = 1_000,
+                // Screenshots are only used once a test makes the mock backend allow them (MockIngest.screenshotEnabled).
+                replayMode = ReplayMode.SCREENSHOT, replayFps = 2.0, replayQuality = ReplayQuality.STANDARD,
+            ),
+            beforeSend = null,
         )
     }
 

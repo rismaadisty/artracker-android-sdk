@@ -14,15 +14,18 @@ import java.io.IOException
  * - ingest: `POST {endpoint}/api/v1/ingest`, gzip JSON body;
  * - replay (only with session replay): `POST {endpoint}/api/v1/replay/chunk-url` (JSON; the response body carries the
  *   upload URL), then `PUT` of a gzip body to that signed URL, then `POST {endpoint}/api/v1/replay/chunk-ack` (JSON).
- *   The API key header is on the two `POST`s only, never on the `PUT`.
+ *   The API key header is on the two `POST`s only, never on the `PUT`;
+ * - replay in screenshot mode (`ReplayMode.SCREENSHOT`): `GET {endpoint}/api/v1/replay/config` (no body; the response body
+ *   is `{"screenshot_enabled": ..., "max_fps": ...}`), with the API key header.
  *
  * Contract:
- * - Honour [SendRequest.method] (`POST` or `PUT`), the headers and the body exactly. A sender that always POSTs
+ * - Honour [SendRequest.method] (`POST`, `PUT`, or `GET` with an empty body: send no body), the headers and the body exactly. A sender that always POSTs
  *   would break the replay upload.
  * - [send] is called on a background thread and may block, but should use timeouts (the defaults of the built-in
  *   transport are 10 s to connect and 15 s to read, 30 s to read for the replay upload); a hung sender stalls delivery.
  * - Return the HTTP status of the response, `Retry-After`, and the response body (see [SendResponse.body]; the replay
- *   `chunk-url` step cannot work without it). The SDK maps the status: 2xx accepted; 401 and 403 disable the SDK for
+ *   `chunk-url` step cannot work without it, and a `403` on a screenshot `chunk-url` carries the reason in its body: return
+ *   the body of error responses too, as far as you can). The SDK maps the status: 2xx accepted; 401 and 403 disable the SDK for
  *   an hour (on the replay `PUT` they mean an expired signature and only repeat the upload); 413 splits an ingest
  *   batch; 429 and 503 retry after `Retry-After`; other 4xx drop the batch; anything else retries.
  * - Throw [IOException] for a network failure (offline, DNS, timeout, TLS); the SDK retries with backoff. Any other
@@ -40,7 +43,7 @@ public fun interface ARTrackerSender {
 /**
  * One delivery to make: send [body] to [url] with [method] and [headers]. [body] is already in its final form (gzip for
  * ingest and for the replay upload, plain JSON for the other replay steps); do not modify it and do not re-compress it.
- * [method] is `POST` for ingest and the replay `POST`s, `PUT` for the replay upload.
+ * [method] is `POST` for ingest and the replay `POST`s, `PUT` for the replay upload, `GET` (empty [body]) for the replay config.
  */
 @ExperimentalARTrackerApi
 public class SendRequest @JvmOverloads constructor(

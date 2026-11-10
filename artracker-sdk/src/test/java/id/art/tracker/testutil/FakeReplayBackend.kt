@@ -48,6 +48,10 @@ internal class FakeReplayBackend {
 
     @Volatile var ack: (RecordedCall) -> MockResponse = { MockResponse().setResponseCode(200) }
 
+    @Volatile var config: (RecordedCall) -> MockResponse = {
+        MockResponse().setResponseCode(200).setBody("""{"screenshot_enabled":true,"max_fps":4}""")
+    }
+
     @Volatile var ingest: (RecordedCall) -> MockResponse = { MockResponse().setResponseCode(202) }
 
     init {
@@ -65,6 +69,7 @@ internal class FakeReplayBackend {
                     call.method == "PUT" && call.route == UPLOAD -> upload(call)
                     call.method == "POST" && call.route == ACK -> ack(call)
                     call.method == "POST" && call.route == INGEST -> ingest(call)
+                    call.method == "GET" && call.route == CONFIG -> config(call)
                     else -> MockResponse().setResponseCode(404)
                 }
             }
@@ -83,5 +88,6 @@ internal class FakeReplayBackend {
         const val UPLOAD = "/api/v1/replay/upload-chunk"
         const val ACK = "/api/v1/replay/chunk-ack"
         const val INGEST = "/api/v1/ingest"
+        const val CONFIG = "/api/v1/replay/config"
     }
 }

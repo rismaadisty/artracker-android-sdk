@@ -5,6 +5,55 @@ versions follow semantic versioning (`0.x`: the API may still change).
 
 ## [Unreleased]
 
+### Added (screenshot replay)
+
+- **Screenshot replay mode** (opt-in): `ReplayConfig(mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.STANDARD)`.
+  The dashboard shows what the user saw (real fonts, icons, photos, colors, movement) instead of a rebuilt wireframe.
+  `ReplayMode.WIREFRAME` (the default) is the previous behaviour; nothing changes unless you opt in. `framesPerSecond` is
+  clamped to 0.5..4 for wireframes and 0.5..10 for screenshots (2 recommended). `ReplayQuality` presets (short side of the
+  image / JPEG quality): `LOW` 480 px / 50, `STANDARD` 720 px / 60, `HIGH` 1080 px / 75; never upscaled.
+- **The project owner controls it from the server**: `GET /api/v1/replay/config` answers `{screenshot_enabled, max_fps}`
+  (cached, refreshed at every replay start). Until the first answer a session records wireframes, then switches. A
+  `403 {"error":"screenshot_disabled"}` on `chunk-url` (or a "disabled" answer) switches the running session back to
+  wireframes, deletes the queued screenshot chunks and forces a full snapshot. `max_fps` caps the capture rate.
+- **Masking happens on the device, before compression**: password / sensitive / explicitly masked views, `maskAllInputs`,
+  `maskAllText`, `sensitiveViewClasses`, Compose semantics (a mask-only pass) and blocked views (WebView, SurfaceView,
+  TextureView, VideoView, maps) are painted over with an opaque cross-stripe pattern on the full-size bitmap, then scaled
+  and encoded. A frame whose masks cannot be collected is dropped, never sent unmasked. **`FLAG_SECURE` windows are never
+  captured** (their area is masked and the `View.draw` fallback is never used for them). The keyboard is drawn by another
+  process: its area is a flat grey "keyboard" placeholder.
+- Capture: `PixelCopy` of the Activity window on API 26+ (`View.draw` on API 24-25 and when a copy fails; no `SurfaceView`
+  content there), dialogs and popups drawn on top with their dim. Frames are taken only when the screen was drawn, two
+  reused bitmaps, identical frames (CRC of a 64x64 downscale) are skipped, a 16 ms main-thread watchdog halves the rate.
+- Data budget: about 5 MB per minute. A rolling 60 s byte window halves the fps (down to 0.5) when exceeded and, if the
+  overrun persists, steps the quality down one preset for the session. Chunks (`artracker-screen-v1`, gzipped JSON of
+  frames and touches) close at 10 s or 2 MB; uploads use the same three-step API with `"format":"artracker-screen-v1"`
+  in the `chunk-url` request and work on any network.
+
+### Changed (screenshot replay)
+
+- `ReplayStore` (DB version 2): batch bodies are files under `noBackupFilesDir/artracker/replay/` (the old BLOB column
+  hit Android's ~2 MB `CursorWindow` limit); the table keeps metadata, the file name and the body `format`. Existing
+  BLOB rows are written out to files on upgrade. The offline cap is now **50 MB** / 200 batches (was 20 MiB).
+  `ReplayResult.ScreenshotDisabled` and `ReplayQueue.clearFormat` are internal.
+- `FrameScheduler`: configurable fps ceiling and an outside fps cap.
+- **Contract change of the experimental `ARTrackerSender`:** screenshot mode adds a `GET` (empty body) to
+  `/api/v1/replay/config`; a sender must send no body for it (`ARTrackerOkHttpSender` does). Return the body of error
+  responses too: a `403` on a screenshot `chunk-url` carries `screenshot_disabled` there (without a readable body it is
+  still treated as that, never as a revoked key).
+
+### Fixed (wireframe replay)
+
+- `RrwebEncoder` mutations sent a whole subtree as one nested `adds` entry, so later adds could not find their parent
+  (`Node ... not found` in the player). Now one `adds` entry per node, pre-order, parent first, with element nodes sent
+  without their children, the text node as its own entry and `nextId` only on the subtree root.
+- Text uses `font-family:Roboto,<generic>` instead of the bare generic family.
+- `tools/replay-viewer/index.html` loaded a file that does not exist in the pinned `rrweb-player` version (404), so the
+  viewer could not play anything; it now loads the ES module build. The recorded wireframe session plays with no replayer
+  warnings (see `tools/replay-viewer/README.md`).
+- `overflow:hidden` is written only for nodes that clip (`clipToOutline`, scroll containers, Compose clip); other boxes
+  no longer cut off titles and icons measured larger than their box.
+
 ### Changed
 
 - Session replay now uploads through the backend's Session Replay API instead of `replay_chunk` items in

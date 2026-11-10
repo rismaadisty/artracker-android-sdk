@@ -34,7 +34,8 @@ public class ARTrackerOkHttpSender(private val client: OkHttpClient) : ARTracker
             ?: JSON
         val builder = Request.Builder()
             .url(request.url)
-            .method(request.method, request.body.toRequestBody(contentType))
+            // OkHttp refuses a body on GET and HEAD (the replay config request is a GET).
+            .method(request.method, if (request.method.uppercase() in BODYLESS) null else request.body.toRequestBody(contentType))
             .tag(SdkRequestTag::class.java, SdkRequestTag)
         for ((name, value) in request.headers) builder.header(name, value)
         client.newCall(builder.build()).execute().use { response ->
@@ -45,6 +46,7 @@ public class ARTrackerOkHttpSender(private val client: OkHttpClient) : ARTracker
 
     private companion object {
         val JSON = "application/json".toMediaType()
+        val BODYLESS = setOf("GET", "HEAD")
         const val MAX_BODY_BYTES = 16L * 1024
     }
 }
