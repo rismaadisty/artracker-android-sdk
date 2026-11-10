@@ -3,7 +3,7 @@
 All notable changes to `id.art.tracker:artracker-android`. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow semantic versioning.
 
-## [1.0.0] - unreleased (first GitHub Packages release; set the date when the tag is pushed)
+## [1.0.0] - 2026-11-10
 
 ### Added (distribution)
 
