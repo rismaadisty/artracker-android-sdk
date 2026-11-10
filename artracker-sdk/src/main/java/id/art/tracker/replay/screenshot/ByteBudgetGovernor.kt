@@ -28,9 +28,11 @@ internal class ByteBudgetGovernor(
     private var floorOverruns = 0
 
     /** Upper bound for the capture rate, or null when the budget holds. */
+    @Volatile
     var fpsCap: Double? = null
         private set
 
+    @Volatile
     var quality: ReplayQuality = startQuality
         private set
 

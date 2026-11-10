@@ -40,3 +40,10 @@ internal class ReplayRemoteConfigCache(private val store: KeyValueStore) {
         const val UNKNOWN = -1L
     }
 }
+
+/** What the controller needs to follow the server's screenshot switch: the persisted answer and a way to ask again. */
+internal class ReplayRemote(
+    val cache: ReplayRemoteConfigCache,
+    /** Blocking `GET /replay/config`; null when it cannot be known now. Runs off the main thread. */
+    val fetch: () -> RemoteReplayConfig?,
+)

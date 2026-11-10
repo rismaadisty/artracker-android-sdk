@@ -54,6 +54,9 @@ internal class FrameScheduler(
     private var lastSlowAtMs = 0L
     private var externalCap: Double? = null
 
+    /** The outside limit currently applied (see [capFps]); for tests and diagnostics. */
+    val externalFpsCap: Double? get() = externalCap
+
     // Weak keys: a forgotten root never keeps a View/Activity alive. Values capture only `this`.
     private val listeners = WeakHashMap<View, ViewTreeObserver.OnDrawListener>()
 
