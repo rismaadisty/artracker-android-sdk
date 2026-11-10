@@ -15,7 +15,7 @@ internal val ecommerceCheckout = Scenario(
     proves = setOf(Capability.EVENTS, Capability.SCREENS, Capability.MASKING, Capability.REPLAY, Capability.HTTP),
     steps = listOf(
         Step("Buka beranda toko") { navigate(ShopRoutes.HOME) },
-        Step("Tunggu snapshot replay") { awaitReplayFrame() },
+        Step("Tunggu frame replay") { awaitReplayFrame() },
         Step("Ketik pencarian") { type(ShopFields.SEARCH, "sepatu") },
         Step("Ketuk Cari") { tap(ShopTargets.SEARCH_GO) },
         Step("Pilih produk") { tap(ShopTargets.PRODUCT_1) },

@@ -14,7 +14,7 @@ internal val onboardingForm = Scenario(
     proves = setOf(Capability.IDENTITY, Capability.EVENTS, Capability.SCREENS, Capability.MASKING, Capability.REPLAY),
     steps = listOf(
         Step("Buka formulir") { navigate(ShopRoutes.ONBOARDING) },
-        Step("Tunggu snapshot replay") { awaitReplayFrame() },
+        Step("Tunggu frame replay") { awaitReplayFrame() },
         Step("Ketik nama") { type(ShopFields.ONB_NAME, "Fake User") },
         Step("Langkah 1 selesai") { tap(ShopTargets.ONB_NEXT_1) },
         Step("Ketik email") { type(ShopFields.ONB_EMAIL, "fake.user@example.invalid") },

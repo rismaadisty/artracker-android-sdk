@@ -15,7 +15,7 @@ internal val frustratedTaps = Scenario(
     proves = setOf(Capability.ERRORS, Capability.REPLAY),
     steps = listOf(
         Step("Buka halaman macet") { navigate(ShopRoutes.STUCK) },
-        Step("Tunggu snapshot replay") { awaitReplayFrame() },
+        Step("Tunggu frame replay") { awaitReplayFrame() },
         Step("Ketuk tombol 8 kali") {
             repeat(8) {
                 tap(ShopTargets.STUCK_BUTTON)

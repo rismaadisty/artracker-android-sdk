@@ -25,7 +25,7 @@ interface ScenarioContext {
     /** Suspends until the user presses "Lanjut". */
     suspend fun awaitUser(prompt: String)
 
-    /** Waits long enough for the replay to have a base snapshot of the current session (touches before it are dropped). */
+    /** Waits long enough for the replay to have a frame of the current session (a touch only rides on a chunk that already holds one). */
     suspend fun awaitReplayFrame()
 
     /** Warnings about conditions that make the run less meaningful (replay not recording, no recorder, dialogs). */
