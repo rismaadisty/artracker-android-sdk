@@ -8,20 +8,19 @@ Version `0.1.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 >
 > | Area | State |
 > | --- | --- |
-> | Unit tests (JVM + Robolectric) | **Verified**: 654 SDK tests (60 classes) + 254 sample-app tests, 0 failures (see "Tests" below) |
+> | Unit tests (JVM + Robolectric) | **Verified**: 972 SDK tests + 269 sample-app tests, 0 failures (see "Tests" below) |
 > | Sample app builds (`:app:assembleDebug`, R8-minified `:app:assembleRelease`) | **Verified** |
-> | Run on a device or emulator | **NOT run.** No emulator was available. Nothing here has executed on real Android |
+> | Run on a device or emulator | **Partly.** Screenshot replay was run on **one physical device** (OPPO CPH2387, Android 14 / API 34) through instrumented tests (see "Tests"); Chucker delivery was checked on Android 14 too (see "Custom transport"). No emulator, no other device or API level (24-25 and the `View.draw` path included), no minified app |
 > | End to end against the backend | **NOT run.** Checklist: [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md) |
-> | Performance (`init` <= 2 ms, replay walk p95 <= 8 ms, background CPU < 1 %) | **NOT measured.** Procedure: [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). Only the AAR size is measured (398621 bytes, release, not minified) |
-> | Playback of replay chunks in `rrweb-player` | **NOT verified.** Structure only (`validate-chunks.mjs`); see [`tools/replay-viewer`](tools/replay-viewer) |
-> | Instrumented tests (offline crash then relaunch, Compose walker on device) | **NOT written/run** |
-| Demo app playground instrumented suite (`app/src/androidTest`) | Written and **compiles** (`:app:assembleDebugAndroidTest`); **NOT run**: no device or emulator was available |
+> | Performance | **Screenshot replay measured once** (5 min of scrolling, `STANDARD`, 2 fps, debug build): 16.91 MB uploaded against the 25 MB limit, and no jank increase measured; the jank metric is saturated on that debug build, see [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). `init` <= 2 ms, wireframe walk p95 <= 8 ms and background CPU < 1 % are **NOT measured**. AAR size: 398621 bytes (release, not minified) |
+> | Playback of replay chunks in `rrweb-player` | **Wireframe: verified once** (a recorded Login to Feed session plays in `rrweb-player@2.0.0-alpha.18` under headless Chrome with no replayer warnings, see [`tools/replay-viewer`](tools/replay-viewer)). **Screenshot chunks: not played in the dashboard.** Mask, scale and visual match were checked against `UiAutomation` screenshots on the device |
+> | Instrumented tests | Screenshot replay: **run on the device above** (`ScreenshotFlowTest`, `ScreenshotScreensTest`, `ScreenshotBudgetTest`). The rest of the playground suite (`app/src/androidTest`) compiles but was **NOT run**; offline crash then relaunch and the Compose walker on a device are **NOT written/run** |
 > | R8 with the consumer rules | Sample app minified build and a stand-alone R8 run without the optional libraries: **verified to succeed**. A minified app **executed** on a device, or a real AGP app without those libraries: **NOT run** (see "ProGuard / R8") |
 > | Release to a public repository | **NOT done.** Only `publishToMavenLocal` was exercised |
 
 ## Requirements
 
-- `minSdk 24` (the SDK itself is built with `compileSdk 36`, Java 11 target).
+- `minSdk 24` (the SDK itself is built with `compileSdk 35`, Java 11 target).
 - A project in the ARTracker dashboard and a **public** key (`art_live_...`).
 - Optional, only if you use the matching feature: OkHttp (interceptor), Jetpack Compose (Compose masking and replay of
   Compose content), AndroidX Fragment and Navigation (automatic Fragment and `NavController` screen tracking). They are
@@ -119,7 +118,7 @@ SDK uninitialised and every other call a no-op; each validation error is logged 
 | `environment` | `"production"` | Sent in the envelope `context.environment` |
 | `appVersion` | `null` | Falls back to the app's `versionName` |
 | `debug` | `false` | SDK logs to logcat (tag `ARTracker`) |
-| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0)` | `framesPerSecond` is clamped to 0.5..4.0; NaN or infinity is rejected |
+| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0, mode = ReplayMode.WIREFRAME, quality = ReplayQuality.STANDARD)` | `framesPerSecond` is clamped to 0.5..4.0 (wireframe) or 0.5..10.0 (`ReplayMode.SCREENSHOT`); NaN or infinity is rejected. `quality` only applies to screenshots. See "Session replay" |
 | `privacy` | `PrivacyConfig(maskAllInputs = true, maskAllText = false, sensitiveViewClasses = emptySet())` | See "Masking" |
 | `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false, sender = null)` | The first four are used by the OkHttp interceptor; `captureHeaders` is reserved: headers are never captured. `sender` replaces the transport, see "Custom transport" |
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
@@ -233,7 +232,7 @@ Defaults:
 - Numeric and phone input types, and sensitive autofill hints (password, card number/CVV/expiry, phone, email address,
   postal address, SMS OTP) are masked, even with `maskAllInputs = false`.
 - Always blocked (drawn as a labelled block, content never captured): `WebView`, `SurfaceView`, `TextureView`,
-  `VideoView`, map views. `ImageView` is a neutral placeholder; bitmaps are never recorded.
+  `VideoView`, map views. `ImageView` is a neutral placeholder, except small vector icons, which are recorded; bitmaps (even tiny ones), photos and masked views never are.
 - Extra classes: `PrivacyConfig(sensitiveViewClasses = setOf(CardInputView::class.java))` (matched with `isInstance`).
 
 Views:
@@ -259,8 +258,9 @@ Priority: password > explicit unmask > explicit mask or masked ancestor / custom
 
 ## Session replay
 
-Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (deterministic per session id) and
-`framesPerSecond = 1.0`. `ARTracker.startReplay()` / `stopReplay()` override both at runtime.
+Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (deterministic per session id),
+`framesPerSecond = 1.0` and `mode = ReplayMode.WIREFRAME`. `ARTracker.startReplay()` / `stopReplay()` override the first
+two at runtime.
 
 - **Modes** (`ReplayConfig.mode`): `ReplayMode.WIREFRAME` (default) rebuilds the screen as a wireframe; `ReplayMode.SCREENSHOT`
   records real, masked screenshots (see "Screenshot mode" below). Screenshot mode is opt-in, and the project owner can
@@ -286,6 +286,10 @@ Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (det
 ### Screenshot mode
 
 ```kotlin
+import id.art.tracker.ReplayConfig
+import id.art.tracker.ReplayMode
+import id.art.tracker.ReplayQuality
+
 replay = ReplayConfig(
     enabled = true,
     sampleRate = 0.1,
@@ -420,7 +424,12 @@ Read these before shipping to production.
 - Compose capture was tested on Compose UI 1.7.x only (it reads `ViewRootForTest.semanticsOwner`, an internal API,
   guarded by a fallback). Smoke-test your Compose version before enabling replay; when the read fails the Compose
   content is drawn as a single placeholder block and the app is not affected.
-- Playback in the dashboard is not verified (see the status box).
+- Playback of **screenshot** chunks in the dashboard is not verified (see the status box); wireframe playback was checked
+  in `rrweb-player` only.
+- Screenshot mode: masks are rectangles at the view's position (scale and rotation are not applied), so a masked view that
+  is scaled up during an animation can show an edge for a few frames; hardware-only content inside a dialog or popup
+  (drawn with `View.draw`) may be missing; a tap on a screen that does not change can be absent from the screenshot chunk;
+  a chunk can close up to 15 s (not 10 s) after it opened. API 24-25 and the `View.draw` fallback were not run on a device.
 
 **Platform**
 
@@ -462,6 +471,12 @@ The `:app` module is an interactive playground for the SDK. It never changes `:a
 launch falls back to `SINK`. Load and fake-PII actions are disabled while the endpoint is remote. Before a remote endpoint
 starts, the SDK's local queue is wiped, because the SDK flushes leftovers right after `init`.
 
+**Replay**: the sample records **real, masked screenshots by default** (`ReplayMode.SCREENSHOT`, `STANDARD`, 2 fps; the SDK's own
+default stays wireframe). *Pengaturan* has a *Replay screenshot* switch (off = wireframes) and a quality choice. The `SINK`
+profile answers `GET /api/v1/replay/config` with `screenshot_enabled: true`; the *Replay* lab has a switch to turn that
+answer off (the running session then falls back to wireframes), a summary of the screenshot chunks the sink received, and an
+export of the last frames as JPEG files. Backends without the config endpoint keep the sample on wireframes.
+
 **Network inspection**: debug builds deliver the SDK's batches through an OkHttp client with Chucker (`NetworkInspector`). Open it from the *Lab* tab, *Jaringan* entry, with *Buka Chucker*, or from Chucker's notification (Android 13 and later need the notification permission). Release builds use Chucker's no-op artifact and the built-in transport.
 
 **Tabs**: *Skenario* (six scripted flows with real taps), *Lab* (event and log, privacy and masking, replay, network, queue,
@@ -474,7 +489,7 @@ recorder sees them like real ones. Limits: touches are recorded only while repla
 dialogs or popups), and only after a first snapshot of the session exists. The SDK has no rage-click detection.
 
 **Tests**: `./gradlew :app:testDebugUnitTest` (JVM, MockWebServer for HTTP); `./gradlew :app:connectedDebugAndroidTest`
-(needs an emulator or device). Still manual: the 401 kill-switch, offline crash then relaunch, and replay playback in the
+(needs an emulator or device). Still manual: the 401 kill-switch, offline crash then relaunch, and replay playback of screenshot chunks in the
 dashboard (see [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md)).
 
 ## Tests
@@ -483,9 +498,23 @@ dashboard (see [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md)).
 ./gradlew :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug
 ```
 
-Last full run (2026-11-07): `:artracker-sdk:testDebugUnitTest` 654 tests in 60 classes, 0 failures, 0 skipped
-(includes the 1000-iteration public-API fuzz test); `:app:testDebugUnitTest` 254 tests, 0 failures; `:app:assembleDebug`
-and `:app:assembleRelease` succeed. The instrumented suite (`:app:connectedDebugAndroidTest`) has not been run.
+Last full run (2026-11-10): `:artracker-sdk:testDebugUnitTest` 972 tests, 0 failures (includes the 1000-iteration
+public-API fuzz test and the screenshot pipeline: masking, encoder, chunker, store migration, controller);
+`:app:testDebugUnitTest` 269 tests, 0 failures; `:app:assembleDebug` and `:app:assembleRelease` succeed.
+
+Instrumented tests for screenshot replay, run on a physical device (`adb install -r -t` of `app-debug.apk` and
+`app-debug-androidTest.apk`, then `am instrument`; not through `connectedDebugAndroidTest`, which uninstalls the app):
+
+```sh
+adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotFlowTest   id.art.tracker.test/id.art.tracker.PlaygroundTestRunner
+adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotScreensTest id.art.tracker.test/id.art.tracker.PlaygroundTestRunner
+adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotBudgetTest -e durationMs 300000 id.art.tracker.test/id.art.tracker.PlaygroundTestRunner
+```
+
+`ScreenshotFlowTest` (frame vs `UiAutomation.takeScreenshot()` outside masked areas, 5/5 runs) and `ScreenshotScreensTest`
+(fonts, icons, a picture, a dialog with its dim) passed; `ScreenshotBudgetTest` prints a `budget_report` line (data and
+jank), see [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). The rest of the instrumented suite
+(`:app:connectedDebugAndroidTest`) has not been run.
 
 The sample-app tests do not depend on `local.properties`: they use a test `Application` that never initialises the SDK,
 one Robolectric SDK level, and explicit arguments, so `:app:testDebugUnitTest` passes with or without `artracker.*`
