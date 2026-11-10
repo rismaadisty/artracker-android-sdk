@@ -11,7 +11,7 @@ import java.util.WeakHashMap
  * Rate control for replay frame capture (ARCHITECTURE section 6.3).
  *
  * - `OnDrawListener` callbacks only flip a dirty flag; no work or allocation happens per draw.
- * - [requestedFps] outside 0.5..4.0 (or non-finite) is clamped (NaN/Infinity -> 1.0).
+ * - [requestedFps] outside 0.5..[maxFps] (4.0 unless the caller allows more; or non-finite) is clamped (NaN/Infinity -> 1.0).
  * - Every `1000 / currentFps` ms a tick runs [capture] only if the flag is dirty.
  * - [requestSoon] schedules ONE extra capture (after ACTION_UP / screen change), regardless of dirty.
  * - Watchdog: [budgetMs] exceeded on [SLOW_STREAK] consecutive captures (or [capture] throwing that many
@@ -31,6 +31,8 @@ internal class FrameScheduler(
     private val clock: Clock,
     requestedFps: Double,
     private val budgetMs: Long = 8,
+    /** Upper bound of the configured rate: 4.0 for wireframes, 10.0 for screenshots. */
+    private val maxFps: Double = MAX_FPS,
     private val capture: () -> Unit,
 ) {
     /**
@@ -38,7 +40,7 @@ internal class FrameScheduler(
      * Without it a NaN or 0 would give a 1 ms tick loop on the main thread (and `maxOf(.., NaN)` never recovers).
      */
     private val baseFps: Double =
-        if (requestedFps.isFinite()) requestedFps.coerceIn(MIN_FPS, MAX_FPS) else DEFAULT_FPS
+        if (requestedFps.isFinite()) requestedFps.coerceIn(MIN_FPS, maxFps) else DEFAULT_FPS
 
     /** Current fps; lowered by the watchdog, restored to [baseFps] after [RECOVERY_MS]. */
     var currentFps: Double = baseFps
@@ -50,6 +52,7 @@ internal class FrameScheduler(
     private var consecutiveSlow = 0
     private var consecutiveFailures = 0
     private var lastSlowAtMs = 0L
+    private var externalCap: Double? = null
 
     // Weak keys: a forgotten root never keeps a View/Activity alive. Values capture only `this`.
     private val listeners = WeakHashMap<View, ViewTreeObserver.OnDrawListener>()
@@ -79,6 +82,7 @@ internal class FrameScheduler(
         listeners.clear()
         // Stopping also ends any degradation; the next start() begins at baseFps.
         currentFps = baseFps
+        externalCap = null
     }
 
     /** Flags that the screen changed since the last capture. Ignored while stopped. */
@@ -120,7 +124,16 @@ internal class FrameScheduler(
         }.onFailure { SdkLog.w("FrameScheduler.detach failed", it) }
     }
 
-    private fun periodMs(): Long = (1000.0 / currentFps).toLong().coerceAtLeast(1L)
+    /** An outside limit (the screenshot byte budget); null removes it. Lowers the tick rate, never raises it. */
+    fun capFps(limit: Double?) {
+        externalCap = limit?.takeIf { it.isFinite() && it > 0.0 }?.coerceAtLeast(MIN_FPS)
+        if (started) scheduleTick() // the tick already posted was timed with the old rate
+    }
+
+    private fun periodMs(): Long {
+        val fps = externalCap?.let { minOf(it, currentFps) } ?: currentFps
+        return (1000.0 / fps).toLong().coerceAtLeast(1L)
+    }
 
     private fun scheduleTick() {
         handler.removeCallbacks(tickRunnable)

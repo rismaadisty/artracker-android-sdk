@@ -31,8 +31,8 @@ class FrameSchedulerTest {
     private var captureCost = 0L
     private var captureAction: () -> Unit = {}
 
-    private fun scheduler(baseFps: Double = 1.0, budgetMs: Long = 8): FrameScheduler =
-        FrameScheduler(handler, clock, baseFps, budgetMs) {
+    private fun scheduler(baseFps: Double = 1.0, budgetMs: Long = 8, maxFps: Double = 4.0): FrameScheduler =
+        FrameScheduler(handler, clock, baseFps, budgetMs, maxFps) {
             captures++
             clock.advance(captureCost)
             captureAction()
@@ -54,6 +54,31 @@ class FrameSchedulerTest {
         val m = ViewTreeObserver::class.java.getDeclaredMethod("dispatchOnDraw")
         m.isAccessible = true
         m.invoke(root.viewTreeObserver)
+    }
+
+    @Test
+    fun maxFps_raisesTheCeilingForScreenshots_andDefaultStaysAt4() {
+        assertEquals(8.0, scheduler(baseFps = 8.0, maxFps = 10.0).currentFps, 0.0)
+        assertEquals(10.0, scheduler(baseFps = 30.0, maxFps = 10.0).currentFps, 0.0)
+        assertEquals(4.0, scheduler(baseFps = 8.0).currentFps, 0.0)
+    }
+
+    @Test
+    fun fpsCap_slowsTheTick_andClearingItRestoresTheRate() {
+        val s = scheduler(baseFps = 4.0) // 250 ms period
+        s.start()
+        s.capFps(1.0)
+        s.markDirty()
+        advance(250)
+        assertEquals(0, captures)
+        advance(750)
+        assertEquals(1, captures)
+        s.capFps(null)
+        s.markDirty()
+        advance(1_000) // the pending 1 s tick runs, then 250 ms ticks resume
+        s.markDirty()
+        advance(250)
+        assertTrue("captures=$captures", captures >= 3)
     }
 
     @Test
