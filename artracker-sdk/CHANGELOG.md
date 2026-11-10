@@ -48,6 +48,9 @@ versions follow semantic versioning (`0.x`: the API may still change).
   (`Node ... not found` in the player). Now one `adds` entry per node, pre-order, parent first, with element nodes sent
   without their children, the text node as its own entry and `nextId` only on the subtree root.
 - Text uses `font-family:Roboto,<generic>` instead of the bare generic family.
+- `tools/replay-viewer/index.html` loaded a file that does not exist in the pinned `rrweb-player` version (404), so the
+  viewer could not play anything; it now loads the ES module build. The recorded wireframe session plays with no replayer
+  warnings (see `tools/replay-viewer/README.md`).
 - `overflow:hidden` is written only for nodes that clip (`clipToOutline`, scroll containers, Compose clip); other boxes
   no longer cut off titles and icons measured larger than their box.
 
