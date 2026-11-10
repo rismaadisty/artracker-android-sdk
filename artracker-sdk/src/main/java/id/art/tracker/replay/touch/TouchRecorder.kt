@@ -5,9 +5,10 @@ import android.view.KeyboardShortcutGroup
 import android.view.Menu
 import android.view.MotionEvent
 import android.view.Window
-import id.art.tracker.replay.rrweb.TouchKind
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+
+internal enum class TouchKind { DOWN, MOVE, UP }
 
 /**
  * Observes touches of one window by wrapping its `Window.Callback` (ARCHITECTURE.md section 6.4). Every call is

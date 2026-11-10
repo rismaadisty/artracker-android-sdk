@@ -54,29 +54,19 @@ public class ARTrackerConfig @JvmOverloads constructor(
     }
 }
 
-/**
- * How a session replay is recorded.
- *
- * - [WIREFRAME]: the screen is rebuilt as a wireframe from the view tree (the default; no pixels leave the device).
- * - [SCREENSHOT]: real screenshots of the app, masked on the device before they are compressed. Opt-in, and the
- *   project owner can switch it off from the server; the SDK then falls back to [WIREFRAME].
- */
-public enum class ReplayMode { WIREFRAME, SCREENSHOT }
-
-/** Size and JPEG quality of a [ReplayMode.SCREENSHOT] frame: `LOW` 480 px / 50, `STANDARD` 720 px / 60, `HIGH` 1080 px / 75. */
+/** Size and JPEG quality of a replay screenshot frame: `LOW` 480 px / 50, `STANDARD` 720 px / 60, `HIGH` 1080 px / 75. */
 public enum class ReplayQuality { LOW, STANDARD, HIGH }
 
 /**
- * Session replay settings.
+ * Session replay settings. A replay is a sequence of real screenshots of the app, masked on the device before they are
+ * compressed (no pixel of a sensitive view leaves the device).
  *
- * [framesPerSecond] is clamped to 0.5..4 in [ReplayMode.WIREFRAME] and 0.5..10 in [ReplayMode.SCREENSHOT] (2 is
- * recommended there). [quality] only applies to [ReplayMode.SCREENSHOT].
+ * [framesPerSecond] is clamped to 0.5..10 (2 is recommended). [quality] sets the size and JPEG quality of each frame.
  */
 public class ReplayConfig @JvmOverloads constructor(
     public val enabled: Boolean = false,
     public val sampleRate: Double = 0.1,
     public val framesPerSecond: Double = 1.0,
-    public val mode: ReplayMode = ReplayMode.WIREFRAME,
     public val quality: ReplayQuality = ReplayQuality.STANDARD,
 )
 
@@ -111,8 +101,7 @@ private const val MIN_FLUSH_INTERVAL_MS: Long = 1_000
 private const val MIN_SESSION_TIMEOUT_MS: Long = 1_000
 private const val DEFAULT_FPS: Double = 1.0
 private const val MIN_FPS: Double = 0.5
-private const val MAX_FPS: Double = 4.0
-private const val MAX_SCREENSHOT_FPS: Double = 10.0
+private const val MAX_FPS: Double = 10.0
 
 /** Returns human-readable validation errors; an empty list means the config is valid. */
 internal fun ARTrackerConfig.validate(): List<String> {
@@ -148,14 +137,10 @@ internal fun ARTrackerConfig.validate(): List<String> {
     return errors
 }
 
-/**
- * Frames per second clamped to the supported range: 0.5..4.0 for [ReplayMode.WIREFRAME], 0.5..10.0 for
- * [ReplayMode.SCREENSHOT]. A non-finite value (NaN, infinity) means the default 1.0.
- */
+/** Frames per second clamped to the supported range 0.5..10.0. A non-finite value (NaN, infinity) means the default 1.0. */
 internal fun ReplayConfig.effectiveFps(): Double {
     if (!framesPerSecond.isFinite()) return DEFAULT_FPS
-    val max = if (mode == ReplayMode.SCREENSHOT) MAX_SCREENSHOT_FPS else MAX_FPS
-    return framesPerSecond.coerceIn(MIN_FPS, max)
+    return framesPerSecond.coerceIn(MIN_FPS, MAX_FPS)
 }
 
 /** Output size and JPEG quality of one [ReplayQuality]; the short side of the image is never upscaled. */

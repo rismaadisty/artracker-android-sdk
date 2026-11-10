@@ -13,7 +13,7 @@
 # OkHttp, Fragment, Navigation and Compose are compileOnly: the host app may not ship them. Classes that refer to
 # them are only loaded when ClassAvailability says the library is present, so R8 must not fail on the missing ones.
 # That covers the OkHttp interceptor (okhttp3.Interceptor, Request, Response), the Fragment/Navigation holders and
-# the Compose walker/mask classes listed below.
+# the Compose mask classes listed below.
 -dontwarn okhttp3.**
 -dontwarn androidx.fragment.**
 -dontwarn androidx.navigation.**
@@ -26,8 +26,7 @@
 -keep,allowshrinking,allowobfuscation class id.art.tracker.lifecycle.FragmentSupport { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.lifecycle.FragmentTracker { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.lifecycle.NavBinder { *; }
--keep,allowshrinking,allowobfuscation class id.art.tracker.replay.capture.ComposeWalker { *; }
--keep,allowshrinking,allowobfuscation class id.art.tracker.replay.capture.ReflectiveSemanticsAccess { *; }
+-keep,allowshrinking,allowobfuscation class id.art.tracker.replay.screenshot.ReflectiveSemanticsAccess { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.replay.screenshot.ComposeMaskCollector { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.replay.screenshot.ComposeMaskCollectorFactory { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.privacy.ComposeMaskRules { *; }

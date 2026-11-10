@@ -34,7 +34,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import id.art.tracker.R
-import id.art.tracker.ReplayMode
 import id.art.tracker.ReplayQuality
 import id.art.tracker.playground.boot.BackendGrantStore
 import id.art.tracker.playground.settings.EndpointProfile
@@ -119,20 +118,15 @@ fun SettingsScreen(
         NumberRow("replayFps", presetVersion, stringResource(R.string.settings_replay_fps), d.replayFps.toString(), invalidFields, { invalidFields = it }) { text ->
             text.toDoubleOrNull()?.also { v -> editor.update { it.copy(replayFps = v) } } != null
         }
-        SwitchRow(stringResource(R.string.settings_replay_screenshot), d.replayMode == ReplayMode.SCREENSHOT) { v ->
-            editor.update { it.copy(replayMode = if (v) ReplayMode.SCREENSHOT else ReplayMode.WIREFRAME) }
-        }
-        if (d.replayMode == ReplayMode.SCREENSHOT) {
-            Text(stringResource(R.string.settings_replay_screenshot_note), style = MaterialTheme.typography.bodySmall)
-            Text(stringResource(R.string.settings_replay_quality), style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ReplayQuality.values().forEach { q ->
-                    FilterChip(
-                        selected = d.replayQuality == q,
-                        onClick = { editor.update { it.copy(replayQuality = q) } },
-                        label = { Text(q.name) },
-                    )
-                }
+        Text(stringResource(R.string.settings_replay_screenshot_note), style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.settings_replay_quality), style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReplayQuality.values().forEach { q ->
+                FilterChip(
+                    selected = d.replayQuality == q,
+                    onClick = { editor.update { it.copy(replayQuality = q) } },
+                    label = { Text(q.name) },
+                )
             }
         }
         SwitchRow(stringResource(R.string.settings_mask_inputs), d.maskAllInputs) { v -> editor.update { it.copy(maskAllInputs = v) } }

@@ -3,6 +3,11 @@ package id.art.tracker.replay
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayQueue
 
+/** Receives each closed replay chunk (the core queues it for upload). */
+internal fun interface ReplaySink {
+    fun accept(batch: NewReplayBatch)
+}
+
 /**
  * The core's [ReplaySink]: queues each closed batch for upload and starts the uploader. [queue] is a provider because
  * the replay database is opened lazily, only once there is something to store.

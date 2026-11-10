@@ -21,7 +21,6 @@ class PlaygroundSettingsTest {
         assertTrue(c.replay.enabled)
         assertEquals(1.0, c.replay.sampleRate, 0.0)
         assertEquals(2.0, c.replay.framesPerSecond, 0.0) // screenshots: 2 fps recommended
-        assertEquals(id.art.tracker.ReplayMode.SCREENSHOT, c.replay.mode)
         assertEquals(id.art.tracker.ReplayQuality.STANDARD, c.replay.quality)
         assertTrue(c.privacy.maskAllInputs)
         assertEquals(10_000L, c.flushIntervalMs)
@@ -90,14 +89,10 @@ class PlaygroundSettingsTest {
     }
 
     @Test
-    fun theSampleDefaultsToScreenshotReplay_andWireframeIsOneSettingAway() {
-        // The SDK's own default stays WIREFRAME; the sample app opts in so screenshot replay can be tried out of the box.
-        val d = PlaygroundSettings.DEFAULT.toConfig("http://localhost:1", key, debug = false)
-        assertEquals(id.art.tracker.ReplayMode.SCREENSHOT, d.replay.mode)
+    fun theReplayQualityAndFpsFromTheSettingsReachTheConfig() {
         val c = PlaygroundSettings.DEFAULT.copy(
-            replayMode = id.art.tracker.ReplayMode.WIREFRAME, replayQuality = id.art.tracker.ReplayQuality.LOW, replayFps = 1.0,
+            replayQuality = id.art.tracker.ReplayQuality.LOW, replayFps = 1.0,
         ).toConfig("http://localhost:1", key, debug = false)
-        assertEquals(id.art.tracker.ReplayMode.WIREFRAME, c.replay.mode)
         assertEquals(id.art.tracker.ReplayQuality.LOW, c.replay.quality)
         assertEquals(1.0, c.replay.framesPerSecond, 0.0)
     }

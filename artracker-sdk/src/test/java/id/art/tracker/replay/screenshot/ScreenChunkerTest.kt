@@ -2,7 +2,7 @@ package id.art.tracker.replay.screenshot
 
 import android.util.Base64
 import id.art.tracker.replay.ReplaySink
-import id.art.tracker.replay.rrweb.TouchKind
+import id.art.tracker.replay.touch.TouchKind
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayFormat

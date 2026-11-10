@@ -4,7 +4,7 @@ import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.privacy.UrlScrubber
 
 /**
- * Builds the rrweb Meta `href` (`android://<screen>`) from a screen name. Screen names are host-supplied
+ * Builds the `href` (`android://<screen>`) of a replay frame from a screen name. Screen names are host-supplied
  * (`ARTracker.screen`, navigation routes/labels, `@ARTrackerScreenName`) and replay chunks skip the layer-2
  * attribute redactor, so the name is sanitized here, in this order:
  *
@@ -17,7 +17,7 @@ import id.art.tracker.privacy.UrlScrubber
  *    `首页` that became only `_`) -> `unknown`.
  *
  * Pure and deterministic, but LOSSY: distinct screens can share an href, so screen changes must be detected on the
- * raw name (the replay controller does), never on this value.
+ * raw name, never on this value.
  */
 internal object ReplayHref {
     private const val PREFIX = "android://"

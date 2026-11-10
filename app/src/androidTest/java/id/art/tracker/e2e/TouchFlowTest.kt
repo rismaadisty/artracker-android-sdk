@@ -30,7 +30,7 @@ import kotlin.math.abs
 
 /**
  * Proves the synthetic tap goes through the real SDK: a click reaches app code (an event) and, only while replay records,
- * the SDK's TouchRecorder turns the same touch into rrweb touchstart/touchend events at the right place.
+ * the SDK's TouchRecorder turns the same touch into down/up touches of the screen chunk at the right place.
  */
 @RunWith(AndroidJUnit4::class)
 class TouchFlowTest {
@@ -56,7 +56,7 @@ class TouchFlowTest {
     fun syntheticTapIsRecordedInReplayChunk() {
         ARTracker.startReplay()
         showClickableTarget()
-        Thread.sleep(ReplayReadiness.warmupMs(1.0)) // a base snapshot of this session must exist before the touch
+        Thread.sleep(ReplayReadiness.warmupMs(1.0)) // a frame of this session must exist before the touch
         val center = centerOfTarget()
         val origin = SyntheticTouch.originOf(rule.activity)
         assertTrue("replay must have installed the SDK recorder", SyntheticTouch.isRecorderInstalled(rule.activity))
@@ -69,10 +69,10 @@ class TouchFlowTest {
         val seen = ingest.awaitUntil(15_000) { it.hasItemNamed("tap_target_clicked") && it.chunks().touches().size >= 2 }
         assertTrue("the click must reach app code", seen.hasItemNamed("tap_target_clicked"))
         val touches = seen.chunks().touches()
-        val start = touches.firstOrNull { it.first == 7 }
-        val end = touches.firstOrNull { it.first == 9 }
-        assertTrue("touchstart missing: $touches", start != null)
-        assertTrue("touchend missing: $touches", end != null)
+        val start = touches.firstOrNull { it.first == "down" }
+        val end = touches.firstOrNull { it.first == "up" }
+        assertTrue("down touch missing: $touches", start != null)
+        assertTrue("up touch missing: $touches", end != null)
         val density = rule.activity.resources.displayMetrics.density
         val expectedX = (center.x + origin.x) / density
         val expectedY = (center.y + origin.y) / density

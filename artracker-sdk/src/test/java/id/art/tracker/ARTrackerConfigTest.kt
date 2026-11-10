@@ -69,13 +69,6 @@ class ARTrackerConfigTest {
     }
 
     @Test
-    fun fps_isClamped() {
-        assertEquals(4.0, ReplayConfig(framesPerSecond = 10.0).effectiveFps(), 0.0)
-        assertEquals(0.5, ReplayConfig(framesPerSecond = 0.1).effectiveFps(), 0.0)
-        assertEquals(1.0, ReplayConfig().effectiveFps(), 0.0)
-    }
-
-    @Test
     fun fps_nonFinite_effectiveFpsFallsBackToOne() {
         assertEquals(1.0, ReplayConfig(framesPerSecond = Double.NaN).effectiveFps(), 0.0)
         assertEquals(1.0, ReplayConfig(framesPerSecond = Double.POSITIVE_INFINITY).effectiveFps(), 0.0)
@@ -83,24 +76,19 @@ class ARTrackerConfigTest {
     }
 
     @Test
-    fun replayDefaults_keepWireframeMode_andStandardQuality() {
+    fun replayDefaults_areOff_withStandardQuality() {
         val r = ReplayConfig()
-        assertEquals(ReplayMode.WIREFRAME, r.mode)
         assertEquals(ReplayQuality.STANDARD, r.quality)
         assertFalse(r.enabled)
     }
 
     @Test
-    fun screenshotMode_clampsFpsTo0_5Through10() {
-        assertEquals(10.0, ReplayConfig(framesPerSecond = 30.0, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
-        assertEquals(8.0, ReplayConfig(framesPerSecond = 8.0, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
-        assertEquals(0.5, ReplayConfig(framesPerSecond = 0.1, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
-        assertEquals(1.0, ReplayConfig(framesPerSecond = Double.NaN, mode = ReplayMode.SCREENSHOT).effectiveFps(), 0.0)
-    }
-
-    @Test
-    fun wireframeMode_stillClampsFpsTo4() {
-        assertEquals(4.0, ReplayConfig(framesPerSecond = 8.0, mode = ReplayMode.WIREFRAME).effectiveFps(), 0.0)
+    fun fps_isClampedTo0_5Through10() {
+        assertEquals(10.0, ReplayConfig(framesPerSecond = 30.0).effectiveFps(), 0.0)
+        assertEquals(8.0, ReplayConfig(framesPerSecond = 8.0).effectiveFps(), 0.0)
+        assertEquals(0.5, ReplayConfig(framesPerSecond = 0.1).effectiveFps(), 0.0)
+        assertEquals(1.0, ReplayConfig(framesPerSecond = Double.NaN).effectiveFps(), 0.0)
+        assertEquals(1.0, ReplayConfig().effectiveFps(), 0.0)
     }
 
     @Test

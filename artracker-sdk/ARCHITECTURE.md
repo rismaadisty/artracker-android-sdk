@@ -22,9 +22,9 @@ Compose/View hierarchy + touch gesture, WorkManager + offline SQLite. Publikasi 
 ### Prinsip
 
 1. **SDK tidak boleh membuat app pelanggan crash atau lambat.** Setiap entry point publik dibungkus `runCatching`; kegagalan internal hanya dicatat di debug log.
-2. **Main thread hanya melakukan yang wajib di main thread**: membaca properti View/semantics (snapshot ringan). Diff, serialisasi, redaksi, gzip, I/O, dan jaringan berjalan di worker thread.
+2. **Main thread hanya melakukan yang wajib di main thread**: membaca properti View/semantics dan mengomposit window ke bitmap. Mask, scale, kompresi, serialisasi, redaksi, gzip, I/O, dan jaringan berjalan di worker thread.
 3. **Dependensi minimal.** Tanpa Room, tanpa kotlinx.serialization, tanpa OkHttp sebagai dependensi wajib (lihat §9).
-4. **Privasi secara default.** Masking terjadi saat capture, sebelum data meninggalkan model snapshot, sehingga teks sensitif tidak pernah masuk memori antrean.
+4. **Privasi secara default.** Masking terjadi saat capture, sebelum frame dikompresi, sehingga piksel sensitif tidak pernah masuk memori antrean.
 
 ---
 
@@ -42,7 +42,7 @@ Compose/View hierarchy + touch gesture, WorkManager + offline SQLite. Publikasi 
 | Timestamp | Kirim `sent_at` (envelope) **dan** `timestamp` (item) agar backend mengoreksi jam perangkat yang meleset (drift 0–7 hari) | `ingest/sanitize.go#normalizeTimestamp` |
 | Rate limit | 50 req/s dan 1000 event/s **per project** (dibagi semua device). Habis → `429` + `Retry-After` | `ingest/ratelimit.go` |
 | Dedup | **Tidak ada** di server. SDK membuat UUIDv7 sekali per item dan memakainya ulang saat retry | `CONTRACT.md §12` |
-| Replay | **Session Replay API**, bukan `/ingest`: `POST /api/v1/replay/chunk-url` (minta URL upload bertanda tangan) → `PUT {upload_url}` (body gzip, `Content-Type: application/gzip`) → `POST /api/v1/replay/chunk-ack`. Semua langkah idempotent di server, jadi retry mengulang ketiganya. `session_id` cocok `^[a-zA-Z0-9_-]{8,128}$`, `chunk_seq >= 0`, `size_bytes` 1..5 MiB (5242880) dan harus sama dengan panjang body PUT. `X-Artracker-Key` hanya untuk dua `POST`, tidak pernah ke `upload_url`. Rate limit 50 req/s per project (dibagi semua device). Field `direct` **tidak dikirim**: server memutuskan mode upload lewat `REPLAY_PROXY_UPLOAD`. Player di dashboard memakai **rrweb** | `backend/internal/handler/replay.go`, `0004_session_replay.sql`, `0006_replay_frustration.sql` (repo `artracker`, commit `8af564a`) |
+| Replay | **Session Replay API**, bukan `/ingest`: `POST /api/v1/replay/chunk-url` (minta URL upload bertanda tangan) → `PUT {upload_url}` (body gzip, `Content-Type: application/gzip`) → `POST /api/v1/replay/chunk-ack`. Semua langkah idempotent di server, jadi retry mengulang ketiganya. `session_id` cocok `^[a-zA-Z0-9_-]{8,128}$`, `chunk_seq >= 0`, `size_bytes` 1..5 MiB (5242880) dan harus sama dengan panjang body PUT. `X-Artracker-Key` hanya untuk dua `POST`, tidak pernah ke `upload_url`. Rate limit 50 req/s per project (dibagi semua device). Field `direct` **tidak dikirim**: server memutuskan mode upload lewat `REPLAY_PROXY_UPLOAD`. SDK selalu menamai `format: "artracker-screen-v1"` (frame JPEG + sentuhan) di body `chunk-url`; `403 {"error":"screenshot_disabled"}` berarti pemilik project mematikan replay screenshot | `backend/internal/handler/replay.go`, `0004_session_replay.sql`, `0006_replay_frustration.sql` (repo `artracker`, commit `8af564a`) |
 
 **Aturan SDK (sama dengan web):** maksimum **50 item / 128 KB uncompressed per request**, soft cap **24 KB per `attributes`**. Aturan ini hanya untuk `/ingest`; replay punya batas sendiri (lihat baris Replay dan §6.5).
 
@@ -82,17 +82,13 @@ artracker-sdk/src/main/java/id/art/tracker/
 │   └─ ComposeNavTracker.kt     helper NavController → screen_view (opsional)
 ├─ replay/
 │   ├─ ReplayController.kt      Start/stop, sampling, mengatur jadwal capture
+│   ├─ ReplayControllerFactory.kt  Merakit ScreenshotKit (Compose hanya bila ada)
 │   ├─ capture/
 │   │   ├─ RootViewLocator.kt   Semua root window (Activity, Dialog, PopupWindow)
-│   │   ├─ ViewWalker.kt        View hierarchy → Wireframe (main thread, read-only)
-│   │   ├─ ComposeWalker.kt     SemanticsOwner → Wireframe
 │   │   └─ FrameScheduler.kt    Dirty flag + throttle + budget watchdog
-│   ├─ model/Wireframe.kt       Node immutable: id, bounds, type, style, text(masked)
-│   ├─ diff/WireframeDiffer.kt  Diff frame N-1 vs N → mutations
-│   ├─ rrweb/RrwebEncoder.kt    Wireframe/diff → event rrweb (Meta, FullSnapshot, Incremental)
-│   ├─ touch/TouchRecorder.kt   Window.Callback wrapper → MouseInteraction/TouchMove
-│   ├─ ReplayChunker.kt         Pecah event menjadi chunk (≤512 KB, tutup di 64 KB)
-│   └─ ReplayBatcher.kt         Gabung chunk per session menjadi batch upload (256 KB / 10 s, gzip)
+│   ├─ screenshot/              ScreenshotCapturer, MaskCollector, ScreenshotEncoder, ScreenChunker, ByteBudgetGovernor (§6.6)
+│   ├─ touch/TouchRecorder.kt   Window.Callback wrapper → sentuhan down/move/up
+│   └─ ReplayIntake.kt          Chunk tertutup → antrean upload (ReplayStore)
 ├─ privacy/
 │   ├─ MaskingPolicy.kt         Keputusan mask/unmask per node
 │   ├─ ViewMaskRules.kt         EditText inputType, autofill hints, tag, class
@@ -124,12 +120,10 @@ artracker-sdk/src/main/java/id/art/tracker/
  Lifecycle callbacks ───────┼─► ItemFactory ─► Channel ─► AttributeRedactor ─► EventStore (SQLite)
  OkHttp interceptor (bg) ───┤                                                           │
  Crash (sync → file) ───────┘ (dibaca ulang saat init berikutnya)                        ▼
- FrameScheduler tick ─► ViewWalker/ComposeWalker ─► Wireframe ─► Differ ─► RrwebEncoder ─► Chunker ─┘
-                        (masking diterapkan di sini)                                    │
-                                                         Batcher ◄──────────────────────┘
-                                                            │  gzip
-                                                            ▼
-                                            IngestClient ─► POST /api/v1/ingest
+ FrameScheduler tick ─► ScreenshotCapturer ─► (thread pemrosesan) ScreenshotEncoder ─► ScreenChunker ─► ReplayStore ─► ReplayFlusher
+                        (rect mask dikumpulkan di sini)          (mask dicat sebelum scale/JPEG)                         (Session Replay API)
+
+ Item telemetry ──► Batcher ─► gzip ─► IngestClient ─► POST /api/v1/ingest
                                             (foreground: timer; background/offline: WorkManager)
 ```
 
@@ -149,7 +143,7 @@ artracker-sdk/src/main/java/id/art/tracker/
 | Sumber | Mekanisme | Output |
 | --- | --- | --- |
 | Proses foreground/background | `ProcessLifecycleOwner` (`lifecycle-process`) | `session`/`app_foreground`, `app_background`; memicu flush + jadwal WorkManager saat background; jeda replay |
-| Activity | `Application.ActivityLifecycleCallbacks` | `event`/`screen_view` `{screen, previous, type:"activity"}`; memberi tahu `ReplayController` bahwa root window berganti (→ full snapshot) |
+| Activity | `Application.ActivityLifecycleCallbacks` | `event`/`screen_view` `{screen, previous, type:"activity"}`; memberi tahu `ReplayController` bahwa root window berganti (→ frame berikutnya dipaksa terkirim) |
 | Fragment | `FragmentManager.FragmentLifecycleCallbacks` (recursive), didaftarkan di `onActivityCreated` bila activity adalah `FragmentActivity`. Dependensi `compileOnly` + cek kelas saat runtime | `screen_view` `{type:"fragment"}` |
 | Compose | Compose tidak punya lifecycle per layar. Disediakan `ARTracker.trackNavController(navController)` (listener `OnDestinationChangedListener`) **dan** `ARTracker.screen("Checkout")` manual | `screen_view` `{type:"compose"}` |
 
@@ -169,7 +163,7 @@ Nama layar default: `activity.javaClass.simpleName`, bisa ditimpa lewat `@ARTrac
 
 - Satu `CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineExceptionHandler)`: semua mutasi antrean berjalan berurutan tanpa lock.
 - `track()` dari thread mana pun hanya membuat item (timestamp diambil saat itu) lalu `trySend` ke `Channel(capacity = 1000, onBufferOverflow = DROP_OLDEST)`. Pemanggil tidak pernah terblokir.
-- Capture replay di main thread; hasilnya (`Wireframe` immutable) diserahkan ke `Dispatchers.Default` untuk diff/encode.
+- Capture replay di main thread (komposit window + kumpulan rect mask); bitmap-nya diserahkan ke satu konteks `Dispatchers.Default` untuk mask, scale, JPEG, dan chunking.
 
 ---
 
@@ -212,59 +206,41 @@ Modifier.artrackerMask() / Modifier.artrackerUnmask()
 
 ---
 
-## 6. Visual/Layout Recording & Snapshot Strategy
+## 6. Visual Recording (Screenshot Replay)
 
-### 6.1 Keputusan format: **wireframe → rrweb**, bukan screenshot
+### 6.1 Keputusan format: **screenshot yang di-mask di perangkat**
 
-| Opsi | Kelebihan | Kekurangan |
-| --- | --- | --- |
-| **A. Wireframe → event rrweb** *(direkomendasikan)* | Player rrweb di dashboard bisa langsung memutarnya; ukuran kecil (target <45 KB/menit, sesuai klaim landing page); masking struktural (teks diganti sebelum keluar); sesuai batas 24 KB/item | Visual tidak *pixel-perfect* (foto/gambar besar = placeholder, custom drawing tidak terekam; warna, bentuk, font, dan icon kecil terekam) |
-| B. Screenshot (PixelCopy) | Pixel-perfect | 30–100 KB/frame WebP sehingga melanggar soft cap 24 KB per item dan kuota event; masking butuh menggambar kotak di bitmap (rawan bocor bila koordinat meleset); biaya CPU/baterai tinggi |
-
-Wireframe tetap menjadi mode bawaan. **Mode screenshot sekarang ada sebagai opsi opt-in** (`ReplayConfig.mode = SCREENSHOT`): lihat §6.6. Catatan tabel di atas (kuota 24 KB, biaya) berlaku untuk jalur `/ingest` lama; screenshot memakai Session Replay API dengan anggaran data sendiri.
+Replay adalah urutan **screenshot asli** aplikasi. Data sensitif di-mask **di perangkat**, di bitmap ukuran penuh, sebelum bitmap itu di-scale atau dikompresi; tidak ada mode lain dan SDK tidak membaca pengaturan replay apa pun dari server. (Versi awal merekam wireframe → event rrweb; jalur itu sudah dihapus.) Dashboard menampilkan persis yang dilihat pengguna (font, icon, foto, warna, gerak), dengan konsekuensi: semua yang tidak di-mask ikut terkirim sebagai piksel, dan anggaran data dijaga oleh `ByteBudgetGovernor` (§6.6).
 
 ### 6.2 Capture
 
 - **Root windows**: `RootViewLocator` memakai `WindowManagerGlobal.mViews` (reflection, dibungkus `runCatching`) agar dialog, bottom sheet, dan popup ikut terekam. Fallback: `decorView` activity aktif.
-- **ViewWalker** (main thread, read-only): per `View` yang `VISIBLE` dan berukuran >0 diambil `id` stabil (`System.identityHashCode`), bounds di layar (`getLocationOnScreen`, dalam dp), tipe (`text`, `input`, `image`, `button`, `container`, `web`, `surface`), gaya background (`ColorDrawable`, `GradientDrawable` termasuk gradien/radius/stroke, `MaterialShapeDrawable` dibaca lewat nama kelas, dibuka dari Ripple/Layer/StateList/Inset, plus `backgroundTint`), elevasi (shadow) dan `clipToOutline`, teks (`TextView`, setelah masking; hint hanya bila tidak di-mask), warna/ukuran/ketebalan/miring/perataan font, alpha, dan icon kecil (lihat tabel privasi).
-- **ComposeWalker**: untuk `AndroidComposeView`, baca `(view as ViewRootForTest).semanticsOwner.unmergedRootSemanticsNode` lalu ambil `boundsInWindow`, `Text`, `EditableText`, `Role`, `Password`, dan key mask kustom. Pembacaan dilakukan lewat reflection-safe wrapper. Bila API berubah, node Compose dirender sebagai satu blok placeholder dan app tidak crash. Gaya visual dibaca dari `TextLayoutResult.layoutInput.style` (ukuran, berat, warna, miring, family generik, perataan, line height), `Shape.createOutline` (radius sudut), dan elemen modifier `BackgroundElement`/`BorderModifierNodeElement`/`GraphicsLayerElement`/`ShadowGraphicsLayerElement`/`PainterElement` lewat nama field (bukan API publik; bila berubah atau di-R8, gaya itu hilang tanpa error). Node layout tanpa semantics (mis. `Box` + `background`, `Icon` tanpa `contentDescription`) ikut diambil lewat penelusuran `LayoutNode` (getter anak dipanggil dengan refleksi).
-- Batas: maksimum **2000 node** per frame dan kedalaman 50. Bila terlampaui, subtree dirangkum sebagai blok.
+- **`ScreenshotCapturer`** (main thread): `PixelCopy` window Activity (API 26+; `View.draw` di API 24–25 atau bila copy gagal), dialog/popup di-`draw` di atas dengan dim window; satu bitmap ukuran layar dari `BitmapPool` (2 buffer dipakai ulang). Rect mask dikumpulkan di pass yang sama (§6.6).
 
 ### 6.3 Framing rate control (`FrameScheduler`)
 
 1. `ViewTreeObserver.OnDrawListener` di setiap root hanya mengeset `dirty = true` (tanpa alokasi).
-2. Handler main thread melakukan tick tiap `1000 / framesPerSecond` ms (default **1 fps**, rentang 0,5–4). Capture **hanya bila dirty**.
+2. Handler main thread melakukan tick tiap `1000 / framesPerSecond` ms (default **1 fps**, rentang 0,5–10, disarankan 2). Capture **hanya bila dirty**.
 3. Capture tambahan (debounce 100 ms) setelah `ACTION_UP` dan pergantian layar, agar efek tap terlihat.
-4. **Budget watchdog**: bila waktu walk >8 ms pada 3 frame berturut-turut, fps diturunkan setengah. Kembali naik setelah 30 detik stabil.
-5. Berhenti total saat `app_background`, `stopReplay()`, kill-switch, atau sesi tidak lolos sampling.
+4. **Budget watchdog**: bila waktu capture >16 ms pada 3 frame berturut-turut, fps diturunkan setengah. Kembali naik setelah 30 detik stabil. `ByteBudgetGovernor` ikut membatasi fps lewat `capFps`.
+5. Berhenti total saat `app_background`, `stopReplay()`, kill-switch, sesi tidak lolos sampling, atau server menjawab `403 screenshot_disabled`.
 
-### 6.4 Encoding ke rrweb
+### 6.4 Sentuhan
 
-Mutasi ditulis **satu entri `adds` per node**, urutan pre-order (parent selalu sebelum anak): node elemen dikirim tanpa anaknya (`childNodes: []`), node teks menjadi entri sendiri, dan `nextId` hanya ada di akar subtree (entri lain `null`). Replayer rrweb membangun tiap entri dengan `skipChild`, jadi `childNodes` bersarang akan membangun anak dua kali dan add berikutnya tidak menemukan parent-nya. `font-family` ditulis `Roboto,<generik>`; `overflow:hidden` hanya untuk node yang memang memotong (`clipToOutline`, scroll container, clip Compose).
+`TouchRecorder` membungkus `Window.Callback` setiap activity (meneruskan semua panggilan ke callback asli) dan hanya membaca koordinat. Tidak pernah ada `consume`. `DOWN` dan `UP` (`CANCEL` dihitung `UP`) selalu dicatat, `MOVE` paling banyak sekali per 50 ms; koordinat diubah ke dp dan ikut di chunk screenshot yang sudah berisi frame sesi yang sama. Tidak merekam ketukan keyboard.
 
-| Kejadian | Event rrweb |
-| --- | --- |
-| Mulai/ganti layar/rotasi, dan checkout tiap 2 menit | `Meta (4)` `{href:"android://<screen>", width, height}` + `FullSnapshot (2)`: dokumen sintetis `html>body>div` dengan `div` absolute per wireframe (`style="left:..;top:..;width:..;height:..;background:..;color:..;font-size:.."`) |
-| Perubahan antar frame | `IncrementalSnapshot (3)` source `Mutation (0)`: `adds/removes/attributes/texts` berdasarkan diff `id` stabil |
-| Scroll | Ditangkap sebagai perubahan posisi pada diff (tanpa source `Scroll` terpisah di v1) |
-| Sentuhan | Source `MouseInteraction (2)` dengan `TouchStart (7)`/`TouchEnd (9)`, dan source `TouchMove (6)` yang di-throttle 50 ms |
-| Input | Tidak merekam ketukan keyboard. Perubahan teks input muncul sebagai mutasi teks yang **sudah di-mask** |
+### 6.5 Chunking, upload & sampling
 
-`TouchRecorder` membungkus `Window.Callback` setiap activity (meneruskan semua panggilan ke callback asli) dan hanya membaca koordinat. Tidak pernah ada `consume`.
-
-### 6.5 Chunking & sampling
-
-- `ReplayChunker` memecah event menjadi chunk (batas 512 KB, ditutup di 64 KB). Chunk **bukan lagi item `session` di `/ingest`**: `ReplayBatcher` menggabung chunk per session menjadi batch (tutup di 256 KB JSON mentah atau 10 detik sejak event pertama, saat session berganti, atau saat recording berhenti), di-gzip sebagai **array event rrweb**, lalu disimpan di antrean `artracker_replay.db` dan dikirim lewat Session Replay API (§2). Batch gzip >5 MiB dibuang.
-- `seq` ditetapkan oleh `ReplayStore` dan dipersist per session, jadi melanjutkan setelah proses restart pada session yang sama. `start_time` = timestamp event pertama dari batch pertama session itu.
-- Flush tick tiap 5 detik memindahkan chunk ke batch; batch ditutup menurut aturan di atas.
+- `ScreenChunker` (tutup di 10 detik sejak entri pertama, saat sesi berganti, saat frame berikutnya tidak muat di 2 MB gzip, atau saat recording berhenti) menghasilkan chunk `artracker-screen-v1`. Chunk **bukan item `session` di `/ingest`**: ia disimpan di antrean `artracker_replay.db` (`ReplayStore`) dan dikirim lewat Session Replay API (§2). Chunk gzip >5 MiB dibuang.
+- `seq` ditetapkan oleh `ReplayStore` dan dipersist per session, jadi melanjutkan setelah proses restart pada session yang sama. `start_time` = timestamp entri pertama dari chunk pertama session itu.
+- Flush tick tiap 5 detik menutup chunk yang sudah melewati jendelanya.
 - Upload replay lewat `ARTrackerSender` bila host mengaturnya (`NetworkConfig.sender`), jadi Chucker, certificate pinning, dan proxy host ikut mencakupnya; tanpa sender dipakai `HttpURLConnection` bawaan (`ReplayClient`). Karena itu `SendRequest` punya `method` (`POST`, atau `PUT` untuk upload) dan `SendResponse` punya `body` (langkah `chunk-url` membaca `upload_url` darinya). `FlushWorker` di proses tanpa `init` selalu memakai transport bawaan.
+- `403 {"error":"screenshot_disabled"}` pada `chunk-url` (→ `ReplayResult.ScreenshotDisabled`; 403 tanpa body terbaca diperlakukan sama) berarti pemilik project mematikan replay screenshot: chunk dibuang, chunk lain yang menunggu di antrean dihapus (`ReplayQueue.clearFormat`), dan `ReplayController.onScreenshotDisabled()` menghentikan perekaman di proses itu (chunk yang terbuka dibuang, dicatat sekali). Ini bukan kegagalan autentikasi: kill-switch tidak menyala. Proses berikutnya mencoba lagi.
 - **Default `replay.enabled = false`** (opt-in, setara keputusan D2 web) dan `sampleRate = 0.1`. Sampling deterministik: `hash(session_id) < sampleRate`.
 
-### 6.6 Mode screenshot (opt-in)
+### 6.6 Pipeline screenshot
 
-Tujuan: dashboard menampilkan persis yang dilihat pengguna (font, icon, foto, warna, gerak), dengan data sensitif tetap di-mask **di perangkat**. API: `ReplayConfig(mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.LOW|STANDARD|HIGH)`; `WIREFRAME` tetap default. Preset (sisi pendek gambar / kualitas JPEG): LOW 480 px / 50, STANDARD 720 px / 60, HIGH 1080 px / 75, tidak pernah di-upscale. `framesPerSecond` dijepit 0,5–4 (wireframe) atau 0,5–10 (screenshot; disarankan 2).
-
-**Resolusi mode** (`ReplayController`): mode efektif = `SCREENSHOT` hanya bila dikonfigurasi **dan** `screenshot_enabled` dari `GET /api/v1/replay/config` bernilai true (cache di `KeyValueStore`, diperbarui tiap replay start oleh `ReplayRemote`). Sebelum jawaban pertama sesi merekam wireframe lalu pindah (screenshot pertama dipaksa). `403 {"error":"screenshot_disabled"}` pada `chunk-url` (→ `ReplayResult.ScreenshotDisabled`), atau jawaban "disabled", menjadikan cache `false`, menghapus chunk screenshot di antrean (`ReplayQueue.clearFormat`), dan menurunkan sesi berjalan ke wireframe dengan full snapshot; dicatat sekali. `max_fps` dari server membatasi fps; fallback wireframe tidak pernah lebih cepat dari 4 fps.
+API: `ReplayConfig(enabled, sampleRate, framesPerSecond, quality = ReplayQuality.LOW|STANDARD|HIGH)`. Preset (sisi pendek gambar / kualitas JPEG): LOW 480 px / 50, STANDARD 720 px / 60, HIGH 1080 px / 75, tidak pernah di-upscale. `framesPerSecond` dijepit 0,5–10 (disarankan 2).
 
 **Capture** (`replay/screenshot/`):
 
@@ -276,15 +252,15 @@ Tujuan: dashboard menampilkan persis yang dilihat pengguna (font, icon, foto, wa
 | `ByteBudgetGovernor` | Jendela 60 s byte terenkode; >5 MB → fps dibagi dua (min 0,5, paling sering tiap 10 s); overrun menetap di lantai fps → kualitas turun satu preset (tidak naik lagi dalam sesi); pulih di bawah 80 % |
 | `ScreenChunker` | Chunk `artracker-screen-v1` (JSON gzip `{format, platform:"android", seq, frames:[{ts,screen,w,h,vw,vh,mime,data(base64),masked}], touches:[{ts,x,y,kind}]}`), tutup di 10 s, 2 MB gzip, atau ganti sesi; frame yang tidak muat sendirian di-encode ulang satu preset lebih rendah, kalau masih tidak muat dibuang |
 
-Pemicu capture memakai `FrameScheduler` yang sama (dirty flag + `requestSoon`), watchdog 16 ms per capture dan `capFps` dari governor/server. Keputusan: `SurfaceView`/`TextureView`/`VideoView`/peta/WebView tetap **terblokir** oleh `MaskingPolicy`, sehingga areanya di-mask, bukan di-composite lewat `PixelCopy(surfaceView)`. Upload memakai `ReplayClient` yang sama (`format` ikut di body `chunk-url`, `event_count` = frame + sentuhan).
+Pemicu capture memakai `FrameScheduler` (dirty flag + `requestSoon`), watchdog 16 ms per capture dan `capFps` dari governor. Keputusan: `SurfaceView`/`TextureView`/`VideoView`/peta/WebView **terblokir** oleh `MaskingPolicy`, sehingga areanya di-mask, bukan di-composite lewat `PixelCopy(surfaceView)`. Frame pertama sesi, pergantian layar (nama mentah, di memori saja), dan checkout tiap 2 menit selalu dikirim meskipun gambarnya sama; frame kembar lain tidak dikirim. Upload memakai `ReplayClient` (`format` ikut di body `chunk-url`, `event_count` = frame + sentuhan). Nama layar di tiap frame dibangun `ReplayHref` (disanitasi).
 
-**Antrean**: lihat `ReplayStore` di bawah: badan batch berupa file, batas 50 MB.
+**Antrean**: lihat `ReplayStore` di bawah: badan chunk berupa file, batas 50 MB.
 
 ---
 
 ## 7. Privacy Masking Engine
 
-Masking diterapkan **di walker** (lapis 1), lalu redaksi atribut berjalan di pipeline (lapis 2).
+Masking diterapkan **di pengumpul mask di perangkat** (lapis 1: piksel yang di-mask tidak pernah sampai ke JPEG), lalu redaksi atribut berjalan di pipeline (lapis 2).
 
 ### 7.1 Lapis 1 — UI
 
@@ -298,9 +274,9 @@ Masking diterapkan **di walker** (lapis 1), lalu redaksi atribut berjalan di pip
 | Tag view | — | Padanan Android dari `data-artracker-mask`: `android:tag="artracker-mask"` di XML, `view.setTag(R.id.artracker_mask, true)`, atau `view.artrackerMask()`. Berlaku untuk **seluruh subtree**. `artracker-unmask` sebagai kebalikannya |
 | Compose | — | `Modifier.artrackerMask()` = `semantics { this[ARTrackerMaskKey] = true }` |
 | Kelas kustom | — | `PrivacyConfig.sensitiveViewClasses = setOf(CardInputView::class.java)` (cocok via `isInstance`) |
-| Selalu diblok | — | `WebView` (isi DOM tidak terlihat dari hierarki View), `SurfaceView`, `TextureView`, `VideoView`, MapView: dirender sebagai blok berlabel. `ImageView`/`Image`: placeholder warna netral. **Pengecualian: icon vector kecil** (`VectorDrawable`/`VectorDrawableCompat`/`VectorPainter`/`ColorPainter` dengan ukuran intrinsik maksimal 64 dp) dirasterisasi 1x pada ukuran aslinya (bukan diregangkan ke kotak view) ke WebP lossless (API 30+) atau PNG dan dikirim sebagai `background-image` data URI (maks 6 KB per icon; di-cache per sumber, per varian, dan per isi piksel sehingga baris list yang identik hanya di-encode sekali). **Bitmap tidak pernah dianggap icon, sekecil apa pun** (image loader menyerahkan avatar 40 dp sebagai bitmap ≤64 px): foto, thumbnail, gambar besar, `BitmapPainter`, painter pihak ketiga (Coil/Glide) dan semua node yang di-mask tidak pernah dirasterisasi |
+| Selalu diblok | — | `WebView`, `SurfaceView`, `TextureView`, `VideoView`, MapView: areanya selalu di-mask. Window `FLAG_SECURE` tidak pernah ditangkap (areanya di-mask) dan keyboard (proses lain) diganti placeholder. `ImageView`/`Image` biasa **ikut terkirim sebagai piksel** kecuali di-mask |
 
-**Bentuk masking:** teks diganti `*` dengan panjang sama (maks 32 karakter) **di dalam walker**, jadi `String` asli tidak pernah masuk `Wireframe`. Prioritas keputusan: `password` > `unmask` eksplisit > `mask` eksplisit/kelas > aturan default.
+**Bentuk masking:** rect view/node yang di-mask dicat tertutup (pola silang opak) di bitmap ukuran penuh, **sebelum** fingerprint, scale, dan JPEG; tidak ada teks yang ikut dikirim. Prioritas keputusan: `password` > `unmask` eksplisit > `mask` eksplisit/kelas > aturan default.
 
 ### 7.2 Lapis 2 — Atribut (`AttributeRedactor`)
 
@@ -308,7 +284,7 @@ Port aturan web SDK agar konsisten:
 - Key sensitif (`password|passwd|secret|token|authorization|cookie|api_key|card|cvv|pin|otp|ssn`) → `"[redacted]"` (sama persis dengan web SDK).
 - Nilai: email, nomor kartu (lolos Luhn), JWT, dan `Bearer …` → di-redaksi.
 - URL (http_request, href replay): query param sensitif → `[redacted]`, fragment dibuang.
-- Berlaku untuk `track/identify/log/captureException`, breadcrumbs, dan atribut http. Chunk replay **tidak** melewati walker ini (sudah di-mask di lapis 1), hanya redaksi URL `href`.
+- Berlaku untuk `track/identify/log/captureException`, breadcrumbs, dan atribut http. Chunk replay **tidak** melewati redaksi ini (pikselnya sudah di-mask di lapis 1), hanya nama layar tiap frame yang disanitasi (`ReplayHref`: redaksi, id path, URL-safe).
 
 ---
 
@@ -382,13 +358,13 @@ Database terpisah, dibuka **malas**: tidak dibuat bila replay tidak pernah dipak
 CREATE TABLE replay_batches (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
   first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, event_count INTEGER NOT NULL, has_error INTEGER NOT NULL,
-  user_id TEXT, environment TEXT NOT NULL, file TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'rrweb',
+  user_id TEXT, environment TEXT NOT NULL, file TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'artracker-screen-v1',
   size_bytes INTEGER NOT NULL, claimed INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL, start_ms INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 ```
 
-- **Badan batch adalah file** di `noBackupFilesDir/artracker/replay/<id>.gz` (DB versi 2); kolom `file` menyimpan namanya dan `format` bernilai `rrweb` atau `artracker-screen-v1`. Alasan: `CursorWindow` Android ±2 MB membuat BLOB besar bisa ditulis tapi tidak bisa dibaca. File ditulis sebelum barisnya dan dihapus bersama barisnya (selesai, evict, `clear`, purge); `resetOrphaned()` menyapu file tanpa baris. Migrasi v1→v2 menulis BLOB lama ke file.
+- **Badan batch adalah file** di `noBackupFilesDir/artracker/replay/<id>.gz` (DB versi 3); kolom `file` menyimpan namanya dan `format` selalu `artracker-screen-v1`. Alasan: `CursorWindow` Android ±2 MB membuat BLOB besar bisa ditulis tapi tidak bisa dibaca. File ditulis sebelum barisnya dan dihapus bersama barisnya (selesai, evict, `clear`, purge); `resetOrphaned()` menyapu file tanpa baris. Upgrade dari versi lama membuang batch wireframe (rrweb) yang masih antre (SDK tidak lagi mengirim format itu); counter `seq` per sesi tetap.
 - Batas: **50 MB / 200 batch**; eviction membuang batch pending tertua (yang sedang diunggah tidak pernah). Maksimal **8 attempt** per batch, lalu dibuang. Retensi **7 hari** (batch dan counter `seq`).
 - `replay_seq` bertahan setelah batch selesai, di-`clear()` (opt-out), atau dievict, supaya `seq` tidak pernah dipakai ulang: PUT menimpa objek lama sedangkan ack ditolak server.
 - `ReplayFlusher` mengunggah satu batch pada satu waktu (maks 2 batch per detik saat drain). `401/403` pada `chunk-url`/`chunk-ack` menyalakan kill-switch; `401/403` pada PUT berarti tanda tangan kedaluwarsa dan hanya mengulang dari langkah 1. Opt-out mengosongkan antrean dan membuang batch yang terbuka. `FlushWorker` ikut mengirim antrean ini di background.
@@ -426,7 +402,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 4. `app/build.gradle.kts`: `implementation(project(":artracker-sdk"))`. `ARTRACKER_ENDPOINT` dan `ARTRACKER_KEY` dibaca dari `local.properties` ke `BuildConfig` (key tidak di-commit). Untuk emulator: `http://10.0.2.2:<port>` dengan `network_security_config` cleartext **hanya di debug**.
 5. Sample app (Compose):
    - `SampleApplication` → `ARTracker.init(...)` dengan `debug = true`, replay `sampleRate = 1.0`.
-   - Layar **Login** (password + email, untuk uji masking), **Payment** (kartu/CVV numerik, `Modifier.artrackerMask()`), **Feed** (LazyColumn untuk uji scroll/diff), **Legacy XML Activity + Fragment** (uji ViewWalker, `android:tag="artracker-mask"`, FragmentTracker), **Diagnostics** (tombol `track`, `identify`, request OkHttp sukses/404/timeout, *Crash now*, *ANR 10 s*, *Flush*, *Toggle offline queue counter*).
+   - Layar **Login** (password + email, untuk uji masking), **Payment** (kartu/CVV numerik, `Modifier.artrackerMask()`), **Feed** (LazyColumn untuk uji scroll), **Legacy XML Activity + Fragment** (uji masking View, `android:tag="artracker-mask"`, FragmentTracker), **Diagnostics** (tombol `track`, `identify`, request OkHttp sukses/404/timeout, *Crash now*, *ANR 10 s*, *Flush*, *Toggle offline queue counter*).
    - Panel debug menampilkan jumlah item pending di SQLite dan status kirim terakhir.
 
 ---
@@ -440,7 +416,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Sesi | `session` | `session_start` / `session_end` | metadata perangkat |
-| Replay | *(bukan item ingest)* | batch rrweb lewat Session Replay API | ≤5 MiB gzip per upload |
+| Replay | *(bukan item ingest)* | chunk `artracker-screen-v1` lewat Session Replay API | ≤5 MiB gzip per upload (chunk 2 MB) |
 | Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | dari `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
@@ -453,13 +429,12 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 
 | Lapis | Cakupan | Alat |
 | --- | --- | --- |
-| Unit (JVM) | UUIDv7, SessionManager (fake clock), ItemFactory, AttributeRedactor (korpus PII), Batcher, Backoff, PayloadEncoder (gzip round-trip), Chunker, WireframeDiffer, RrwebEncoder (snapshot JSON) | JUnit4 + Truth/kotlin.test |
-| Robolectric | ViewWalker + MaskingPolicy (EditText per inputType, tag, subtree), EventStore (SQLite), CrashStore | Robolectric |
+| Unit (JVM) | UUIDv7, SessionManager (fake clock), ItemFactory, AttributeRedactor (korpus PII), Batcher, Backoff, PayloadEncoder (gzip round-trip), ScreenChunker, ScreenshotEncoder, ByteBudgetGovernor | JUnit4 + Truth/kotlin.test |
+| Robolectric | MaskCollector + MaskingPolicy (EditText per inputType, tag, subtree), ReplayController, EventStore (SQLite), CrashStore | Robolectric |
 | Kontrak transport | Semua kode respons §2 (202/400/401/413/429 + Retry-After/503/timeout) | `MockWebServer` |
-| Instrumented | Crash offline → relaunch → terkirim; Compose semantics walker; touch wrapper tidak mengubah perilaku | AndroidX Test di emulator |
+| Instrumented | Crash offline → relaunch → terkirim; Compose semantics mask; touch wrapper tidak mengubah perilaku | AndroidX Test di emulator |
 | End-to-end | Sample app → backend lokal (`docker-compose`) → `GET /projects/:id/events` | Manual + skrip |
-| Performa | Waktu walk per frame, jank (`FrameMetrics`), CPU background | Macrobenchmark, Perfetto |
-| Validasi rrweb | JSON chunk dari sample app diputar di `rrweb-player` lokal | Halaman HTML kecil di `tools/` |
+| Performa | Waktu capture per frame, jank (`FrameMetrics`), anggaran data, CPU background | Macrobenchmark, Perfetto |
 
 ---
 
@@ -469,7 +444,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | --- | --- | --- |
 | Q1 | Nama API | **`ARTracker.init`** (issue + parity web). Snippet `ARTracker.start` di landing page diperbarui terpisah |
 | Q2 | Package | **Tetap `id.art.tracker`**: seluruh kode Kotlin SDK berada di package `id.art.tracker` (dan sub-package `core`, `transport`, …); groupId Maven `id.art.tracker`. Sample app **tidak diubah** (namespace & package tetap `id.art.tracker`). Agar kelas `R`/`BuildConfig` hasil generate tidak bentrok dengan app, properti Gradle `android.namespace` modul library diisi `id.art.tracker.sdk`. Ini hanya memengaruhi kelas generate, bukan package kode. SDK tidak boleh memakai sub-package `id.art.tracker.ui` (dipakai sample app) |
-| Q3 | Format replay | Wireframe → rrweb (§6.1) sebagai default. Screenshot tersedia sebagai opsi opt-in (§6.6) |
+| Q3 | Format replay | Screenshot yang di-mask di perangkat (§6.1) sebagai satu-satunya format; wireframe → rrweb dan pembacaan konfigurasi mode dari server dihapus |
 | Q4 | Replay default | Off + sampling 0.1 (parity web) |
 | Q5 | `maskAllInputs` default `true` | Lebih aman daripada hanya password/numerik; bisa dilonggarkan per view |
 | R1 | `ViewRootForTest.semanticsOwner` dan `WindowManagerGlobal` adalah API internal/reflection | Dibungkus `runCatching` + fallback; diuji di setiap bump versi Compose |
@@ -485,7 +460,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 
 > **Status (2026-11-06):** Fase 0–5 selesai di JVM/Robolectric (kecuali dua item di bawah yang belum dijalankan); sample app (Fase 6) dan audit fuzz selesai.
 > **Belum dijalankan/diukur** (butuh emulator, perangkat, atau Docker, yang tidak tersedia saat Task 25): tes instrumentasi crash offline,
-> pemutaran di `rrweb-player`, Macrobenchmark/Perfetto (walk ≤8 ms, CPU background <1%, `init` ≤2 ms), dan E2E ke backend lokal
+> pemutaran chunk di dashboard, Macrobenchmark/Perfetto (CPU background <1%, `init` ≤2 ms), dan E2E ke backend lokal
 > (`docs/e2e-manual-test.md`). Ukuran AAR rilis terukur: 398621 byte (`PERF.md`).
 > Fase 7: konfigurasi publikasi, README, dan CHANGELOG selesai (Task 26, `0.1.0`); publikasi ke repositori publik dan E2E belum dikerjakan.
 
@@ -520,11 +495,11 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 - [x] `AttributeRedactor` (port korpus PII dari web SDK)
 
 ### Fase 5 — Replay
-- [x] `RootViewLocator`, `ViewWalker`, `ComposeWalker` (dengan fallback)
+- [x] `RootViewLocator`, `ScreenshotCapturer`, `MaskCollector`, `ComposeMaskCollector` (dengan fallback)
 - [x] `FrameScheduler` (dirty flag, throttle, watchdog, stop di background)
-- [x] `WireframeDiffer`, `RrwebEncoder`, `ReplayChunker`, sampling
+- [x] `ScreenshotEncoder`, `ScreenChunker`, `ByteBudgetGovernor`, sampling
 - [x] `TouchRecorder` (Window.Callback wrapper)
-- [ ] Validasi pemutaran chunk di `rrweb-player` *(belum diputar: struktur sudah divalidasi dengan `tools/replay-viewer/validate-chunks.mjs`; buka `tools/replay-viewer/index.html` untuk memutar)*
+- [ ] Validasi pemutaran chunk screenshot di dashboard *(belum diputar)*
 
 ### Fase 6 — Sample App & Pengerasan
 - [x] Layar demo (§10.5) + panel debug — layar Login/Payment/Feed/Legacy/Diagnostics; panel debug = `DiagnosticsScreen`
@@ -572,11 +547,11 @@ Hal-hal berikut berbeda dari teks di atas (atau melengkapinya) setelah implement
 - **Compose**: tidak ada semantics input-type, jadi aturan numerik/telepon/autofill tidak ada padanannya di Compose (hanya `Password`, `maskAllInputs`, `Modifier.artrackerMask()`).
 
 **Replay**
-- **Kedalaman JSON**: `Json.MAX_DEPTH = 32` terlalu dangkal untuk pohon wireframe, jadi `ReplayChunker` dan `ReplayBatcher` meng-encode dengan `Json.REPLAY_MAX_DEPTH = 256`. Batch replay tidak lagi melewati `EventPipeline`: tidak ada pengecualian redaksi atau prioritas khusus untuk item bernama `replay_chunk` (`isReplayChunk()` dihapus); item dengan nama itu diperlakukan seperti item lain.
-- **`ReplayHref`**: `href` `android://<screen>` dibangun dari nama layar yang disuplai host dan disanitasi (scrub URL, masking id di path, batas 200 karakter), karena batch replay tidak melewati lapis 2. Deteksi pergantian layar memakai kunci mentah di memori (bukan href yang sudah disanitasi).
-- **`ComposeWalker`**: `ReflectiveSemanticsAccess` tidak memakai refleksi sama sekali; ia menautkan langsung ke `ViewRootForTest` (API internal Compose) dan dibungkus try/catch dengan fallback blok placeholder. Di-instansiasi hanya di balik `ClassAvailability.compose`.
+- **Kedalaman JSON**: `Json.MAX_DEPTH = 32` dilonggarkan untuk dokumen chunk: `ScreenChunker` meng-encode dengan `Json.REPLAY_MAX_DEPTH = 256`. Chunk replay tidak melewati `EventPipeline`: tidak ada pengecualian redaksi atau prioritas khusus untuk item bernama `replay_chunk`.
+- **`ReplayHref`**: `href` `android://<screen>` dibangun dari nama layar yang disuplai host dan disanitasi (scrub URL, masking id di path, batas 200 karakter), karena batch replay tidak melewati lapis 2. Pergantian layar dideteksi pada nama mentah (callback `onScreenChanged`), bukan pada href yang sudah disanitasi, dan memaksa frame berikutnya terkirim.
+- **`ComposeMaskCollector`**: `ReflectiveSemanticsAccess` tidak memakai refleksi sama sekali; ia menautkan langsung ke `ViewRootForTest` (API internal Compose) dan dibungkus try/catch dengan fallback: seluruh host Compose di-mask. Di-instansiasi hanya di balik `ClassAvailability.compose`.
 - **`stopReplay()`** mematikan perekaman juga untuk sesi berikutnya sampai `startReplay()` dipanggil.
-- **Snapshot terlalu besar** dipangkas (`oversized`); perubahan berikutnya bisa tidak sinkron sampai full snapshot berikutnya. `seq` chunk mulai dari 0 lagi pada tiap proses.
+- `seq` chunk mulai dari 0 lagi pada tiap proses.
 - **Setelah kill-switch `401` kedaluwarsa**, perekaman tidak otomatis dilanjutkan selama aplikasi tetap di foreground (belum diperbaiki).
 
 **Pengujian**

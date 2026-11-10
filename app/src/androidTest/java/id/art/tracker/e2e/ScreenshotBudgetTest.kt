@@ -122,7 +122,6 @@ class ScreenshotBudgetTest {
 
     @Test
     fun fiveMinutesOfScrolling_staysInTheDataBudget_andCostsAtMostTwoPointsOfJank() {
-        ingest.screenshotEnabled = true
         ARTracker.stopReplay()
         showList()
         Thread.sleep(3_000)
@@ -130,9 +129,8 @@ class ScreenshotBudgetTest {
         val baseline = scrollAndMeasure(durationMs)
 
         ingest.clear()
-        ingest.screenshotEnabled = true
         ARTracker.startReplay()
-        Thread.sleep(3_000) // the config answer arrives and the session switches to screenshots; not measured
+        Thread.sleep(3_000) // warm-up of the recording; not measured
         val withReplay = scrollAndMeasure(durationMs)
         ARTracker.stopReplay()
         ARTracker.flush()

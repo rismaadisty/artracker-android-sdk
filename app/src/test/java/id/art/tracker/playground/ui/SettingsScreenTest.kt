@@ -163,23 +163,12 @@ class SettingsScreenTest {
     }
 
     @Test
-    fun screenshotReplay_isOnByDefaultInTheSample_withAQualityChoice() {
+    fun replayQuality_hasAChoice_andItIsSaved() {
         show()
-        rule.onNodeWithText("Replay screenshot", substring = true).assertExists()
+        rule.onNodeWithText("foto layar asli", substring = true).assertExists()
         rule.onNodeWithText("STANDARD").assertExists()
         rule.onNodeWithText("HIGH").performScrollTo().performClick()
         rule.onNodeWithText("Terapkan & restart").performScrollTo().performClick()
-        val s = saved.last()
-        assertEquals(id.art.tracker.ReplayMode.SCREENSHOT, s.replayMode)
-        assertEquals(id.art.tracker.ReplayQuality.HIGH, s.replayQuality)
-    }
-
-    @Test
-    fun switchingScreenshotReplayOff_hidesTheQualityChoice_andSavesWireframes() {
-        show()
-        rule.onNodeWithText("Replay screenshot", substring = true).performScrollTo().performClick()
-        rule.onNodeWithText("HIGH").assertDoesNotExist()
-        rule.onNodeWithText("Terapkan & restart").performScrollTo().performClick()
-        assertEquals(id.art.tracker.ReplayMode.WIREFRAME, saved.last().replayMode)
+        assertEquals(id.art.tracker.ReplayQuality.HIGH, saved.last().replayQuality)
     }
 }

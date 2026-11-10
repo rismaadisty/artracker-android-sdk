@@ -81,7 +81,6 @@ class ScreenshotScreensTest {
     }
 
     private fun compareFrameWithDevice(withDialog: Boolean, expectedMinAgreement: Double) {
-        ingest.screenshotEnabled = true
         ARTracker.stopReplay()
         val photo = picture().asImageBitmap()
         rule.setContent {

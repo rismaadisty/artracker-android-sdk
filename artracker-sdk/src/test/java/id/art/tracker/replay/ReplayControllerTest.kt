@@ -4,12 +4,9 @@ import android.app.Activity
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
-import android.widget.EditText
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.ARTracker
@@ -19,24 +16,22 @@ import id.art.tracker.ReplayConfig
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.ClassAvailability
-import id.art.tracker.privacy.MaskingPolicy
-import id.art.tracker.replay.capture.ComposeWalkerFactory
-import id.art.tracker.replay.capture.ViewWalker
 import id.art.tracker.replay.touch.TouchRecorder
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
+import id.art.tracker.testutil.testReplayController
+import id.art.tracker.testutil.testScreenshotKit
 import id.art.tracker.transport.NewReplayBatch
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.ByteArrayInputStream
-import java.util.zip.GZIPInputStream
 import java.time.Duration
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.zip.GZIPInputStream
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -51,6 +46,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /** Runs the controller's background work on the test thread, only when asked: fully deterministic. */
 internal class ManualDispatcher : CoroutineDispatcher() {
@@ -67,9 +63,10 @@ internal class ManualDispatcher : CoroutineDispatcher() {
     }
 }
 
-@Suppress("UNCHECKED_CAST")
+/** Lifecycle of the screenshot replay controller: when it records, what it flushes, and what it never emits. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReplayControllerTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
     private val looper: Looper = Looper.getMainLooper()
@@ -117,7 +114,9 @@ class ReplayControllerTest {
             ARTrackerCore(app, cfg, clock, replaySink = sink)
         } else {
             ARTrackerCore(app, cfg, clock, replayFactory = { c, handler ->
-                ReplayController.create(c, ViewWalker(MaskingPolicy(c.config.privacy)), handler, { id, rate -> sampler(id, rate) }, dispatcher)
+                testReplayController(
+                    c, handler, dispatcher, testScreenshotKit(c, handler, sink), { id, rate -> sampler(id, rate) },
+                )
             }, replaySink = sink)
         }
         ARTrackerCore.install(core)
@@ -179,45 +178,30 @@ class ReplayControllerTest {
         dispatcher.runAll()
     }
 
-    /** Closes the open chunk and batch now and waits until the batch reached the sink. */
+    /** Closes the open chunk now and waits until it reached the sink. */
     private fun flushChunks() {
         controller().flushChunks()
         settle()
     }
 
-    /**
-     * Two 5 s flush ticks, 10 s apart on the SDK clock: the first moves the chunk into the open batch (which is not
-     * due yet), the second finds the batch older than its 10 s window and closes it.
-     */
-    private fun tickUntilBatchClosed() {
-        idle(5_000)
+    /** Lets the posted screen-change / session callbacks run (and the capture they request), then processes it. */
+    private fun applyPosted() {
+        idle(200)
         dispatcher.runAll()
-        clock.advance(10_000)
-        idle(5_000)
-        settle()
     }
 
     private fun batches(): List<NewReplayBatch> = sinkBatches.toList()
 
-    private fun gunzip(batch: NewReplayBatch): String =
-        GZIPInputStream(ByteArrayInputStream(batch.gzipBody)).use { String(it.readBytes(), Charsets.UTF_8) }
+    private fun chunk(batch: NewReplayBatch): JSONObject =
+        JSONObject(GZIPInputStream(ByteArrayInputStream(batch.gzipBody)).use { String(it.readBytes(), Charsets.UTF_8) })
 
-    private fun events(batch: NewReplayBatch): List<Map<String, Any?>> =
-        plain(JSONArray(gunzip(batch))) as List<Map<String, Any?>>
+    private fun frameScreens(batch: NewReplayBatch): List<String> =
+        chunk(batch).getJSONArray("frames").let { a -> (0 until a.length()).map { a.getJSONObject(it).getString("screen") } }
 
-    private fun plain(value: Any?): Any? = when (value) {
-        is JSONObject -> value.keys().asSequence().associateWith { plain(value.get(it)) }
-        is JSONArray -> (0 until value.length()).map { plain(value.get(it)) }
-        JSONObject.NULL -> null
-        else -> value
-    }
+    /** The sanitized screen name of every frame that left the SDK, in order. */
+    private fun screens() = batches().flatMap(::frameScreens)
 
-    private fun allEvents() = batches().flatMap(::events)
-
-    private fun fullSnapshots() = allEvents().count { it["type"] == 2 }
-
-    /** Everything that left the SDK for replay, as the JSON text of every batch. */
-    private fun replayJson() = batches().joinToString("\n") { gunzip(it) }
+    private fun frameCount() = screens().size
 
     private fun drawListenerCount(root: View): Int {
         val f = ViewTreeObserver::class.java.getDeclaredField("mOnDrawListeners")
@@ -231,16 +215,20 @@ class ReplayControllerTest {
     }
 
     @Test
-    fun enabledAndSampled_emitsFullSnapshotChunk() {
+    fun enabledAndSampled_emitsAScreenChunk() {
         startCore()
         textActivity()
         idle(1_000)
         dispatcher.runAll()
-        tickUntilBatchClosed()
+        clock.advance(10_000)
+        idle(5_000)
+        settle()
 
         val batch = batches().first()
-        assertEquals(listOf(4, 2), events(batch).take(2).map { it["type"] })
-        assertTrue(gunzip(batch).contains("public text"))
+        val doc = chunk(batch)
+        assertEquals("artracker-screen-v1", doc.getString("format"))
+        assertEquals("android", doc.getString("platform"))
+        assertTrue(doc.getJSONArray("frames").length() >= 1)
         assertEquals(core.session.peekId(), batch.sessionId)
         assertEquals("test", batch.environment)
     }
@@ -253,21 +241,19 @@ class ReplayControllerTest {
         flushChunks()
 
         assertTrue(batches().isNotEmpty())
-        assertEquals(listOf(4, 2), events(batches().first()).take(2).map { it["type"] })
         assertTrue(seen.none { it.name == "replay_chunk" })
     }
 
     @Test
-    fun flushTick_closesBatchOnlyAfterWindow() {
+    fun flushTick_closesTheChunkOnlyAfterItsWindow() {
         startCore()
         textActivity()
         capture()
-        idle(5_000) // flush tick: the chunk moves into the open batch
-        dispatcher.runAll()
+        idle(5_000) // flush tick: the chunk is not due yet
         settle()
         assertTrue(batches().isEmpty())
 
-        clock.advance(5_000) // 5 s after the batch opened: not due
+        clock.advance(5_000) // 5 s after the chunk opened: not due
         idle(5_000)
         settle()
         assertTrue(batches().isEmpty())
@@ -279,14 +265,13 @@ class ReplayControllerTest {
     }
 
     @Test
-    fun halt_closesOpenBatch_onStop() {
+    fun halt_closesTheOpenChunk_onStop() {
         startCore()
         textActivity()
         capture()
         idle(5_000)
-        dispatcher.runAll()
         settle()
-        assertTrue(batches().isEmpty()) // chunk is in the batch, which is not due
+        assertTrue(batches().isEmpty()) // the chunk is open and not due
 
         ARTracker.stopReplay()
         settle()
@@ -295,12 +280,11 @@ class ReplayControllerTest {
     }
 
     @Test
-    fun halt_closesOpenBatch_onAppBackground() {
+    fun halt_closesTheOpenChunk_onAppBackground() {
         startCore()
         textActivity()
         capture()
         idle(5_000)
-        dispatcher.runAll()
         settle()
         assertTrue(batches().isEmpty())
 
@@ -311,30 +295,28 @@ class ReplayControllerTest {
     }
 
     @Test
-    fun sessionRotation_closesPreviousBatch_beforeNewSessionEvents() {
+    fun sessionRotation_closesThePreviousChunk_beforeNewSessionFrames() {
         startCore()
         textActivity()
         capture()
         val first = core.session.peekId()!!
         ARTracker.reset()
         idle(200)
-        capture() // first frame of the new session: the previous session's batch is closed by then
+        capture() // first frame of the new session: the previous session's chunk is closed by then
         val second = core.session.peekId()!!
         assertTrue(first != second)
 
         assertEquals(listOf(first), batches().map { it.sessionId })
-        assertEquals(listOf(4, 2), events(batches().single()).map { it["type"] })
         flushChunks()
         assertEquals(listOf(first, second), batches().map { it.sessionId })
     }
 
     @Test
-    fun disabled_discardsOpenBatch() {
+    fun disabled_discardsTheOpenChunk() {
         startCore()
         textActivity()
         capture()
-        idle(5_000) // the chunk is now in the open batch
-        dispatcher.runAll()
+        idle(5_000)
         settle()
 
         ARTracker.optOut(true)
@@ -348,7 +330,7 @@ class ReplayControllerTest {
     }
 
     @Test
-    fun noteError_flagsBatch() {
+    fun noteError_flagsTheChunk() {
         startCore()
         textActivity()
         capture()
@@ -401,9 +383,10 @@ class ReplayControllerTest {
         ARTracker.startReplay()
         idle(1_000)
         dispatcher.runAll()
-        tickUntilBatchClosed()
+        capture()
+        flushChunks()
 
-        assertTrue(fullSnapshots() >= 1)
+        assertTrue(frameCount() >= 1)
     }
 
     @Test
@@ -467,137 +450,72 @@ class ReplayControllerTest {
         // Only SDK-owned callbacks: the global looper queue also holds unrelated posts (WorkManager, Robolectric).
         assertEquals("pending SDK callbacks: ${pendingSdkCallbacks()}", emptyList<String>(), pendingSdkCallbacks())
         assertEquals(1, batches().size) // flushed on background
-        assertEquals(1, fullSnapshots())
+        assertEquals(1, frameCount())
 
         idle(130_000)
         settle()
         assertEquals(1, batches().size)
 
-        // Foreground again: recording resumes with a fresh full snapshot.
+        // Foreground again: recording resumes with a first frame that is never suppressed as a duplicate.
         ProcessLifecycleTestUtil.start()
-        idle(200)
-        dispatcher.runAll()
+        applyPosted()
+        capture()
         flushChunks()
-        assertEquals(2, fullSnapshots())
+        assertEquals(2, frameCount())
         assertTrue(activity.window.callback is TouchRecorder)
     }
 
     @Test
-    fun passwordNeverInChunk() {
-        startCore()
-        launch { a ->
-            LinearLayout(a).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(EditText(a).apply {
-                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                    setText("hunter2")
-                })
-                addView(EditText(a).apply { setText("my-secret-note") })
-                addView(TextView(a).apply { text = "public text" })
-            }
-        }
-        capture()
-        flushChunks()
-
-        val json = replayJson()
-        assertTrue(json.contains("public text"))
-        assertFalse(json.contains("hunter2"))
-        assertFalse(json.contains("my-secret-note"))
-    }
-
-    @Test
-    fun mutationAfterTextChange() {
-        startCore()
-        val (_, tv) = textActivity("before")
-        capture()
-        tv.text = "after!"
-        capture()
-        flushChunks()
-
-        val events = allEvents()
-        assertEquals(1, events.count { it["type"] == 2 })
-        val mutation = events.last()
-        assertEquals(3, mutation["type"])
-        val texts = (mutation["data"] as Map<String, Any?>)["texts"] as List<Map<String, Any?>>
-        assertEquals(listOf("after!"), texts.map { it["value"] })
-    }
-
-    @Test
-    fun unchangedFrame_emitsNoEvent() {
+    fun anUnchangedScreen_emitsNoSecondFrame() {
         startCore()
         textActivity()
         capture()
         capture()
         flushChunks()
-        assertEquals(listOf(4, 2), allEvents().map { it["type"] })
+        assertEquals(1, frameCount())
     }
 
     @Test
-    fun screenChange_forcesFullSnapshot() {
+    fun screenChange_forcesAFrame_evenWhenThePictureIsTheSame() {
         startCore()
         textActivity()
         capture()
         ARTracker.screen("Checkout")
-        idle(200) // the screen change requests a capture soon
-        dispatcher.runAll()
+        applyPosted() // the screen change requests a forced capture soon
         flushChunks()
 
-        assertEquals(2, fullSnapshots())
-        val metas = allEvents().filter { it["type"] == 4 }.map { (it["data"] as Map<String, Any?>)["href"] }
-        assertEquals("android://Checkout", metas.last())
+        assertEquals(2, frameCount())
+        assertEquals("android://Checkout", screens().last())
     }
 
     @Test
-    fun droppedFrame_forcesFullSnapshot() {
+    fun checkout_every120s_forcesAFrame_evenWhenThePictureIsTheSame() {
         startCore()
-        val (_, tv) = textActivity("one")
+        textActivity()
         capture()
-        tv.text = "two"
-        controller().captureFrame() // not processed yet...
-        tv.text = "six"
-        controller().captureFrame() // ...so the previous frame is dropped
-        dispatcher.runAll()
+        clock.advance(120_000)
+        idle(5_000) // the flush tick sees the checkout interval is over and asks for a forced capture
+        applyPosted() // ...which the scheduler runs soon after
         flushChunks()
 
-        val events = allEvents()
-        assertEquals(2, events.count { it["type"] == 2 })
-        assertTrue(events.none { it["type"] == 3 && (it["data"] as Map<String, Any?>)["source"] == 0 })
+        assertEquals(2, frameCount())
     }
 
     @Test
-    fun checkout_every120s_forcesFullSnapshot() {
-        startCore()
-        val (_, tv) = textActivity("one")
-        capture()
-        tv.text = "two"
-        clock.advance(60_000)
-        capture()
-        tv.text = "six"
-        clock.advance(60_000)
-        capture()
-        flushChunks()
-
-        assertEquals(listOf(4, 2, 3, 4, 2), allEvents().map { it["type"] })
-    }
-
-    @Test
-    fun newSession_forcesFullSnapshot() {
+    fun newSession_startsANewChunk() {
         startCore()
         textActivity()
         capture()
         val first = core.session.peekId()!!
         ARTracker.reset() // rotates the session
-        idle(200)
-        dispatcher.runAll()
+        applyPosted()
+        capture()
         flushChunks()
 
         val second = core.session.peekId()!!
         assertTrue(first != second)
-        val old = batches().filter { it.sessionId == first }
-        val new = batches().filter { it.sessionId == second }
-        assertEquals(1, old.size)
-        assertEquals(1, new.size)
-        assertEquals(listOf(4, 2), events(new.single()).map { it["type"] })
+        assertEquals(1, batches().count { it.sessionId == first })
+        assertEquals(1, batches().count { it.sessionId == second })
     }
 
     @Test
@@ -615,14 +533,14 @@ class ReplayControllerTest {
         assertFalse(controller().isRunning)
         assertSame(activity, activity.window.callback)
         assertEquals(0, drawListenerCount(activity.window.decorView))
-        assertEquals(listOf(firstOnly), batches().map { it.sessionId }) // only the flushed first-session batch
+        assertEquals(listOf(firstOnly), batches().map { it.sessionId }) // only the flushed first-session chunk
         idle(10_000)
         settle()
         assertEquals(1, batches().size)
     }
 
     @Test
-    fun touches_areRecordedInDp_andUpRequestsCapture() {
+    fun touches_areRecordedInDp_onTheChunkOfTheFrames() {
         startCore()
         val (activity, _) = textActivity()
         capture()
@@ -632,29 +550,52 @@ class ReplayControllerTest {
         dispatcher.runAll()
         flushChunks()
 
-        val touches = allEvents().filter { it["type"] == 3 && (it["data"] as Map<String, Any?>)["source"] == 2 }
-        assertEquals(listOf(7, 9), touches.map { (it["data"] as Map<String, Any?>)["type"] })
-        val data = touches.first()["data"] as Map<String, Any?>
-        assertEquals(Math.round(100f / density), data["x"])
-        assertEquals(Math.round(200f / density), data["y"])
+        val touches = chunk(batches().single()).getJSONArray("touches")
+        assertEquals(listOf("down", "up"), (0 until touches.length()).map { touches.getJSONObject(it).getString("kind") })
+        assertEquals(Math.round(100f / density), touches.getJSONObject(0).getInt("x"))
+        assertEquals(Math.round(200f / density), touches.getJSONObject(0).getInt("y"))
     }
 
     @Test
-    fun composeAbsent_noComposeClassLoading() {
+    fun screenshotDisabled_stopsRecordingForTheProcess_andDropsTheOpenChunk() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+
+        controller().onScreenshotDisabled()
+        settle()
+
+        assertFalse(controller().isRunning)
+        assertSame(activity, activity.window.callback)
+        assertEquals(0, drawListenerCount(activity.window.decorView))
+        assertTrue(batches().isEmpty()) // dropped, not uploaded into another 403
+
+        controller().onScreenshotDisabled() // a second 403 changes nothing
+        ARTracker.startReplay() // not even a manual start brings it back
+        ProcessLifecycleTestUtil.stop()
+        ProcessLifecycleTestUtil.start()
+        idle(10_000)
+        settle()
+        assertFalse(controller().isRunning)
+        assertTrue(batches().isEmpty())
+    }
+
+    @Test
+    fun composeAbsent_theDefaultFactoryStillBuildsAWorkingController() {
         ClassAvailability.overrides["androidx.compose.ui.platform.AndroidComposeView"] = false
-        val before = ComposeWalkerFactory.createCalls.get()
         startCore(useDefaultFactory = true)
         textActivity()
         assertNotNull(core.replayController)
-        assertEquals(before, ComposeWalkerFactory.createCalls.get())
+        assertTrue(controller().isRunning)
     }
 
     @Test
-    fun composePresent_composeWalkerCreated() {
+    fun composePresent_theDefaultFactoryStillBuildsAWorkingController() {
         ClassAvailability.overrides["androidx.compose.ui.platform.AndroidComposeView"] = true
-        val before = ComposeWalkerFactory.createCalls.get()
         startCore(useDefaultFactory = true)
-        assertEquals(before + 1, ComposeWalkerFactory.createCalls.get())
+        textActivity()
+        assertNotNull(core.replayController)
+        assertTrue(controller().isRunning)
     }
 
     @Test
@@ -687,49 +628,45 @@ class ReplayControllerTest {
         controller().hrefBuilder = { name -> computed += name; ReplayHref.of(name) }
 
         ARTracker.screen("Profile")
+        applyPosted()
         repeat(3) { capture() }
         assertEquals(listOf<String?>("Profile"), computed)
 
         ARTracker.screen("Settings")
+        applyPosted()
         repeat(3) { capture() }
         assertEquals(listOf<String?>("Profile", "Settings"), computed)
 
         // Going back recomputes (only the LAST name is cached) and the output stays correct.
         ARTracker.screen("Profile")
+        applyPosted()
         capture()
         assertEquals(listOf<String?>("Profile", "Settings", "Profile"), computed)
         flushChunks()
-        assertEquals("android://Profile", hrefs().last())
+        assertEquals("android://Profile", screens().last())
 
         // A cached value is still the sanitized one (path ids masked), for every frame that reuses it.
         computed.clear()
         ARTracker.screen("order/12345")
+        applyPosted()
         repeat(2) { capture() }
         assertEquals(listOf<String?>("order/12345"), computed)
         flushChunks()
-        assertEquals("android://order/:id", hrefs().last())
+        assertEquals("android://order/:id", screens().last())
     }
-
-    private fun hrefs() = allEvents().filter { it["type"] == 4 }.map { (it["data"] as Map<String, Any?>)["href"] as String }
 
     @Test
     fun screenNameWithEmail_neverInChunk() {
         startCore()
         textActivity()
         ARTracker.screen("Profile john@doe.com")
-        idle(200)
+        applyPosted()
         capture()
-        capture() // same screen again: same href, no extra full snapshot
         flushChunks()
 
-        val json = replayJson()
-        assertFalse(json.contains("john@doe.com"))
-        assertFalse(json.contains("john"))
-        assertTrue(json.contains("public text"))
-        assertEquals(1, hrefs().distinct().count { it.startsWith("android://Profile") })
-        // The pending first frame was replaced before processing, so one full snapshot for Profile; the second
-        // capture of the same screen compares equal hrefs and adds no snapshot.
-        assertEquals(1, fullSnapshots())
+        assertTrue(screens().isNotEmpty())
+        assertTrue(screens().none { it.contains("john") })
+        assertEquals(1, screens().distinct().count { it.startsWith("android://Profile") })
     }
 
     @Test
@@ -738,14 +675,12 @@ class ReplayControllerTest {
         textActivity()
         val jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlMTIz"
         ARTracker.screen("Detail $jwt")
-        idle(200)
+        applyPosted()
         capture()
         flushChunks()
 
-        val json = replayJson()
-        assertFalse(json.contains("eyJhbGciOiJIUzI1NiJ9"))
-        assertFalse(json.contains("c2lnbmF0dXJlMTIz"))
-        assertTrue(hrefs().last().startsWith("android://Detail"))
+        assertTrue(screens().none { it.contains("eyJhbGciOiJIUzI1NiJ9") || it.contains("c2lnbmF0dXJlMTIz") })
+        assertTrue(screens().last().startsWith("android://Detail"))
     }
 
     @Test
@@ -753,69 +688,65 @@ class ReplayControllerTest {
         startCore()
         textActivity()
         ARTracker.screen("CheckoutActivity")
-        idle(200)
+        applyPosted()
         capture()
         flushChunks()
-        assertEquals("android://CheckoutActivity", hrefs().last())
-    }
-
-    /**
-     * Sets the screen and captures at once, BEFORE the posted screen-change callback runs: the frame then carries no
-     * forced full snapshot, so only the processor's own screen comparison can produce one.
-     */
-    private fun showScreen(name: String) {
-        ARTracker.screen(name)
-        capture()
-    }
-
-    private fun typesAfterLastFlush(before: Int) = allEvents().drop(before).map { it["type"] }
-
-    @Test
-    fun distinctNonAsciiScreens_withSameHref_stillGetFullSnapshot() {
-        startCore()
-        textActivity()
-        showScreen("首页")
-        flushChunks()
-        val before = allEvents().size
-        showScreen("设置")
-        capture() // same screen again: nothing new
-        flushChunks()
-
-        assertEquals(listOf(4, 2), typesAfterLastFlush(before))
-        assertEquals(setOf("android://unknown"), hrefs().takeLast(2).toSet())
-        assertEquals(hrefs()[hrefs().size - 2], hrefs().last())
+        assertEquals("android://CheckoutActivity", screens().last())
     }
 
     @Test
-    fun routesDifferingOnlyInPathId_getFullSnapshot() {
+    fun distinctNonAsciiScreens_withTheSameHref_stillGetAFrame() {
         startCore()
         textActivity()
-        showScreen("order/123456")
+        ARTracker.screen("首页")
+        applyPosted()
+        capture()
         flushChunks()
-        val before = allEvents().size
-        showScreen("order/987654")
-        flushChunks()
+        val before = frameCount()
 
-        assertEquals(listOf(4, 2), typesAfterLastFlush(before))
-        assertEquals(listOf("android://order/:id", "android://order/:id"), hrefs().takeLast(2))
-        val json = replayJson()
-        assertFalse(json.contains("123456"))
-        assertFalse(json.contains("987654"))
-    }
-
-    @Test
-    fun rawScreenKey_neverInChunk() {
-        startCore()
-        textActivity()
-        showScreen("ScreenKeyMarker-ä")
-        showScreen("ScreenKeyMarker-ö") // same sanitized href, different raw key -> full snapshot
+        ARTracker.screen("设置") // the same sanitized href, a different raw name: the change is still noticed
+        applyPosted()
         capture()
         flushChunks()
 
-        val json = replayJson()
-        assertFalse(json.contains("ScreenKeyMarker-ä"))
-        assertFalse(json.contains("ScreenKeyMarker-ö"))
-        assertTrue(json.contains("android://ScreenKeyMarker-_"))
-        assertTrue(fullSnapshots() >= 2)
+        assertEquals(before + 1, frameCount())
+        assertEquals(setOf("android://unknown"), screens().takeLast(2).toSet())
+    }
+
+    @Test
+    fun routesDifferingOnlyInPathId_stillGetAFrame_andNoIdIsEmitted() {
+        startCore()
+        textActivity()
+        ARTracker.screen("order/123456")
+        applyPosted()
+        capture()
+        flushChunks()
+        val before = frameCount()
+
+        ARTracker.screen("order/987654")
+        applyPosted()
+        capture()
+        flushChunks()
+
+        assertEquals(before + 1, frameCount())
+        assertEquals(listOf("android://order/:id", "android://order/:id"), screens().takeLast(2))
+        assertTrue(screens().none { it.contains("123456") || it.contains("987654") })
+    }
+
+    @Test
+    fun rawScreenName_neverInChunk() {
+        startCore()
+        textActivity()
+        ARTracker.screen("ScreenKeyMarker-ä")
+        applyPosted()
+        capture()
+        ARTracker.screen("ScreenKeyMarker-ö") // same sanitized href, different raw name
+        applyPosted()
+        capture()
+        flushChunks()
+
+        assertTrue(screens().none { it.contains("ScreenKeyMarker-ä") || it.contains("ScreenKeyMarker-ö") })
+        assertTrue(screens().all { it == "android://ScreenKeyMarker-_" })
+        assertEquals(2, frameCount())
     }
 }

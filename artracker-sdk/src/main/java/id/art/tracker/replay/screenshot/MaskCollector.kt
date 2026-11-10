@@ -12,8 +12,8 @@ internal fun interface ComposeMaskApi {
 }
 
 /**
- * Collects the regions of a window's view tree that must be painted over in a screenshot: the same rules as the
- * wireframe walker ([MaskingPolicy]: passwords, sensitive inputs, `maskAllInputs`, `maskAllText`, explicit masks,
+ * Collects the regions of a window's view tree that must be painted over in a screenshot: the rules of
+ * [MaskingPolicy] (passwords, sensitive inputs, `maskAllInputs`, `maskAllText`, explicit masks,
  * sensitive classes) plus blocked views (WebView, surfaces, maps), which are always masked.
  *
  * Main thread only, read-only. Fails closed: when anything cannot be read, [collect] returns false and the caller

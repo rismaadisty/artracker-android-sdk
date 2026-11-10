@@ -169,7 +169,7 @@ private fun MovingBox() {
     }
 }
 
-/** Screenshot replay: which mode the saved settings use, the local sink's server switch, what it received, and an export. */
+/** Screenshot replay: the saved quality, whether the local sink accepts screenshots, what it received, and an export. */
 @Composable
 private fun ScreenshotSection() {
     val context = LocalContext.current
@@ -178,7 +178,7 @@ private fun ScreenshotSection() {
     var allowed by remember { mutableStateOf(servers.screenshotAllowed) }
     Text(stringResource(R.string.lab_replay_screenshot), style = MaterialTheme.typography.titleSmall)
     Text(
-        stringResource(R.string.lab_replay_screenshot_mode, saved.replayMode.name, saved.replayQuality.name),
+        stringResource(R.string.lab_replay_screenshot_mode, saved.replayQuality.name),
         style = MaterialTheme.typography.bodyMedium,
     )
     if (servers.sinkAvailable) {

@@ -10,7 +10,6 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.URL
 import java.util.zip.GZIPOutputStream
-import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -84,12 +83,11 @@ class InAppSinkTest {
     }
 
     @Test
-    fun replayUpload_threeSteps_storesChunkAndExports() {
+    fun replayUpload_threeSteps_storesTheChunkAndCountsIt() {
         assertTrue(sink.start())
         val uploadUrl = requestUploadUrl(seq = 7)
-        val events = "[{\"type\":4,\"timestamp\":1000},{\"type\":2,\"timestamp\":1001},{\"type\":3,\"timestamp\":2500}]"
 
-        assertEquals(200, call("PUT", uploadUrl, gzip(events.toByteArray()), "application/gzip").first)
+        assertEquals(200, call("PUT", uploadUrl, screenChunk(frames = 3, seq = 7), "application/gzip").first)
         val (ackCode, ackText) = call(
             "POST", base() + "/api/v1/replay/chunk-ack",
             "{\"session_id\":\"session-abc-123\",\"chunk_seq\":7}".toByteArray(), "application/json",
@@ -97,27 +95,11 @@ class InAppSinkTest {
         assertEquals(200, ackCode)
         assertEquals("{\"status\":\"acknowledged\"}", ackText)
 
-        val file = sink.exportReplayChunks(tmp.newFolder("replay"))
-        val array = JSONArray(file!!.readText())
-        assertEquals(1, array.length())
-        val chunk = array.getJSONObject(0)
-        assertEquals(7, chunk.getInt("seq"))
-        assertEquals(1000L, chunk.getLong("start"))
-        assertEquals(2500L, chunk.getLong("end"))
-        assertTrue(chunk.getBoolean("full_snapshot"))
-        assertEquals("android", chunk.getString("platform"))
-        val stored = chunk.getJSONArray("events")
-        assertEquals(listOf(4, 2, 3), (0 until stored.length()).map { stored.getJSONObject(it).getInt("type") })
+        val stats = sink.screenshotStats()
+        assertEquals(1, stats.chunks)
+        assertEquals(3, stats.frames)
         // The replay upload is not an ingest item: the Inspector does not list it.
         assertEquals(0, ring.items.value.size)
-    }
-
-    @Test
-    fun replayUpload_neverStoresTheApiKey() {
-        assertTrue(sink.start())
-        requestUploadUrl(seq = 0)
-        val file = sink.exportReplayChunks(tmp.newFolder("nokey"))
-        assertFalse(file?.readText().orEmpty().contains("art_live_"))
     }
 
     @Test
@@ -126,7 +108,7 @@ class InAppSinkTest {
         val uploadUrl = requestUploadUrl(seq = 1)
 
         assertEquals(413, call("PUT", uploadUrl, gzip(ByteArray(5 * 1024 * 1024)), "application/gzip").first)
-        assertEquals("[]", sink.exportReplayChunks(tmp.newFolder("big"))!!.readText())
+        assertEquals(0, sink.screenshotStats().chunks)
     }
 
     @Test
@@ -208,25 +190,7 @@ class InAppSinkTest {
         val key = "art_live_SECRETSECRETSECRETSECRETSECRETSECRET"
         post(gzip(envelope(itemJson("a")).toByteArray()), key = key)
         assertFalse(ring.items.value.toString().contains("SECRETSECRET"))
-        val file = sink.exportReplayChunks(tmp.newFolder("out"))
-        assertFalse(file?.readText().orEmpty().contains("SECRETSECRET"))
-    }
-
-    @Test
-    fun replayChunksAreExportedIntactAndCappedAtFifty() {
-        assertTrue(sink.start())
-        repeat(60) { i ->
-            val chunk = "{\"seq\":$i,\"events\":[{\"type\":4},{\"type\":2},{\"type\":3}]}"
-            post(gzip(envelope(itemJson("replay_chunk", type = "session", attributes = chunk)).toByteArray()))
-        }
-        val file = sink.exportReplayChunks(tmp.newFolder("chunks"))
-        assertNotNull(file)
-        val array = JSONArray(file!!.readText())
-        assertEquals(50, array.length())
-        assertEquals(10, array.getJSONObject(0).getInt("seq"))
-        assertEquals(59, array.getJSONObject(49).getInt("seq"))
-        assertEquals(3, array.getJSONObject(0).getJSONArray("events").length())
-        assertTrue(ring.items.value.all { it.attributes["events"] == "3 events" })
+        assertTrue(sink.exportScreenshots(tmp.newFolder("out")).orEmpty().none { it.readText().contains("SECRETSECRET") })
     }
 
     private fun screenChunk(frames: Int, seq: Int = 0): ByteArray {
@@ -247,24 +211,12 @@ class InAppSinkTest {
     }
 
     @Test
-    fun replayConfig_tellsTheSdkWhetherScreenshotsAreAllowed() {
-        assertTrue(sink.start())
-        val (code, text) = post(ByteArray(0), path = "/api/v1/replay/config", method = "GET")
-        assertEquals(200, code)
-        assertTrue(JSONObject(text).getBoolean("screenshot_enabled"))
-        assertTrue(JSONObject(text).getDouble("max_fps") > 0)
-        sink.screenshotEnabled = false
-        assertFalse(JSONObject(post(ByteArray(0), path = "/api/v1/replay/config", method = "GET").second).getBoolean("screenshot_enabled"))
-    }
-
-    @Test
-    fun whenScreenshotsAreOff_aScreenshotChunkUrlGets403ScreenshotDisabled_butWireframesStillWork() {
+    fun whenScreenshotsAreOff_aChunkUrlGets403ScreenshotDisabled() {
         assertTrue(sink.start())
         sink.screenshotEnabled = false
         val (code, text) = requestScreenUploadUrl(0)
         assertEquals(403, code)
         assertEquals("screenshot_disabled", JSONObject(text).getString("error"))
-        requestUploadUrl(seq = 1) // a wireframe chunk is unaffected
     }
 
     @Test
@@ -283,8 +235,6 @@ class InAppSinkTest {
         val files = sink.exportScreenshots(dir)!!
         assertEquals(2, files.size)
         assertTrue(files.all { it.name.endsWith(".jpg") && it.length() == 4L })
-        // a screenshot chunk is not a wireframe chunk
-        assertEquals("[]", sink.exportReplayChunks(tmp.newFolder("wf"))!!.readText())
     }
 
     @Test

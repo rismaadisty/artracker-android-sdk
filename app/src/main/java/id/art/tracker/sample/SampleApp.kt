@@ -9,7 +9,6 @@ import id.art.tracker.BeforeSend
 import id.art.tracker.ExperimentalARTrackerApi
 import id.art.tracker.NetworkConfig
 import id.art.tracker.ReplayConfig
-import id.art.tracker.ReplayMode
 import id.art.tracker.ReplayQuality
 import id.art.tracker.playground.settings.PlaygroundSettings
 
@@ -58,8 +57,7 @@ object SampleApp {
         environment = "sample",
         debug = debug,
         replay = ReplayConfig(
-            enabled = true, sampleRate = 1.0, framesPerSecond = 2.0,
-            mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.STANDARD,
+            enabled = true, sampleRate = 1.0, framesPerSecond = 2.0, quality = ReplayQuality.STANDARD,
         ),
         network = NetworkConfig(sender = sender),
         beforeSend = beforeSend,

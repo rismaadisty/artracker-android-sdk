@@ -85,13 +85,13 @@ class SampleAppTest {
     }
 
     @Test
-    fun theSampleRecordsScreenshotReplay_withAndWithoutSettings() {
+    fun theSampleRecordsReplay_withAndWithoutSettings() {
         val key = "art_live_" + "a".repeat(43)
         val legacy = SampleApp.config("http://sample.sdk-test.invalid:3000", key, debug = false).replay
-        assertEquals(id.art.tracker.ReplayMode.SCREENSHOT, legacy.mode)
         assertEquals(2.0, legacy.framesPerSecond, 0.0)
         assertTrue(legacy.enabled)
         val fromSettings = SampleApp.config("http://localhost:1", key, debug = false, settings = PlaygroundSettings.DEFAULT).replay
-        assertEquals(id.art.tracker.ReplayMode.SCREENSHOT, fromSettings.mode)
+        assertTrue(fromSettings.enabled)
+        assertEquals(2.0, fromSettings.framesPerSecond, 0.0)
     }
 }

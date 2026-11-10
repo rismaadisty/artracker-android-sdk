@@ -5,17 +5,31 @@ versions follow semantic versioning (`0.x`: the API may still change).
 
 ## [Unreleased]
 
+### Removed (breaking)
+
+- **Wireframe replay is gone; real, masked screenshots are the only replay.** Removed: `ReplayMode` (and
+  `ReplayConfig.mode`), the wireframe capture (`ViewWalker`, `ComposeWalker` and their style readers, icon rasterizer),
+  `Wireframe` / `WireframeDiffer`, the rrweb encoder, `ReplayChunker`, `ReplayBatcher`, and the rrweb upload format.
+  `ReplayConfig(enabled, sampleRate, framesPerSecond, quality)` is the whole configuration, and the SDK initialises
+  straight into screenshot recording. Migrating: drop `mode = ...` from your `ReplayConfig`.
+- **The SDK no longer reads any replay setting from the server.** `GET /api/v1/replay/config`, its cache, `max_fps`
+  and the switch from wireframes to screenshots are removed. The only server signal left is on upload: `403
+  {"error":"screenshot_disabled"}` on `chunk-url` (without a readable body it is treated the same) means the project owner
+  switched screenshot replay off. The SDK drops the chunk, deletes the queued ones and stops recording in that process
+  (there is no wireframe fallback any more); it never counts as a revoked key.
+- `framesPerSecond` is clamped to 0.5..10 (2 recommended); there is no 4 fps wireframe ceiling.
+- **Contract change of the experimental `ARTrackerSender`:** the `GET` (empty body) request for `/api/v1/replay/config`
+  is gone. A sender now only sees `POST` and `PUT` requests with a body.
+- `tools/replay-viewer` (the `rrweb-player` page and `validate-chunks.mjs`) is removed: nothing produces rrweb chunks
+  any more.
+- Chunks that are still queued from an older SDK as wireframe (rrweb) batches are discarded when `artracker_replay.db`
+  is upgraded (version 3); the per-session `seq` counters stay.
+
 ### Added (screenshot replay)
 
-- **Screenshot replay mode** (opt-in): `ReplayConfig(mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.STANDARD)`.
-  The dashboard shows what the user saw (real fonts, icons, photos, colors, movement) instead of a rebuilt wireframe.
-  `ReplayMode.WIREFRAME` (the default) is the previous behaviour; nothing changes unless you opt in. `framesPerSecond` is
-  clamped to 0.5..4 for wireframes and 0.5..10 for screenshots (2 recommended). `ReplayQuality` presets (short side of the
-  image / JPEG quality): `LOW` 480 px / 50, `STANDARD` 720 px / 60, `HIGH` 1080 px / 75; never upscaled.
-- **The project owner controls it from the server**: `GET /api/v1/replay/config` answers `{screenshot_enabled, max_fps}`
-  (cached, refreshed at every replay start). Until the first answer a session records wireframes, then switches. A
-  `403 {"error":"screenshot_disabled"}` on `chunk-url` (or a "disabled" answer) switches the running session back to
-  wireframes, deletes the queued screenshot chunks and forces a full snapshot. `max_fps` caps the capture rate.
+- `ReplayConfig(quality = ReplayQuality.STANDARD)`. The dashboard shows what the user saw (real fonts, icons, photos,
+  colors, movement). `ReplayQuality` presets (short side of the image / JPEG quality): `LOW` 480 px / 50, `STANDARD`
+  720 px / 60, `HIGH` 1080 px / 75; never upscaled.
 - **Masking happens on the device, before compression**: password / sensitive / explicitly masked views, `maskAllInputs`,
   `maskAllText`, `sensitiveViewClasses`, Compose semantics (a mask-only pass) and blocked views (WebView, SurfaceView,
   TextureView, VideoView, maps) are painted over with an opaque cross-stripe pattern on the full-size bitmap, then scaled
@@ -27,41 +41,26 @@ versions follow semantic versioning (`0.x`: the API may still change).
   reused bitmaps, identical frames (CRC of a 64x64 downscale) are skipped, a 16 ms main-thread watchdog halves the rate.
 - Data budget: about 5 MB per minute. A rolling 60 s byte window halves the fps (down to 0.5) when exceeded and, if the
   overrun persists, steps the quality down one preset for the session. Chunks (`artracker-screen-v1`, gzipped JSON of
-  frames and touches) close at 10 s or 2 MB; uploads use the same three-step API with `"format":"artracker-screen-v1"`
-  in the `chunk-url` request and work on any network.
+  frames and touches) close at 10 s or 2 MB; uploads use the three-step Session Replay API with
+  `"format":"artracker-screen-v1"` in the `chunk-url` request and work on any network.
 
 ### Changed (screenshot replay)
 
-- `ReplayStore` (DB version 2): batch bodies are files under `noBackupFilesDir/artracker/replay/` (the old BLOB column
-  hit Android's ~2 MB `CursorWindow` limit); the table keeps metadata, the file name and the body `format`. Existing
-  BLOB rows are written out to files on upgrade. The offline cap is now **50 MB** / 200 batches (was 20 MiB).
-  `ReplayResult.ScreenshotDisabled` and `ReplayQueue.clearFormat` are internal.
+- `ReplayStore` (DB version 3): chunk bodies are files under `noBackupFilesDir/artracker/replay/` (the old BLOB column
+  hit Android's ~2 MB `CursorWindow` limit); the table keeps metadata, the file name and the body `format`. The offline
+  cap is now **50 MB** / 200 chunks (was 20 MiB). `ReplayResult.ScreenshotDisabled` and `ReplayQueue.clearFormat` are
+  internal.
 - `FrameScheduler`: configurable fps ceiling and an outside fps cap.
-- **Contract change of the experimental `ARTrackerSender`:** screenshot mode adds a `GET` (empty body) to
-  `/api/v1/replay/config`; a sender must send no body for it (`ARTrackerOkHttpSender` does). Return the body of error
-  responses too: a `403` on a screenshot `chunk-url` carries `screenshot_disabled` there (without a readable body it is
-  still treated as that, never as a revoked key).
-
-### Fixed (wireframe replay)
-
-- `RrwebEncoder` mutations sent a whole subtree as one nested `adds` entry, so later adds could not find their parent
-  (`Node ... not found` in the player). Now one `adds` entry per node, pre-order, parent first, with element nodes sent
-  without their children, the text node as its own entry and `nextId` only on the subtree root.
-- Text uses `font-family:Roboto,<generic>` instead of the bare generic family.
-- `tools/replay-viewer/index.html` loaded a file that does not exist in the pinned `rrweb-player` version (404), so the
-  viewer could not play anything; it now loads the ES module build. The recorded wireframe session plays with no replayer
-  warnings (see `tools/replay-viewer/README.md`).
-- `overflow:hidden` is written only for nodes that clip (`clipToOutline`, scroll containers, Compose clip); other boxes
-  no longer cut off titles and icons measured larger than their box.
+- **Contract of the experimental `ARTrackerSender`:** return the body of error responses too: a `403` on a `chunk-url`
+  carries `screenshot_disabled` there (without a readable body it is still treated as that, never as a revoked key).
 
 ### Changed
 
 - Session replay now uploads through the backend's Session Replay API instead of `replay_chunk` items in
-  `POST /api/v1/ingest`: `POST /api/v1/replay/chunk-url`, `PUT` of the gzipped rrweb events to the returned signed URL,
-  then `POST /api/v1/replay/chunk-ack`. Chunks are merged into per-session batches (256 KB or 10 s), queued in their own
-  `artracker_replay.db` (20 MiB / 200 batches, 8 attempts, 7 days, `seq` persisted per session) and retried idempotently.
-  `replay_chunk` handling was removed from the ingest pipeline.
-- **Breaking for older backends:** a backend without the replay endpoints answers `404`, so replay batches are dropped and
+  `POST /api/v1/ingest`: `POST /api/v1/replay/chunk-url`, `PUT` of the gzipped chunk to the returned signed URL,
+  then `POST /api/v1/replay/chunk-ack`. Chunks are queued in their own `artracker_replay.db` (8 attempts, 7 days, `seq`
+  persisted per session) and retried idempotently. `replay_chunk` handling was removed from the ingest pipeline.
+- **Breaking for older backends:** a backend without the replay endpoints answers `404`, so replay chunks are dropped and
   no replay is shown until the backend is upgraded. Ingest events are unaffected.
 - Replay uploads go through `NetworkConfig.sender` when one is set, so Chucker, certificate pinning and proxies cover them
   too. **Contract change of the experimental `ARTrackerSender`:** `SendRequest` gained `method` (`POST`, or `PUT` for the
@@ -72,17 +71,6 @@ versions follow semantic versioning (`0.x`: the API may still change).
 
 ### Added
 
-- Session replay now carries the app's own look, not only boxes and text: view backgrounds (`ColorDrawable`,
-  `GradientDrawable` with gradient, radius and stroke, Material shape drawables), Compose fills, gradients, rounded
-  shapes, borders, shadows and clips, elevation, font weight / italic / alignment / multi-line wrapping, and layout nodes
-  without semantics (a `Box` with `Modifier.background`). The rrweb snapshot also ships a small default `<style>`
-  (sans-serif, single-line text) so a chunk renders sensibly in any player.
-- **Privacy change:** small **vector icons** (`VectorDrawable`, `VectorDrawableCompat`, Compose `VectorPainter` /
-  `ColorPainter`, intrinsic size up to 64 dp) are now rasterized at their own size and sent as WebP/PNG data URIs (at
-  most 6 KB each; cached per source, variant and pixel content; at most 24 new encodes per frame). **Bitmaps are never
-  rasterized, however small** (an image loader hands a 40 dp avatar over as a <= 64 px bitmap), so photos, thumbnails,
-  `BitmapPainter`, third-party painters (Coil/Glide) and every masked node keep the neutral placeholder, and
-  `contentDescription` is still never captured. Apps whose icons are PNGs therefore still see placeholders.
 - `NetworkConfig.sender` and the experimental `ARTrackerSender` (with `SendRequest` and `SendResponse`): replaces the
   `HttpURLConnection` transport that posts batches to the ingest endpoint, for example to inspect the SDK's traffic with
   Chucker, pin certificates or go through a proxy. Status mapping is shared with the built-in transport.

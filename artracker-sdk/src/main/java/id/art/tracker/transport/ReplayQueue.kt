@@ -1,15 +1,12 @@
 package id.art.tracker.transport
 
-/** Body formats of a replay batch; the chunk-url request names it so the server knows how to read the object. */
+/** Body format of a replay chunk; the chunk-url request names it so the server knows how to read the object. */
 internal object ReplayFormat {
-    /** A gzipped JSON array of rrweb events (wireframe replay). */
-    const val RRWEB: String = "rrweb"
-
     /** A gzipped `artracker-screen-v1` JSON document: screenshot frames and touches. */
     const val SCREEN_V1: String = "artracker-screen-v1"
 }
 
-/** One closed replay batch, ready to be queued for upload. [gzipBody] is the gzip of a JSON array of rrweb events. */
+/** One closed replay chunk, ready to be queued for upload. [gzipBody] is the gzip of an `artracker-screen-v1` document. */
 internal class NewReplayBatch(
     val sessionId: String,
     val gzipBody: ByteArray,
@@ -19,7 +16,7 @@ internal class NewReplayBatch(
     val hasError: Boolean,
     val userId: String?,
     val environment: String,
-    val format: String = ReplayFormat.RRWEB,
+    val format: String = ReplayFormat.SCREEN_V1,
 )
 
 /**
@@ -37,7 +34,7 @@ internal class ReplayUpload(
     val hasError: Boolean,
     val userId: String?,
     val environment: String,
-    val format: String = ReplayFormat.RRWEB,
+    val format: String = ReplayFormat.SCREEN_V1,
 )
 
 /**

@@ -59,7 +59,7 @@ class LabsRenderTest {
     }
 
     @Test
-    fun replayLabHasAScreenshotSection_withTheServerSwitchOfTheLocalSink() {
+    fun replayLabHasAScreenshotSection_withTheAcceptSwitchOfTheLocalSink() {
         val servers = id.art.tracker.playground.local.LocalServersProvider.instance
         val before = servers.screenshotAllowed
         try {

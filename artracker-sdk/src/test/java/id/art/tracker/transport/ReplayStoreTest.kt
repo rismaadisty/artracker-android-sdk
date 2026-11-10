@@ -51,7 +51,7 @@ class ReplayStoreTest {
 
     private fun batch(
         session: String,
-        format: String = ReplayFormat.RRWEB,
+        format: String = ReplayFormat.SCREEN_V1,
         firstTs: Long = 1_000L,
         lastTs: Long = 2_000L,
         body: ByteArray = byteArrayOf(1, 2, 3),
@@ -265,27 +265,27 @@ class ReplayStoreTest {
     }
 
     @Test
-    fun format_roundTrips_andDefaultsToRrweb() {
+    fun format_roundTrips_andDefaultsToScreenV1() {
         val s = store()
         s.enqueue(batch("A"))
-        clock.advance(1)
-        s.enqueue(batch("A", format = ReplayFormat.SCREEN_V1))
-        assertEquals(ReplayFormat.RRWEB, s.claim()!!.format)
         assertEquals(ReplayFormat.SCREEN_V1, s.claim()!!.format)
+        assertEquals(ReplayFormat.SCREEN_V1, NewReplayBatch("A", byteArrayOf(1), 1, 1L, 2L, false, null, "test").format)
     }
 
     @Test
     fun clearFormat_removesOnlyPendingBatchesOfThatFormat_withTheirFiles() {
         val s = store()
-        s.enqueue(batch("A", format = ReplayFormat.SCREEN_V1))
+        s.enqueue(batch("A"))
         clock.advance(1)
-        s.enqueue(batch("A", format = ReplayFormat.RRWEB))
+        s.enqueue(batch("A"))
         clock.advance(1)
-        s.enqueue(batch("A", format = ReplayFormat.SCREEN_V1))
+        s.enqueue(batch("A", format = "other-format"))
+        val inFlight = s.claim()!! // in flight: never cleared
         s.clearFormat(ReplayFormat.SCREEN_V1)
         assertEquals(1, s.pendingCount())
-        assertEquals(1, bodyFiles().size)
-        assertEquals(ReplayFormat.RRWEB, s.claim()!!.format)
+        assertEquals(2, bodyFiles().size)
+        assertEquals("other-format", s.claim()!!.format)
+        s.complete(inFlight.id)
     }
 
     @Test
@@ -330,16 +330,15 @@ class ReplayStoreTest {
         assertEquals(50L * 1024 * 1024, ReplayStore.DEFAULT_MAX_BYTES)
     }
 
-    @Test
-    fun upgradeFromV1_writesTheBlobBodiesOutToFiles() {
-        val body = ByteArray(1000) { (it * 7).toByte() }
-        object : SQLiteOpenHelper(context, dbName, null, 1) {
+    private fun createOldStore(version: Int, rows: (SQLiteDatabase) -> Unit) {
+        object : SQLiteOpenHelper(context, dbName, null, version) {
             override fun onCreate(db: SQLiteDatabase) {
+                val body = if (version == 1) "body BLOB NOT NULL, " else "file TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'rrweb', "
                 db.execSQL(
                     "CREATE TABLE replay_batches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, " +
                         "created_at INTEGER NOT NULL, first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, " +
                         "event_count INTEGER NOT NULL, has_error INTEGER NOT NULL, user_id TEXT, environment TEXT NOT NULL, " +
-                        "body BLOB NOT NULL, size_bytes INTEGER NOT NULL, claimed INTEGER NOT NULL DEFAULT 0, " +
+                        body + "size_bytes INTEGER NOT NULL, claimed INTEGER NOT NULL DEFAULT 0, " +
                         "attempts INTEGER NOT NULL DEFAULT 0)",
                 )
                 db.execSQL("CREATE INDEX idx_replay_pending ON replay_batches(claimed, created_at, seq)")
@@ -352,32 +351,55 @@ class ReplayStoreTest {
             override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) = Unit
         }.also { h ->
             val db = h.writableDatabase
-            db.insertOrThrow(
-                "replay_batches", null,
-                ContentValues().apply {
-                    put("id", "old-1"); put("session_id", "OLD"); put("seq", 0); put("created_at", 500L)
-                    put("first_ts", 1L); put("last_ts", 2L); put("event_count", 4); put("has_error", 1)
-                    put("environment", "prod"); put("body", body); put("size_bytes", body.size)
-                },
-            )
+            rows(db)
             db.insertOrThrow(
                 "replay_seq", null,
                 ContentValues().apply { put("session_id", "OLD"); put("next_seq", 1); put("start_ms", 1L); put("updated_at", 500L) },
             )
             h.close()
         }
+    }
+
+    private fun oldRow(id: String, vararg extra: Pair<String, Any>) = ContentValues().apply {
+        put("id", id); put("session_id", "OLD"); put("seq", 0); put("created_at", 500L)
+        put("first_ts", 1L); put("last_ts", 2L); put("event_count", 4); put("has_error", 1)
+        put("environment", "prod"); put("size_bytes", 3)
+        for ((k, v) in extra) when (v) {
+            is ByteArray -> put(k, v)
+            is Int -> put(k, v)
+            else -> put(k, v.toString())
+        }
+    }
+
+    @Test
+    fun upgradeFromV1_discardsTheWireframeBatches_butKeepsTheSessionCounters() {
+        createOldStore(1) { db -> db.insertOrThrow("replay_batches", null, oldRow("old-1", "body" to byteArrayOf(1, 2, 3))) }
 
         val s = store()
-        assertEquals(1, s.pendingCount())
-        val u = s.claim()!!
-        assertEquals("OLD", u.sessionId)
-        assertEquals(0, u.seq)
-        assertArrayEquals(body, u.gzipBody)
-        assertEquals(ReplayFormat.RRWEB, u.format)
-        assertTrue(u.hasError)
-        assertEquals(1, bodyFiles().size)
-        // the session counter survived: the next batch continues the sequence
+        assertEquals(0, s.pendingCount())
+        assertNull(s.claim())
+        // the session counter survived: the next chunk continues the sequence
         s.enqueue(batch("OLD"))
         assertEquals(1, s.claim()!!.seq)
+    }
+
+    @Test
+    fun upgradeFromV2_discardsQueuedWireframeBatches_andKeepsScreenshotChunks() {
+        bodiesDir.mkdirs()
+        File(bodiesDir, "old-wire.gz").writeBytes(byteArrayOf(1, 2, 3))
+        File(bodiesDir, "old-shot.gz").writeBytes(byteArrayOf(4, 5, 6))
+        createOldStore(2) { db ->
+            db.insertOrThrow("replay_batches", null, oldRow("old-wire", "file" to "old-wire.gz", "format" to "rrweb"))
+            db.insertOrThrow("replay_batches", null, oldRow("old-shot", "file" to "old-shot.gz", "format" to ReplayFormat.SCREEN_V1))
+        }
+
+        val s = store()
+        s.resetOrphaned() // what the core does on the first use of the store: the discarded row's file goes
+        assertEquals(1, s.pendingCount())
+        val u = s.claim()!!
+        assertEquals("old-shot", u.id)
+        assertEquals(ReplayFormat.SCREEN_V1, u.format)
+        assertArrayEquals(byteArrayOf(4, 5, 6), u.gzipBody)
+        assertEquals(listOf("old-shot.gz"), bodyFiles().map { it.name })
     }
 }

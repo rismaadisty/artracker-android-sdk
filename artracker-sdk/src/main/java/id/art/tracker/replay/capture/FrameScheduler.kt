@@ -31,7 +31,7 @@ internal class FrameScheduler(
     private val clock: Clock,
     requestedFps: Double,
     private val budgetMs: Long = 8,
-    /** Upper bound of the configured rate: 4.0 for wireframes, 10.0 for screenshots. */
+    /** Upper bound of the configured rate (the replay controller passes 10.0). */
     private val maxFps: Double = MAX_FPS,
     private val capture: () -> Unit,
 ) {

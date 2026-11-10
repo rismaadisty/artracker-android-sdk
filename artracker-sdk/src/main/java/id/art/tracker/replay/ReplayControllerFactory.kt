@@ -3,14 +3,10 @@ package id.art.tracker.replay
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import id.art.tracker.ReplayMode
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.ClassAvailability
 import id.art.tracker.core.SdkLog
 import id.art.tracker.privacy.MaskingPolicy
-import id.art.tracker.replay.capture.ComposeWalkerApi
-import id.art.tracker.replay.capture.ComposeWalkerFactory
-import id.art.tracker.replay.capture.ViewWalker
 import id.art.tracker.replay.screenshot.BitmapPool
 import id.art.tracker.replay.screenshot.ComposeMaskApi
 import id.art.tracker.replay.screenshot.ComposeMaskCollectorFactory
@@ -22,35 +18,14 @@ import id.art.tracker.replay.screenshot.ScreenshotCapturer
 import id.art.tracker.replay.screenshot.ScreenshotEncoder
 import id.art.tracker.replay.screenshot.ScreenshotKit
 
-/** Builds the production [ReplayController]; Compose support only when the Compose runtime is present. */
+/**
+ * Builds the production [ReplayController]; Compose support only when the Compose runtime is present. A kit that cannot
+ * be built throws: the core then runs without session replay.
+ */
 internal object ReplayControllerFactory {
     fun create(core: ARTrackerCore, mainHandler: Handler): ReplayController {
         val policy = MaskingPolicy(core.config.privacy)
-        val composeAvailable = ClassAvailability.compose
-        val compose: ComposeWalkerApi? = if (composeAvailable) {
-            runCatching { ComposeWalkerFactory.create(policy) }
-                .onFailure { SdkLog.w("Compose replay support unavailable", it) }
-                .getOrNull()
-        } else {
-            null
-        }
-        val screenshot = if (core.config.replay.mode == ReplayMode.SCREENSHOT) {
-            runCatching { screenshotKit(core, policy, composeAvailable, mainHandler) }
-                .onFailure { SdkLog.w("screenshot replay unavailable; recording wireframes", it) }
-                .getOrNull()
-        } else {
-            null
-        }
-        return ReplayController.create(
-            core, ViewWalker(policy, compose), mainHandler,
-            screenshot = screenshot,
-            remote = core.replayRemote,
-            clearScreenshotQueue = core::clearScreenshotChunks,
-        )
-    }
-
-    private fun screenshotKit(core: ARTrackerCore, policy: MaskingPolicy, composeAvailable: Boolean, mainHandler: Handler): ScreenshotKit {
-        val composeMask: ComposeMaskApi? = if (composeAvailable) {
+        val composeMask: ComposeMaskApi? = if (ClassAvailability.compose) {
             runCatching { ComposeMaskCollectorFactory.create(policy) }
                 .onFailure { SdkLog.w("Compose screenshot masking unavailable", it) }
                 .getOrNull()
@@ -62,12 +37,13 @@ internal object ReplayControllerFactory {
         } else {
             PixelCopyApi { _, _, done -> done(PixelCopyApi.ERROR) }
         }
-        // A closed screen chunk goes to the same upload queue as the wireframe batches; nothing after an opt-out.
+        // A closed screen chunk goes to the upload queue; nothing after an opt-out.
         val sink = ReplaySink { batch -> if (!core.isDisabled()) core.replaySink.accept(batch) }
-        return ScreenshotKit(
+        val kit = ScreenshotKit(
             capturer = ScreenshotCapturer(BitmapPool(), MaskCollector(policy, composeMask), mainHandler, pixelCopy = pixelCopy),
             encoder = ScreenshotEncoder(),
             chunker = ScreenChunker(sink, core.clock, core.config.environment, userId = { core.identity.userId }),
         )
+        return ReplayController.create(core, kit, mainHandler)
     }
 }

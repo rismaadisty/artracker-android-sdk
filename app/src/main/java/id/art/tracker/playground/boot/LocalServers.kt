@@ -18,12 +18,9 @@ interface LocalServers {
 
     val targetBaseUrl: String?
 
-    /** Writes the last replay chunks the sink received (masked, as sent) to [dir]; null when unavailable. */
-    fun exportReplayChunks(dir: File): File?
-
     /**
-     * What the sink answers to `GET /api/v1/replay/config` (`screenshot_enabled`); false and ignored on builds without
-     * the sink. Turning it off also makes the sink answer `403 screenshot_disabled` to screenshot chunks.
+     * Whether the sink accepts screenshot chunks; false and ignored on builds without the sink. Turning it off makes
+     * the sink answer `403 screenshot_disabled` to the `chunk-url` request of a chunk, which stops the SDK's recording.
      */
     var screenshotAllowed: Boolean
 

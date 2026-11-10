@@ -19,6 +19,7 @@ import id.art.tracker.core.Clock
 import id.art.tracker.testutil.FakeReplayBackend
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
 import id.art.tracker.testutil.RecordedCall
+import id.art.tracker.testutil.testReplayController
 import id.art.tracker.transport.ReplayStore
 import java.io.ByteArrayInputStream
 import java.time.Duration
@@ -27,7 +28,6 @@ import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
-import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -41,10 +41,12 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
-/** End to end: `ARTracker.init` with replay enabled -> activity -> batch closes -> the backend gets the 3-step upload. */
+/** End to end: replay enabled -> activity -> chunk closes -> the backend gets the 3-step upload. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReplayIntegrationTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
     private lateinit var backend: FakeReplayBackend
@@ -82,17 +84,18 @@ class ReplayIntegrationTest {
     }
 
     private fun startRecording(sender: ARTrackerSender? = null) {
-        ARTracker.init(
-            app,
-            ARTrackerConfig(
-                endpoint = backend.endpoint,
-                apiKey = "art_live_" + "a".repeat(43),
-                environment = "test",
-                appVersion = "1.0",
-                replay = ReplayConfig(enabled = true, sampleRate = 1.0),
-                network = NetworkConfig(sender = sender),
-            ),
+        val config = ARTrackerConfig(
+            endpoint = backend.endpoint,
+            apiKey = "art_live_" + "a".repeat(43),
+            environment = "test",
+            appVersion = "1.0",
+            replay = ReplayConfig(enabled = true, sampleRate = 1.0),
+            network = NetworkConfig(sender = sender),
         )
+        // The real queue, flusher and client; only the window capture is the test kit (no PixelCopy under Robolectric).
+        val core = ARTrackerCore(app, config, replayFactory = { c, handler -> testReplayController(c, handler, null) })
+        ARTrackerCore.install(core)
+        core.start()
         ProcessLifecycleTestUtil.start()
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         textView = TextView(activity).apply { text = "hello replay" }
@@ -101,7 +104,7 @@ class ReplayIntegrationTest {
         awaitAll()
     }
 
-    /** Closes the open chunk and batch now (the real batch window is 10 s of wall-clock time). */
+    /** Closes the open chunk now (the real chunk window is 10 s of wall-clock time). */
     private fun closeBatch() {
         ARTrackerCore.instanceOrNull()!!.replayController!!.flushChunks()
         awaitAll()
@@ -133,15 +136,15 @@ class ReplayIntegrationTest {
         assertEquals(0, chunkUrl.getInt("chunk_seq"))
 
         val text = gunzip(put.body)
-        val events = JSONArray(text)
-        assertEquals(4, events.getJSONObject(0).getInt("type"))
-        assertEquals(2, events.getJSONObject(1).getInt("type"))
-        assertTrue(text.contains("hello replay"))
+        val doc = JSONObject(text)
+        assertEquals("artracker-screen-v1", doc.getString("format"))
+        assertEquals("artracker-screen-v1", chunkUrl.getString("format"))
+        assertTrue(doc.getJSONArray("frames").length() >= 1)
         assertFalse(text.contains("[max_depth]"))
 
         assertEquals(put.body.size, chunkUrl.getInt("size_bytes"))
         assertEquals(put.body.size, ack.getInt("size_bytes"))
-        assertEquals(events.length(), ack.getInt("event_count"))
+        assertEquals(doc.getJSONArray("frames").length() + doc.getJSONArray("touches").length(), ack.getInt("event_count"))
     }
 
     @Test

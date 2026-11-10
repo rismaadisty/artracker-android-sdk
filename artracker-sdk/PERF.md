@@ -15,7 +15,7 @@ cost is one volatile boolean read, no allocation, no log call). The sample app i
 | Log line (tag `ARTracker`, priority D) | Where | Meaning |
 | --- | --- | --- |
 | `init synchronous part took <N> us on thread <name>` | `ARTracker.init`, after the object graph is built and `start()` returned | Everything `init` does on the calling thread (config validation, `ARTrackerCore` construction incl. the `SharedPreferences` handles, crash handler install, lifecycle registration). The database, the purge, crash recovery and the first flush are on the background thread and are not included, by design. `thread main` confirms it ran on the main thread. |
-| `replay capture took <N> us (budget 8 ms, fps <f>)` | `FrameScheduler`, after each capture that did not throw | Wall time of one capture on the main thread: `RootViewLocator` + `ViewWalker` for every root (the capture callback). The diff / encode / chunk work happens on a background thread and is not part of this number. |
+| `replay capture took <N> us (budget 16 ms, fps <f>)` | `FrameScheduler`, after each capture that did not throw | Wall time of one capture on the main thread: `RootViewLocator` + `ScreenshotCapturer` (composite and mask collection, the capture callback). The mask, scale, JPEG and chunk work happens on a background thread and is not part of this number. |
 
 ## 1. `init()` main-thread cost (target: median of 5 cold starts <= 2 ms)
 
@@ -53,7 +53,7 @@ prefetch those preferences off the main thread** (start the three loads on the S
 | 5 | NOT MEASURED | NOT MEASURED |
 | **Median** | **NOT MEASURED** | **NOT MEASURED** |
 
-## 2. Replay walk on the Feed screen (target: p95 <= 8 ms)
+## 2. Replay capture on the Feed screen (target: p95 <= 16 ms, the `FrameScheduler` budget)
 
 Procedure: sample app, debug build, replay enabled with every session sampled (the sample's default). Open Feed, scroll
 it for about 60 s so that frames are captured (a capture only runs when the screen was drawn since the last tick),
@@ -67,8 +67,8 @@ wc -l < /tmp/captures.txt   # sample count; want >= 50 (raise framesPerSecond to
 awk '{a[NR]=$1} END {printf "p50=%d us p95=%d us max=%d us\n", a[int(NR*0.50)], a[int(NR*0.95)], a[NR]}' /tmp/captures.txt
 ```
 
-p95 must be <= 8000 us. The `FrameScheduler` watchdog already lowers the frame rate after three consecutive captures
-over the 8 ms budget (`Replay watchdog: fps lowered to ...` in the same log), so also record whether that line appears.
+p95 must be <= 16000 us. The `FrameScheduler` watchdog already lowers the frame rate after three consecutive captures
+over the 16 ms budget (`Replay watchdog: fps lowered to ...` in the same log), so also record whether that line appears.
 For a jank view, run a Macrobenchmark scroll of the Feed with and without replay (`FrameTimingMetric`).
 
 | Device | Samples | p50 (us) | p95 (us) | max (us) | Watchdog fired? |
@@ -139,21 +139,19 @@ $ANDROID_HOME/build-tools/<version>/d8 --lib $ANDROID_HOME/platforms/android-36/
 ## Not measured here (summary)
 
 - `init` main-thread cost (section 1).
-- Replay walk p95 on the Feed screen (section 2).
+- Replay capture p95 on the Feed screen (section 2).
 - Background CPU over 10 minutes and the Perfetto check (section 3), which is acceptance criterion #1.
 - Method count (section 5).
-- Playback of the exported chunks in `rrweb-player` (`tools/replay-viewer/index.html`); only the structure was checked,
-  by `validate-chunks.mjs`.
+- Playback of the replay chunks in the dashboard.
 
-## 4. Screenshot replay (`ReplayMode.SCREENSHOT`)
+## 4. Screenshot replay
 
 Targets: **<= 25 MB of chunks for 5 minutes of continuous scrolling** at `STANDARD`, 2 fps (the governor aims at <= 5 MB
 per minute), and host-app jank (`FrameMetrics`, frames > 16 ms) up **<= 2 percentage points** versus replay disabled.
 Not yet measured on a device: the table is empty until someone runs it.
 
 Procedure: sample app, debug build, `ReplayConfig(enabled = true, sampleRate = 1.0, framesPerSecond = 2.0,
-mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.STANDARD)` against a backend whose `GET /replay/config` answers
-`screenshot_enabled: true`. Scroll the Feed for 5 minutes, then sum the queued/uploaded chunk bytes (the `size_bytes` of
+quality = ReplayQuality.STANDARD)` against a backend that accepts screenshot chunks. Scroll the Feed for 5 minutes, then sum the queued/uploaded chunk bytes (the `size_bytes` of
 the `chunk-url` calls, or the files in `files/artracker/replay/` when offline). For the jank figure run a Macrobenchmark
 scroll of the Feed with and without replay (`FrameTimingMetric`, `frameOverrunMs`) and compare the share of frames over 16 ms.
 `adb logcat -s ARTracker:D` shows `replay capture took ... us` per capture (main-thread cost, budget 16 ms in screenshot
@@ -174,7 +172,7 @@ Read of the result:
   release-build jank rate. A sharper run would count main-thread work only (layout + draw + animation durations) on a
   release-like build. The one-minute run before this one gave 4.09 MB.
 - Not done here: the manual checklist of `docs/e2e-manual-test.md` section 6b (fonts, icons, photos, dialogs, bottom sheets
-  against a screen recording) and playing a wireframe recording in the dashboard's `rrweb-player`.
+  against a screen recording) and playing a recording in the dashboard.
 
 Reproduce: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, `adb install -r -t` both APKs, then
 `adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotBudgetTest -e durationMs 300000 id.art.tracker.test/id.art.tracker.PlaygroundTestRunner`

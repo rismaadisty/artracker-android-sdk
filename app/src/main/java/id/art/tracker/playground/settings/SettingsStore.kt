@@ -1,7 +1,6 @@
 package id.art.tracker.playground.settings
 
 import android.content.Context
-import id.art.tracker.ReplayMode
 import id.art.tracker.ReplayQuality
 
 /** [discarded] is true when something WAS saved but was corrupt or invalid, so [settings] is DEFAULT instead. */
@@ -30,7 +29,6 @@ class SharedPrefsSettingsStore(context: Context) : SettingsStore {
                 replayEnabled = prefs.getBoolean("replayEnabled", d.replayEnabled),
                 replaySampleRate = prefs.getString("replaySampleRate", null)?.toDouble() ?: d.replaySampleRate,
                 replayFps = prefs.getString("replayFps", null)?.toDouble() ?: d.replayFps,
-                replayMode = prefs.getString("replayMode", null)?.let { ReplayMode.valueOf(it) } ?: d.replayMode,
                 replayQuality = prefs.getString("replayQuality", null)?.let { ReplayQuality.valueOf(it) } ?: d.replayQuality,
                 maskAllInputs = prefs.getBoolean("maskAllInputs", d.maskAllInputs),
                 maskAllText = prefs.getBoolean("maskAllText", d.maskAllText),
@@ -55,7 +53,6 @@ class SharedPrefsSettingsStore(context: Context) : SettingsStore {
             .putBoolean("replayEnabled", settings.replayEnabled)
             .putString("replaySampleRate", settings.replaySampleRate.toString())
             .putString("replayFps", settings.replayFps.toString())
-            .putString("replayMode", settings.replayMode.name)
             .putString("replayQuality", settings.replayQuality.name)
             .putBoolean("maskAllInputs", settings.maskAllInputs)
             .putBoolean("maskAllText", settings.maskAllText)

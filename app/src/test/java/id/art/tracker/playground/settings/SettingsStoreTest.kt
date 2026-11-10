@@ -2,7 +2,6 @@ package id.art.tracker.playground.settings
 
 import android.app.Application
 import android.content.Context
-import id.art.tracker.ReplayMode
 import id.art.tracker.ReplayQuality
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
@@ -33,7 +32,6 @@ class SettingsStoreTest {
             replayEnabled = false,
             replaySampleRate = 0.25,
             replayFps = 2.5,
-            replayMode = ReplayMode.SCREENSHOT,
             replayQuality = ReplayQuality.HIGH,
             maskAllInputs = false,
             maskAllText = true,
@@ -88,12 +86,11 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun anOldSavedStateWithoutTheScreenshotKeys_loadsTheSampleDefaults() {
-        // Saved before screenshot mode existed: no replayMode / replayQuality keys.
+    fun anOldSavedStateWithoutTheQualityKey_loadsTheDefault_andAStaleModeKeyIsIgnored() {
         SharedPrefsSettingsStore(context).save(PlaygroundSettings.DEFAULT)
-        prefs.edit().remove("replayMode").remove("replayQuality").commit()
-        val loaded = SharedPrefsSettingsStore(context).load()
-        assertEquals(ReplayMode.SCREENSHOT, loaded.replayMode)
-        assertEquals(ReplayQuality.STANDARD, loaded.replayQuality)
+        prefs.edit().remove("replayQuality").putString("replayMode", "WIREFRAME").commit() // a state saved before modes went away
+        val result = SharedPrefsSettingsStore(context).loadResult()
+        assertEquals(false, result.discarded)
+        assertEquals(ReplayQuality.STANDARD, result.settings.replayQuality)
     }
 }
