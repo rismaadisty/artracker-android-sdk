@@ -33,7 +33,7 @@ with only the SDK's real dependencies on the classpath. The four optional librar
 simulated with keep rules for the public API.
 
 ```sh
-unzip -o artracker-android-0.1.0.aar -d aar            # from the isolated m2 repo, see CHANGELOG
+unzip -o artracker-android-1.0.0.aar -d aar            # from the isolated m2 repo, see CHANGELOG
 # host.pro
 #   -keep class id.art.tracker.ARTracker { public *; }          (and ARTrackerConfig, ReplayConfig, PrivacyConfig,
 #   NetworkConfig, privacy.ARTrackerMask)
@@ -61,6 +61,6 @@ This proves R8 does not fail and does not merge the holders. It does NOT prove t
 
 ## 3. Real AGP build of an app without those libraries, installed and run (NOT RUN)
 
-Create a minimal app that depends only on `id.art.tracker:artracker-android:0.1.0`, enable `isMinifyEnabled`, build
+Create a minimal app that depends only on `id.art.tracker:artracker-android:1.0.0`, enable `isMinifyEnabled`, build
 `assembleRelease`, install it on a device and call `ARTracker.init(...)`, `track(...)`, `screen(...)`; check logcat for
 `NoClassDefFoundError` / `ClassNotFoundException` and that the item reaches the backend. Not done.
