@@ -48,7 +48,7 @@
                   "type": 2,
                   "tagName": "div",
                   "attributes": {
-                    "style": "position:absolute;left:0px;top:0px;width:360px;height:640px;background-color:#ffffff;overflow:hidden;",
+                    "style": "position:absolute;left:0px;top:0px;width:360px;height:640px;background-color:#ffffff;",
                     "data-artracker-type": "CONTAINER"
                   },
                   "childNodes": [
@@ -56,7 +56,7 @@
                       "type": 2,
                       "tagName": "span",
                       "attributes": {
-                        "style": "position:absolute;left:16px;top:40px;width:328px;height:48px;color:#212121;font-size:20px;overflow:visible;",
+                        "style": "position:absolute;left:16px;top:40px;width:328px;height:48px;color:#212121;font-size:20px;",
                         "data-artracker-type": "TEXT"
                       },
                       "childNodes": [
@@ -72,7 +72,7 @@
                       "type": 2,
                       "tagName": "div",
                       "attributes": {
-                        "style": "position:absolute;left:16px;top:104px;width:328px;height:56px;background-color:#f5f5f5;color:#424242;font-size:16px;overflow:hidden;",
+                        "style": "position:absolute;left:16px;top:104px;width:328px;height:56px;background-color:#f5f5f5;color:#424242;font-size:16px;",
                         "data-artracker-type": "INPUT",
                         "data-artracker-masked": "true"
                       },
@@ -89,7 +89,7 @@
                       "type": 2,
                       "tagName": "div",
                       "attributes": {
-                        "style": "position:absolute;left:16px;top:176px;width:328px;height:160px;background-color:rgba(0,0,0,0.502);opacity:0.5;overflow:hidden;",
+                        "style": "position:absolute;left:16px;top:176px;width:328px;height:160px;background-color:rgba(0,0,0,0.502);opacity:0.5;",
                         "data-artracker-type": "CONTAINER"
                       },
                       "childNodes": [
@@ -97,7 +97,7 @@
                           "type": 2,
                           "tagName": "div",
                           "attributes": {
-                            "style": "position:absolute;left:8px;top:8px;width:64px;height:64px;background-color:#cccccc;overflow:hidden;",
+                            "style": "position:absolute;left:8px;top:8px;width:64px;height:64px;background-color:#cccccc;",
                             "data-artracker-type": "IMAGE"
                           },
                           "childNodes": [],
@@ -107,7 +107,7 @@
                           "type": 2,
                           "tagName": "div",
                           "attributes": {
-                            "style": "position:absolute;left:80px;top:8px;width:200px;height:32px;background-color:#1976d2;color:#ffffff;font-size:14px;overflow:hidden;",
+                            "style": "position:absolute;left:80px;top:8px;width:200px;height:32px;background-color:#1976d2;color:#ffffff;font-size:14px;",
                             "data-artracker-type": "BUTTON"
                           },
                           "childNodes": [
@@ -126,7 +126,7 @@
                       "type": 2,
                       "tagName": "div",
                       "attributes": {
-                        "style": "position:absolute;left:0px;top:352px;width:360px;height:200px;background:repeating-linear-gradient(45deg,#bdbdbd,#bdbdbd 4px,#e0e0e0 4px,#e0e0e0 8px);overflow:hidden;",
+                        "style": "position:absolute;left:0px;top:352px;width:360px;height:200px;background:repeating-linear-gradient(45deg,#bdbdbd,#bdbdbd 4px,#e0e0e0 4px,#e0e0e0 8px);",
                         "data-artracker-type": "WEB",
                         "data-artracker-masked": "true"
                       },
@@ -143,7 +143,7 @@
                       "type": 2,
                       "tagName": "div",
                       "attributes": {
-                        "style": "position:absolute;left:0px;top:560px;width:360px;height:80px;overflow:hidden;",
+                        "style": "position:absolute;left:0px;top:560px;width:360px;height:80px;",
                         "data-artracker-type": "CONTAINER"
                       },
                       "childNodes": [

@@ -119,7 +119,7 @@ internal class RrwebEncoder {
             val parentNode = parentNodeId(parentWf) ?: return@forEachIndexed
             val (px, py) = absOf(parentWf) ?: return@forEachIndexed
             val nextId = diff.addBefore.getOrNull(i)?.let { states[it]?.nodeId }
-            adds.add(mapOf("parentId" to parentNode, "nextId" to nextId, "node" to serialize(node, parentWf, px, py)))
+            serializeFlat(node, parentNode, parentWf, px, py, nextId, adds)
         }
         val texts = ArrayList<Map<String, Any?>>()
         for ((id, value) in diff.texts) {
@@ -201,6 +201,55 @@ internal class RrwebEncoder {
         )
     }
 
+    /**
+     * Mutation form of [serialize]: one `adds` entry per node, in pre-order (a parent always before its children),
+     * with element nodes sent without their children and the text node as an entry of its own. Only the subtree
+     * root carries [nextId]; every other entry is appended (`nextId` null). rrweb's replayer builds each entry with
+     * `skipChild`, so a nested `childNodes` would be built twice and later adds would not find their parent.
+     */
+    private fun serializeFlat(
+        w: Wireframe,
+        parentNodeId: Int,
+        parentWf: Int,
+        parentAbsX: Int,
+        parentAbsY: Int,
+        nextId: Int?,
+        out: MutableList<Map<String, Any?>>,
+    ) {
+        val nodeId = nextNodeId++
+        val label = w.displayText()
+        val textId = if (label != null) nextNodeId++ else null
+        val relX = w.x - parentAbsX
+        val relY = w.y - parentAbsY
+        val attrs = attributesOf(w, relX, relY)
+        states[w.id] = NodeState(nodeId, textId, parentWf, relX, relY, attrs)
+        states[parentWf]?.children?.add(w.id)
+
+        out.add(
+            mapOf(
+                "parentId" to parentNodeId,
+                "nextId" to nextId,
+                "node" to mapOf(
+                    "type" to NODE_ELEMENT,
+                    "tagName" to if (w.type == WireframeType.TEXT) "span" else "div",
+                    "attributes" to attrs,
+                    "childNodes" to emptyList<Map<String, Any?>>(),
+                    "id" to nodeId,
+                ),
+            ),
+        )
+        if (label != null && textId != null) {
+            out.add(
+                mapOf(
+                    "parentId" to nodeId,
+                    "nextId" to null,
+                    "node" to mapOf("type" to NODE_TEXT, "textContent" to label, "id" to textId),
+                ),
+            )
+        }
+        for (c in w.children) serializeFlat(c, nodeId, w.id, w.x, w.y, null, out)
+    }
+
     private fun attributesOf(w: Wireframe, relX: Int, relY: Int): Map<String, String> {
         val out = LinkedHashMap<String, String>()
         out["style"] = styleOf(w, relX, relY)
@@ -229,9 +278,10 @@ internal class RrwebEncoder {
             if (visual != null) appendText(sb, visual)
         }
         if (w.alpha < 1f) number(w.alpha.coerceIn(0f, 1f))?.let { sb.append("opacity:").append(it).append(';') }
-        // Text boxes are often measured shorter than their glyphs (parent clipping, font padding): clipping them
-        // again would cut letters in half. Boxes clip, so that scrolled-out items stay hidden.
-        sb.append(if (w.type == WireframeType.TEXT) "overflow:visible;" else "overflow:hidden;")
+        // Clip only where the app clips (clipToOutline, scroll containers, Compose clip): a node's children may
+        // legitimately paint outside a box measured shorter than its content, and text boxes are often measured
+        // shorter than their glyphs; clipping those would cut letters and icons in half.
+        if (visual?.clip == true) sb.append("overflow:hidden;")
         return sb.toString()
     }
 
@@ -261,7 +311,7 @@ internal class RrwebEncoder {
     }
 
     private fun appendText(sb: StringBuilder, v: VisualStyle) {
-        v.fontFamily?.takeIf { it in FONT_FAMILIES }?.let { sb.append("font-family:").append(it).append(';') }
+        v.fontFamily?.takeIf { it in FONT_FAMILIES }?.let { sb.append("font-family:Roboto,").append(it).append(';') }
         if (v.italic) sb.append("font-style:italic;")
         if (v.wrap) {
             sb.append("display:block;white-space:normal;")

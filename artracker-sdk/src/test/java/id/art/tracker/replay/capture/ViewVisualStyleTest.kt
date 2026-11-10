@@ -140,6 +140,21 @@ class ViewVisualStyleTest {
     }
 
     @Test
+    fun scrollContainers_clipTheirContent() {
+        val scroll = android.widget.ScrollView(context).apply { addView(View(context), ViewGroup.LayoutParams(300, 600)) }
+        assertTrue(walk(scroll).visual!!.clip)
+        val horizontal = android.widget.HorizontalScrollView(context).apply { addView(View(context), ViewGroup.LayoutParams(900, 40)) }
+        assertTrue(walk(horizontal).visual!!.clip)
+        val list = android.widget.ListView(context)
+        assertTrue(walk(list).visual!!.clip)
+    }
+
+    @Test
+    fun plainViewGroup_doesNotClip() {
+        assertNull(walk(LinearLayout(context)).visual)
+    }
+
+    @Test
     fun plainView_hasNoVisualStyle() {
         assertNull(walk(View(context)).visual)
     }
