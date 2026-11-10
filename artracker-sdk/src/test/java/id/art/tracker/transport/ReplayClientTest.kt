@@ -215,8 +215,16 @@ class ReplayClientTest {
     fun otherChunkUrl403_stillMeansUnauthorized_forScreenshotsToo() {
         backend.chunkUrl = { MockResponse().setResponseCode(403).setBody("""{"error":"forbidden"}""") }
         assertEquals(ReplayResult.Unauthorized, client().upload(screenUpload()))
+    }
+
+    @Test
+    fun a403WithoutAReadableBody_onAScreenshotChunkUrl_isTreatedAsScreenshotDisabled() {
+        // A sender that does not hand back error bodies must not turn "owner switched screenshots off" into a
+        // kill-switch trip for the whole SDK. A revoked key shows up on ingest (401) anyway.
         backend.chunkUrl = { MockResponse().setResponseCode(403) }
-        assertEquals(ReplayResult.Unauthorized, client().upload(screenUpload()))
+        assertEquals(ReplayResult.ScreenshotDisabled, client().upload(screenUpload()))
+        // ... but not for wireframe batches, which keep the key-revoked meaning
+        assertEquals(ReplayResult.Unauthorized, client().upload(upload()))
     }
 
     @Test

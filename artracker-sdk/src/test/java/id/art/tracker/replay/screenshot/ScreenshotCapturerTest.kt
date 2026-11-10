@@ -225,4 +225,68 @@ class ScreenshotCapturerTest {
         assertNotNull(run(c, listOf(a)))
         second.release()
     }
+
+    private fun addSecret(parent: FrameLayout): View {
+        val secret = View(activity).apply { artrackerMask() }
+        parent.addView(secret, FrameLayout.LayoutParams(100, 30))
+        secret.layout(0, 0, 100, 30)
+        return secret
+    }
+
+    @Test
+    fun theBaseMasks_areCollectedAgainAfterThePixelCopy_soAMovedViewStaysCovered() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        val secret = addSecret(base)
+        val before = IntArray(2).also { secret.getLocationOnScreen(it) }
+        val after = IntArray(2)
+        val c = capturer(sdkInt = 34, pixelCopy = { _, dest, done ->
+            dest.eraseColor(Color.WHITE)
+            secret.translationY = 300f // the view moves while the copy is in flight
+            secret.getLocationOnScreen(after)
+            done(PixelCopyApi.SUCCESS)
+        }, decorOf = { base })
+        val raw = run(c, listOf(base), base = activity.window)!!
+        assertTrue(after[1] > before[1])
+        assertTrue("old position still masked", raw.masks.any { it.top == before[1] })
+        assertTrue("new position masked: ${raw.masks}", raw.masks.any { it.top == after[1] })
+    }
+
+    @Test
+    fun anOverlaysMasks_areCollectedWhenItIsDrawn_notWhenTheCaptureStarted() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800)
+        val overlay = root(Color.BLUE, 100, 200, 200, 300) as FrameLayout
+        val secret = addSecret(overlay)
+        val after = IntArray(2)
+        val c = capturer(sdkInt = 34, pixelCopy = { _, dest, done ->
+            dest.eraseColor(Color.WHITE)
+            secret.translationY = 200f // a bottom sheet sliding up / an IME resize while the copy runs
+            done(PixelCopyApi.SUCCESS)
+        }, decorOf = { base })
+        val startedAt = IntArray(2).also { secret.getLocationOnScreen(it) }
+        val raw = run(c, listOf(base, overlay), base = activity.window)!!
+        secret.getLocationOnScreen(after) // the translation persists: this is where the field really is when drawn
+        assertTrue(after[1] > startedAt[1] - 1)
+        assertTrue("moved overlay field masked: ${raw.masks}", raw.masks.any { it.top == after[1] && it.bottom == after[1] + 30 })
+    }
+
+    @Test
+    fun aThrowWhileCompositingTheCopy_dropsTheFrame_insteadOfCrashingTheHost() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800)
+        val wide = root(Color.BLUE, 100, 100, 400, 100) // makes the bitmap wider than the base: the copy goes through a temp bitmap
+        val c = capturer(sdkInt = 34, pixelCopy = { _, dest, done ->
+            dest.recycle() // drawing a recycled bitmap throws
+            done(PixelCopyApi.SUCCESS)
+        }, decorOf = { base })
+        var called = false
+        var result: RawFrame? = null
+        c.capture(listOf(base, wide), activity.window, 5L) { result = it; called = true }
+        shadowOf(Looper.getMainLooper()).idle() // must not throw
+        assertTrue(called)
+        assertNull(result)
+        assertNotNull(pool.acquire(10, 10))
+        assertNotNull(pool.acquire(10, 10))
+    }
 }

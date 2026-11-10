@@ -142,4 +142,11 @@ class ReplayClientCustomSenderTest {
         val screen = ReplayUpload("row", "s", 0, gzip, 1, 1_000, 0, false, null, "staging", ReplayFormat.SCREEN_V1)
         assertEquals(ReplayResult.ScreenshotDisabled, client(sender).upload(screen))
     }
+
+    @Test
+    fun screenshot403_withTheBodyDroppedBySender_isStillScreenshotDisabled() {
+        val sender = Scripted { SendResponse(403, null, null) }
+        val screen = ReplayUpload("row", "s", 0, gzip, 1, 1_000, 0, false, null, "staging", ReplayFormat.SCREEN_V1)
+        assertEquals(ReplayResult.ScreenshotDisabled, client(sender).upload(screen))
+    }
 }

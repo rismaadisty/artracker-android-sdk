@@ -37,6 +37,10 @@ versions follow semantic versioning (`0.x`: the API may still change).
   BLOB rows are written out to files on upgrade. The offline cap is now **50 MB** / 200 batches (was 20 MiB).
   `ReplayResult.ScreenshotDisabled` and `ReplayQueue.clearFormat` are internal.
 - `FrameScheduler`: configurable fps ceiling and an outside fps cap.
+- **Contract change of the experimental `ARTrackerSender`:** screenshot mode adds a `GET` (empty body) to
+  `/api/v1/replay/config`; a sender must send no body for it (`ARTrackerOkHttpSender` does). Return the body of error
+  responses too: a `403` on a screenshot `chunk-url` carries `screenshot_disabled` there (without a readable body it is
+  still treated as that, never as a revoked key).
 
 ### Fixed (wireframe replay)
 

@@ -170,4 +170,22 @@ class ARTrackerOkHttpSenderTest {
         assertEquals("an ordinary request on the same client is still reported", 1, records.size)
         assertTrue(records.single().url.endsWith("/other"))
     }
+
+    @Test
+    fun get_isSentWithoutABody_asOkHttpRequires() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"screenshot_enabled":true}"""))
+        val request = SendRequest(
+            url = server.url("/api/v1/replay/config").toString(),
+            headers = linkedMapOf("X-Artracker-Key" to key),
+            body = ByteArray(0),
+            method = "GET",
+        )
+        val response = ARTrackerOkHttpSender(client()).send(request)
+        assertEquals(200, response.statusCode)
+        assertEquals("""{"screenshot_enabled":true}""", response.body)
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals(key, recorded.getHeader("X-Artracker-Key"))
+        assertEquals(0L, recorded.bodySize)
+    }
 }

@@ -14,6 +14,8 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import android.widget.EditText
 import id.art.tracker.PrivacyConfig
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.privacy.artrackerMask
@@ -89,5 +91,18 @@ class ComposeMaskCollectorTest {
         val out = ArrayList<MaskRect>()
         ComposeMaskCollector(MaskingPolicy(PrivacyConfig()), semanticsAccess = SemanticsAccess { null }).collect(view, false, out)
         assertEquals(1, out.size)
+    }
+
+    @Test
+    fun aViewEmbeddedWithAndroidView_isMaskedByTheViewRules_notSkipped() {
+        rule.setContent {
+            AndroidView(factory = { ctx -> EditText(ctx) }, modifier = Modifier.size(120.dp, 40.dp))
+        }
+        rule.waitForIdle()
+        val policy = MaskingPolicy(PrivacyConfig())
+        val out = ArrayList<MaskRect>()
+        val ok = MaskCollector(policy, ComposeMaskCollectorFactory.create(policy)).collect(rule.activity.window.decorView, out)
+        assertTrue(ok)
+        assertTrue("the embedded EditText must get a mask rect, got $out", out.isNotEmpty())
     }
 }

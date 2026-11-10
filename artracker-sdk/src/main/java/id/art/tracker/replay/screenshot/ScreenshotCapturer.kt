@@ -83,7 +83,7 @@ internal class ScreenshotCapturer(
         capturing = true
         val finish = {
             capturing = false
-            onResult(RawFrame(bitmap, ts, masks, secure, keyboard) { pool.release(bitmap) })
+            onResult(RawFrame(bitmap, ts, masks.distinct(), secure, keyboard) { pool.release(bitmap) })
         }
         val fail = { t: Throwable ->
             capturing = false
@@ -96,29 +96,46 @@ internal class ScreenshotCapturer(
             val baseSecure = isSecure(base)
             val copyBase = !baseSecure && sdkInt >= 26 && baseWindow != null && decorOf(baseWindow) === base
             if (copyBase) {
-                copyWindow(baseWindow!!, base, rects[0], bitmap, masks) {
-                    // back on main: the overlays are views
-                    mainHandler.post {
-                        try {
-                            drawOverlays(roots, rects, bitmap, masks)
+                copyWindow(baseWindow!!, base, rects[0], bitmap, masks, onError = fail) {
+                    // Back on main, after the copy: views may have moved since the capture started, so what is
+                    // masked is collected again (the first rects stay: the union is what is painted).
+                    try {
+                        if (!maskCollector.collect(base, masks) || !drawOverlays(roots, rects, bitmap, masks)) {
+                            capturing = false
+                            pool.release(bitmap)
+                            onResult(null)
+                        } else {
                             finish()
-                        } catch (t: Throwable) {
-                            fail(t)
                         }
+                    } catch (t: Throwable) {
+                        fail(t)
                     }
                 }
             } else {
                 val canvas = Canvas(bitmap)
                 if (!baseSecure) drawView(canvas, base, rects[0], masks)
-                drawOverlays(roots, rects, bitmap, masks)
-                finish()
+                if (drawOverlays(roots, rects, bitmap, masks)) {
+                    finish()
+                } else {
+                    capturing = false
+                    pool.release(bitmap)
+                    onResult(null)
+                }
             }
         } catch (t: Throwable) {
             fail(t)
         }
     }
 
-    private fun copyWindow(window: Window, base: View, rect: MaskRect, bitmap: Bitmap, masks: MutableList<MaskRect>, then: () -> Unit) {
+    private fun copyWindow(
+        window: Window,
+        base: View,
+        rect: MaskRect,
+        bitmap: Bitmap,
+        masks: MutableList<MaskRect>,
+        onError: (Throwable) -> Unit,
+        then: () -> Unit,
+    ) {
         val exact = rect.left == 0 && rect.top == 0 && bitmap.width == base.width && bitmap.height == base.height
         val target = if (exact) bitmap else Bitmap.createBitmap(base.width.coerceAtLeast(1), base.height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
         pixelCopy.copy(window, target) { status ->
@@ -130,23 +147,30 @@ internal class ScreenshotCapturer(
                     } else if (!exact) {
                         Canvas(bitmap).drawBitmap(target, rect.left.toFloat(), rect.top.toFloat(), null)
                     }
-                } finally {
-                    if (!exact) target.recycle()
+                } catch (t: Throwable) {
+                    // Runs on the host's main thread: nothing may escape.
+                    if (!exact) runCatching { target.recycle() }
+                    onError(t)
+                    return@post
                 }
+                if (!exact) target.recycle()
                 then()
             }
         }
     }
 
-    private fun drawOverlays(roots: List<View>, rects: List<MaskRect>, bitmap: Bitmap, masks: MutableList<MaskRect>) {
+    /** Draws every dialog/popup on top; each one's masks are collected right before it is drawn. False: a collection failed. */
+    private fun drawOverlays(roots: List<View>, rects: List<MaskRect>, bitmap: Bitmap, masks: MutableList<MaskRect>): Boolean {
         val canvas = Canvas(bitmap)
         for (i in 1 until roots.size) {
             val root = roots[i]
             if (isSecure(root)) continue
+            if (!maskCollector.collect(root, masks)) return false
             val dim = dimAmount(root)
             if (dim > 0f) canvas.drawColor(Color.argb((dim * 255).roundToInt(), 0, 0, 0))
             drawView(canvas, root, rects[i], masks)
         }
+        return true
     }
 
     /** `View.draw` at the view's screen position; a view that throws while drawing is masked whole. */

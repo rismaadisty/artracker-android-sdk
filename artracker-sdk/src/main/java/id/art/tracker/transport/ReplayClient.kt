@@ -140,7 +140,12 @@ internal class ReplayClient(
         if (upload.format != ReplayFormat.RRWEB) body["format"] = upload.format
 
         val response = send(ReplayStep.CHUNK_URL, target, "POST", jsonBody(body), authenticated = true, readBody = true)
-        if (upload.format == ReplayFormat.SCREEN_V1 && response.status == 403 && isScreenshotDisabled(response.body)) {
+        // A 403 on a screenshot chunk whose reason is unreadable (a sender that returns no error bodies) counts as the
+        // owner's switch too: wrongly tripping the kill switch would silence the whole SDK, while a really revoked key
+        // is caught by the next ingest 401 anyway.
+        if (upload.format == ReplayFormat.SCREEN_V1 && response.status == 403 &&
+            (isScreenshotDisabled(response.body) || response.body.isNullOrBlank())
+        ) {
             SdkLog.d("replay chunk-url answered 403 screenshot_disabled")
             throw Failed(ReplayResult.ScreenshotDisabled)
         }

@@ -55,7 +55,14 @@ internal class MaskCollector(
                 if (isComposeHost(view)) {
                     // Without the Compose reader the tree cannot be inspected: mask the whole host.
                     val api = compose
-                    if (api == null) out.add(rect) else api.collect(view, false, out)
+                    if (api == null) {
+                        out.add(rect)
+                    } else {
+                        api.collect(view, false, out)
+                        // Views embedded with AndroidView are children of the host, not semantics nodes: they get
+                        // the view rules too (a WebView, a map or a password field inside Compose).
+                        descend(view, false, maskedBounds, out)
+                    }
                 } else {
                     descend(view, false, maskedBounds, out)
                 }
