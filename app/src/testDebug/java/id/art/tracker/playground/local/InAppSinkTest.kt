@@ -228,4 +228,74 @@ class InAppSinkTest {
         assertEquals(3, array.getJSONObject(0).getJSONArray("events").length())
         assertTrue(ring.items.value.all { it.attributes["events"] == "3 events" })
     }
+
+    private fun screenChunk(frames: Int, seq: Int = 0): ByteArray {
+        val f = (0 until frames).joinToString(",") {
+            "{\"ts\":${1000 + it},\"screen\":\"/home\",\"w\":10,\"h\":20,\"vw\":10,\"vh\":20,\"mime\":\"image/jpeg\"," +
+                "\"data\":\"${java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, it.toByte()))}\",\"masked\":1}"
+        }
+        return gzip(
+            ("{\"format\":\"artracker-screen-v1\",\"platform\":\"android\",\"seq\":$seq,\"frames\":[$f]," +
+                "\"touches\":[{\"ts\":1000,\"x\":1,\"y\":2,\"kind\":\"down\"}]}").toByteArray(),
+        )
+    }
+
+    private fun requestScreenUploadUrl(seq: Int): Pair<Int, String> {
+        val body = "{\"session_id\":\"session-abc-123\",\"chunk_seq\":$seq,\"size_bytes\":10,\"environment\":\"test\"," +
+            "\"format\":\"artracker-screen-v1\"}"
+        return call("POST", base() + "/api/v1/replay/chunk-url", body.toByteArray(), "application/json")
+    }
+
+    @Test
+    fun replayConfig_tellsTheSdkWhetherScreenshotsAreAllowed() {
+        assertTrue(sink.start())
+        val (code, text) = post(ByteArray(0), path = "/api/v1/replay/config", method = "GET")
+        assertEquals(200, code)
+        assertTrue(JSONObject(text).getBoolean("screenshot_enabled"))
+        assertTrue(JSONObject(text).getDouble("max_fps") > 0)
+        sink.screenshotEnabled = false
+        assertFalse(JSONObject(post(ByteArray(0), path = "/api/v1/replay/config", method = "GET").second).getBoolean("screenshot_enabled"))
+    }
+
+    @Test
+    fun whenScreenshotsAreOff_aScreenshotChunkUrlGets403ScreenshotDisabled_butWireframesStillWork() {
+        assertTrue(sink.start())
+        sink.screenshotEnabled = false
+        val (code, text) = requestScreenUploadUrl(0)
+        assertEquals(403, code)
+        assertEquals("screenshot_disabled", JSONObject(text).getString("error"))
+        requestUploadUrl(seq = 1) // a wireframe chunk is unaffected
+    }
+
+    @Test
+    fun screenshotChunk_isAccepted_counted_andItsFramesCanBeExportedAsJpegs() {
+        assertTrue(sink.start())
+        val (code, text) = requestScreenUploadUrl(3)
+        assertEquals(200, code)
+        val uploadUrl = JSONObject(text).getString("upload_url")
+        assertEquals(200, call("PUT", uploadUrl, screenChunk(frames = 2, seq = 3), "application/gzip").first)
+
+        val stats = sink.screenshotStats()
+        assertEquals(1, stats.chunks)
+        assertEquals(2, stats.frames)
+        assertEquals(1, stats.touches)
+        val dir = tmp.newFolder("shots")
+        val files = sink.exportScreenshots(dir)!!
+        assertEquals(2, files.size)
+        assertTrue(files.all { it.name.endsWith(".jpg") && it.length() == 4L })
+        // a screenshot chunk is not a wireframe chunk
+        assertEquals("[]", sink.exportReplayChunks(tmp.newFolder("wf"))!!.readText())
+    }
+
+    @Test
+    fun screenshotChunk_neverStoresTheApiKey_andOnlyTheLastFramesAreKept() {
+        assertTrue(sink.start())
+        repeat(30) { seq ->
+            val uploadUrl = JSONObject(requestScreenUploadUrl(seq).second).getString("upload_url")
+            call("PUT", uploadUrl, screenChunk(frames = 1, seq = seq), "application/gzip")
+        }
+        val files = sink.exportScreenshots(tmp.newFolder("cap"))!!
+        assertTrue(files.size <= 20)
+        assertTrue(files.none { it.name.contains("art_live_") })
+    }
 }

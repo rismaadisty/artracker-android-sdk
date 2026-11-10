@@ -49,6 +49,9 @@
     <string name="settings_replay_enabled">Replay aktif</string>
     <string name="settings_replay_rate">Replay sampleRate (0..1)</string>
     <string name="settings_replay_fps">Replay fps</string>
+    <string name="settings_replay_screenshot">Replay screenshot (opt-in)</string>
+    <string name="settings_replay_screenshot_note">Foto layar asli yang di-mask di perangkat sebelum dikirim. Hanya aktif bila server mengizinkan; sink lokal mengizinkannya. Disarankan fps 2.</string>
+    <string name="settings_replay_quality">Kualitas gambar</string>
     <string name="settings_mask_inputs">Mask semua input</string>
     <string name="settings_mask_text">Mask semua teks</string>
     <string name="settings_network_rate">Network sampleRate (0..1)</string>
@@ -112,6 +115,14 @@
     <string name="lab_replay">Replay</string>
     <string name="lab_replay_desc">Daftar panjang, pager, gestur, animasi, dialog/sheet/popup, dan pohon UI melebihi batas SDK.</string>
     <string name="lab_replay_controls">Kontrol replay</string>
+    <string name="lab_replay_screenshot">Replay screenshot</string>
+    <string name="lab_replay_screenshot_mode">Mode (dari Settings, berlaku setelah restart): %1$s, kualitas %2$s</string>
+    <string name="lab_replay_screenshot_server">Server mengizinkan screenshot</string>
+    <string name="lab_replay_screenshot_server_note">Sink lokal menjawab GET /replay/config dan, saat dimatikan, 403 screenshot_disabled: sesi yang berjalan kembali ke wireframe.</string>
+    <string name="lab_replay_screenshot_summary">Ringkasan screenshot</string>
+    <string name="lab_replay_screenshot_summary_desc">Chunk, frame, dan sentuhan screenshot yang diterima sink lokal.</string>
+    <string name="lab_replay_screenshot_export">Ekspor screenshot</string>
+    <string name="lab_replay_screenshot_export_desc">Menulis frame JPEG terakhir (sudah di-mask, apa adanya) ke folder file aplikasi.</string>
     <string name="lab_replay_intent">Niat replay: %1$s</string>
     <string name="lab_replay_start">Mulai replay</string>
     <string name="lab_replay_start_desc">ARTracker.startReplay() (mengabaikan sampling).</string>

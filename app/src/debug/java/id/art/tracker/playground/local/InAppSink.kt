@@ -40,6 +40,21 @@ class InAppSink(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?): Boolean = size > MAX_UPLOAD_KEYS
     }
 
+    /** The answer to `GET /api/v1/replay/config`; when false a screenshot chunk is refused with `403 screenshot_disabled`. */
+    @Volatile
+    var screenshotEnabled: Boolean = true
+
+    /** What the screenshot uploads added up to since the sink started. */
+    class ScreenshotStats(val chunks: Int, val frames: Int, val touches: Int, val bytes: Long)
+
+    private class Shot(val ts: Long, val jpeg: ByteArray)
+
+    private val shots = ArrayDeque<Shot>()
+    private var shotChunks = 0
+    private var shotFrames = 0
+    private var shotTouches = 0
+    private var shotBytes = 0L
+
     @Volatile
     var boundAddress: InetAddress? = null
         private set
@@ -88,6 +103,10 @@ class InAppSink(
                 request.method == "POST" && path == INGEST_PATH -> ingest(request)
                 request.method == "POST" && path == CHUNK_URL_PATH -> chunkUrl(request)
                 request.method == "PUT" && path == UPLOAD_PATH -> upload(request)
+                request.method == "GET" && path == CONFIG_PATH -> MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("{\"screenshot_enabled\":$screenshotEnabled,\"max_fps\":4}")
                 request.method == "POST" && path == CHUNK_ACK_PATH -> MockResponse()
                     .setResponseCode(200)
                     .setHeader("Content-Type", "application/json")
@@ -118,6 +137,12 @@ class InAppSink(
         if (body.size > MAX_CONTROL_BODY) return MockResponse().setResponseCode(413)
         val json = runCatching { JSONObject(body.toString(Charsets.UTF_8)) }.getOrNull()
             ?: return MockResponse().setResponseCode(400)
+        if (json.optString("format") == FORMAT_SCREEN && !screenshotEnabled) {
+            return MockResponse()
+                .setResponseCode(403)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"error\":\"screenshot_disabled\"}")
+        }
         val seq = json.optInt("chunk_seq", -1)
         val session = json.optString("session_id")
         if (seq < 0 || !SAFE_TOKEN.matches(session)) return MockResponse().setResponseCode(400)
@@ -141,9 +166,11 @@ class InAppSink(
             is Gunzip.TooLarge -> return MockResponse().setResponseCode(413)
             is Gunzip.Ok -> result.text
         }
-        val events = runCatching { JSONArray(text) }.getOrNull() ?: return MockResponse().setResponseCode(400)
         val key = request.requestUrl?.queryParameter("key").orEmpty()
         val seq = synchronized(uploadKeys) { uploadKeys[key] } ?: return MockResponse().setResponseCode(404)
+        val screen = runCatching { JSONObject(text) }.getOrNull()?.takeIf { it.optString("format") == FORMAT_SCREEN }
+        if (screen != null) return keepScreenChunk(screen, text.length)
+        val events = runCatching { JSONArray(text) }.getOrNull() ?: return MockResponse().setResponseCode(400)
         var start = Long.MAX_VALUE
         var end = Long.MIN_VALUE
         var full = false
@@ -165,6 +192,62 @@ class InAppSink(
                 "\"platform\":\"android\",\"events\":$events}",
         )
         return MockResponse().setResponseCode(200)
+    }
+
+    /** An `artracker-screen-v1` chunk: only counted and its JPEG frames kept (the last [MAX_SHOTS]); no wireframe export. */
+    private fun keepScreenChunk(chunk: JSONObject, size: Int): MockResponse {
+        val frames = chunk.optJSONArray("frames") ?: return MockResponse().setResponseCode(400)
+        val touches = chunk.optJSONArray("touches")?.length() ?: 0
+        synchronized(shots) {
+            shotChunks++
+            shotFrames += frames.length()
+            shotTouches += touches
+            shotBytes += size
+            for (i in 0 until frames.length()) {
+                val f = frames.optJSONObject(i) ?: continue
+                val jpeg = decodeBase64(f.optString("data")) ?: continue
+                shots.addLast(Shot(f.optLong("ts"), jpeg))
+                while (shots.size > MAX_SHOTS) shots.removeFirst()
+            }
+        }
+        return MockResponse().setResponseCode(200)
+    }
+
+    fun screenshotStats(): ScreenshotStats =
+        synchronized(shots) { ScreenshotStats(shotChunks, shotFrames, shotTouches, shotBytes) }
+
+    /** Writes the last [MAX_SHOTS] screenshot frames as `shot-<n>-<ts>.jpg` into [dir] (older shot files there are removed). */
+    fun exportScreenshots(dir: File): List<File>? = runCatching {
+        dir.mkdirs()
+        dir.listFiles { f -> f.name.startsWith("shot-") && f.name.endsWith(".jpg") }?.forEach { it.delete() }
+        val snapshot = synchronized(shots) { shots.toList() }
+        snapshot.mapIndexed { i, s -> File(dir, "shot-%02d-%d.jpg".format(i, s.ts)).also { it.writeBytes(s.jpeg) } }
+    }.getOrNull()
+
+    /** `java.util.Base64` needs API 26 and this app supports 24; a frame's `data` is plain base64. */
+    private fun decodeBase64(s: String): ByteArray? {
+        val clean = s.trimEnd('=')
+        if (clean.isEmpty()) return null
+        val out = ByteArrayOutputStream(clean.length * 3 / 4)
+        var buffer = 0
+        var bits = 0
+        for (c in clean) {
+            val v = when (c) {
+                in 'A'..'Z' -> c - 'A'
+                in 'a'..'z' -> c - 'a' + 26
+                in '0'..'9' -> c - '0' + 52
+                '+' -> 62
+                '/' -> 63
+                else -> return null
+            }
+            buffer = (buffer shl 6) or v
+            bits += 6
+            if (bits >= 8) {
+                bits -= 8
+                out.write((buffer shr bits) and 0xFF)
+            }
+        }
+        return out.toByteArray()
     }
 
     private fun keepChunk(attributesJson: String) {
@@ -203,6 +286,9 @@ class InAppSink(
         const val CHUNK_URL_PATH = "/api/v1/replay/chunk-url"
         const val UPLOAD_PATH = "/api/v1/replay/upload-chunk"
         const val CHUNK_ACK_PATH = "/api/v1/replay/chunk-ack"
+        const val CONFIG_PATH = "/api/v1/replay/config"
+        const val FORMAT_SCREEN = "artracker-screen-v1"
+        const val MAX_SHOTS = 20
         const val MAX_UNCOMPRESSED = 4 * 1024 * 1024
         const val MAX_CONTROL_BODY = 16 * 1024
         const val MAX_CHUNKS = 50

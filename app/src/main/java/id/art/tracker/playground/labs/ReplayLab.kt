@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -41,10 +42,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import id.art.tracker.R
+import id.art.tracker.playground.local.LocalServersProvider
+import id.art.tracker.playground.settings.SharedPrefsSettingsStore
 import id.art.tracker.playground.status.PlaygroundControls
 import id.art.tracker.playground.ui.ActionCard
 
@@ -79,6 +83,8 @@ fun ReplayLab(modifier: Modifier = Modifier) {
             replayOn = controls.replayOn
             "replay dihentikan"
         }
+
+        ScreenshotSection()
 
         Text(stringResource(R.string.lab_replay_list), style = MaterialTheme.typography.titleSmall)
         Box(Modifier.fillMaxWidth().height(220.dp)) {
@@ -160,5 +166,40 @@ private fun MovingBox() {
     )
     Box(Modifier.fillMaxWidth().height(40.dp)) {
         Box(Modifier.offset(x = x.dp).size(32.dp).background(MaterialTheme.colorScheme.primary))
+    }
+}
+
+/** Screenshot replay: which mode the saved settings use, the local sink's server switch, what it received, and an export. */
+@Composable
+private fun ScreenshotSection() {
+    val context = LocalContext.current
+    val servers = LocalServersProvider.instance
+    val saved = remember { SharedPrefsSettingsStore(context).load() }
+    var allowed by remember { mutableStateOf(servers.screenshotAllowed) }
+    Text(stringResource(R.string.lab_replay_screenshot), style = MaterialTheme.typography.titleSmall)
+    Text(
+        stringResource(R.string.lab_replay_screenshot_mode, saved.replayMode.name, saved.replayQuality.name),
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    if (servers.sinkAvailable) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(stringResource(R.string.lab_replay_screenshot_server))
+            Switch(
+                checked = allowed,
+                onCheckedChange = {
+                    servers.screenshotAllowed = it
+                    allowed = servers.screenshotAllowed
+                },
+                modifier = Modifier.testTag("lab_screenshot_allowed"),
+            )
+        }
+        Text(stringResource(R.string.lab_replay_screenshot_server_note), style = MaterialTheme.typography.bodySmall)
+    }
+    ActionCard(stringResource(R.string.lab_replay_screenshot_summary), stringResource(R.string.lab_replay_screenshot_summary_desc)) {
+        servers.screenshotSummary() ?: "tidak tersedia di build ini"
+    }
+    ActionCard(stringResource(R.string.lab_replay_screenshot_export), stringResource(R.string.lab_replay_screenshot_export_desc)) {
+        val dir = context.getExternalFilesDir(null) ?: context.filesDir
+        servers.exportScreenshots(dir)?.let { "${it.size} frame ditulis ke ${dir.absolutePath}" } ?: "tidak ada yang bisa diekspor"
     }
 }

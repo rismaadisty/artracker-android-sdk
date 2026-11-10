@@ -161,4 +161,23 @@ class SettingsScreenTest {
         rule.onNodeWithTag("field_replaySampleRate").performScrollTo().performTextReplacement("0.")
         assertFieldText("field_replaySampleRate", "0.") // "0." parses to 0.0 but must not become "0.0" under the cursor
     }
+
+    @Test
+    fun screenshotReplay_isAnOptInSwitch_withAQualityChoice() {
+        show()
+        rule.onNodeWithText("Replay screenshot", substring = true).performScrollTo().performClick()
+        rule.onNodeWithText("HIGH").performScrollTo().performClick()
+        rule.onNodeWithText("Terapkan & restart").performScrollTo().performClick()
+        val s = saved.last()
+        assertEquals(id.art.tracker.ReplayMode.SCREENSHOT, s.replayMode)
+        assertEquals(id.art.tracker.ReplayQuality.HIGH, s.replayQuality)
+    }
+
+    @Test
+    fun screenshotReplay_isOffUntilSwitchedOn_soThereIsNoQualityChoiceYet() {
+        show()
+        rule.onNodeWithText("Replay screenshot", substring = true).assertExists()
+        rule.onNodeWithText("HIGH").assertDoesNotExist()
+        rule.onNodeWithText("Terapkan & restart").performScrollTo().assertIsNotEnabled() // nothing changed
+    }
 }

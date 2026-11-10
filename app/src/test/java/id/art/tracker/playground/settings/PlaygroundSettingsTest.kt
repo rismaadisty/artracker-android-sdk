@@ -86,4 +86,16 @@ class PlaygroundSettingsTest {
         assertTrue(low.captureOnlyErrors)
         assertEquals(30_000L, low.flushIntervalMs)
     }
+
+    @Test
+    fun theDefaultIsWireframes_andScreenshotsAreAnExplicitOptIn() {
+        val d = PlaygroundSettings.DEFAULT.toConfig("http://localhost:1", key, debug = false)
+        assertEquals(id.art.tracker.ReplayMode.WIREFRAME, d.replay.mode)
+        val c = PlaygroundSettings.DEFAULT.copy(
+            replayMode = id.art.tracker.ReplayMode.SCREENSHOT, replayQuality = id.art.tracker.ReplayQuality.LOW, replayFps = 2.0,
+        ).toConfig("http://localhost:1", key, debug = false)
+        assertEquals(id.art.tracker.ReplayMode.SCREENSHOT, c.replay.mode)
+        assertEquals(id.art.tracker.ReplayQuality.LOW, c.replay.quality)
+        assertEquals(2.0, c.replay.framesPerSecond, 0.0)
+    }
 }

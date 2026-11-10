@@ -18,7 +18,7 @@ data class PlaygroundSettings(
     val replayEnabled: Boolean = true,
     val replaySampleRate: Double = 1.0,
     val replayFps: Double = 1.0,
-    /** Not in the settings screen (screenshots are opt-in and server-controlled); instrumented tests set it. */
+    /** Screenshot replay is opt-in (and the server can still switch it off): off unless the user turns it on in Settings. */
     val replayMode: ReplayMode = ReplayMode.WIREFRAME,
     val replayQuality: ReplayQuality = ReplayQuality.STANDARD,
     val maskAllInputs: Boolean = true,

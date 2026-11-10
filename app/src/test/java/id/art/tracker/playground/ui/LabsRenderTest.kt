@@ -16,6 +16,7 @@ import id.art.tracker.playground.labs.PrivacyLab
 import id.art.tracker.playground.labs.QueueLab
 import id.art.tracker.playground.labs.ReplayLab
 import id.art.tracker.playground.labs.SessionLab
+import androidx.compose.ui.test.onNodeWithTag
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,6 +56,23 @@ class LabsRenderTest {
         rule.setContent { PlaygroundTheme { ReplayLab() } }
         rule.onNodeWithText("Mulai replay").assertExists()
         rule.onNodeWithText("Pohon lebar (> 2000 node)").assertExists()
+    }
+
+    @Test
+    fun replayLabHasAScreenshotSection_withTheServerSwitchOfTheLocalSink() {
+        val servers = id.art.tracker.playground.local.LocalServersProvider.instance
+        val before = servers.screenshotAllowed
+        try {
+            servers.screenshotAllowed = true
+            rule.setContent { PlaygroundTheme { ReplayLab() } }
+            rule.onNodeWithText("Replay screenshot").assertExists()
+            rule.onNodeWithText("Ringkasan screenshot").assertExists()
+            rule.onNodeWithText("Ekspor screenshot").assertExists()
+            rule.onNodeWithTag("lab_screenshot_allowed").performScrollTo().performClick()
+            org.junit.Assert.assertFalse(servers.screenshotAllowed)
+        } finally {
+            servers.screenshotAllowed = before
+        }
     }
 
     @Test
