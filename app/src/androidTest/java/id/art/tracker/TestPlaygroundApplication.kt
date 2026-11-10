@@ -26,7 +26,7 @@ class TestPlaygroundApplication : Application() {
             settings = PlaygroundSettings.DEFAULT.copy(
                 flushIntervalMs = 1_000,
                 // Screenshots are only used once a test makes the mock backend allow them (MockIngest.screenshotEnabled).
-                replayMode = ReplayMode.SCREENSHOT, replayFps = 2.0, replayQuality = ReplayQuality.HIGH,
+                replayMode = ReplayMode.SCREENSHOT, replayFps = 2.0, replayQuality = ReplayQuality.STANDARD,
             ),
             beforeSend = null,
         )

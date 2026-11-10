@@ -10,7 +10,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -54,47 +58,71 @@ class ScreenshotFlowTest {
     fun uploadedFrameMatchesTheDeviceScreenshot_outsideMaskedAreas() {
         ingest.screenshotEnabled = true // the mock backend allows screenshots; the SDK reads it at the next replay start
         ARTracker.stopReplay()
+        var maskBand: androidx.compose.ui.geometry.Rect? = null // where the masked box really is, in window pixels
         rule.setContent {
             Column(Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().height(160.dp).background(androidx.compose.ui.graphics.Color(0xFF1976D2)))
                 Box(Modifier.fillMaxWidth().height(160.dp).background(androidx.compose.ui.graphics.Color(0xFFFFC107)))
-                Box(Modifier.fillMaxWidth().height(120.dp).artrackerMask().background(androidx.compose.ui.graphics.Color.Red))
+                Box(
+                    Modifier.fillMaxWidth().height(120.dp).onGloballyPositioned { maskBand = it.boundsInWindow() }
+                        .artrackerMask().background(androidx.compose.ui.graphics.Color.Red),
+                )
                 Box(Modifier.fillMaxWidth().height(160.dp).background(androidx.compose.ui.graphics.Color(0xFF388E3C)))
             }
         }
         rule.waitForIdle()
+        val startedAt = System.currentTimeMillis()
         ARTracker.startReplay()
         Thread.sleep(2_500) // config answered, first (forced) screenshot taken
         rule.waitForIdle()
         val device = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        val shotAt = System.currentTimeMillis()
         Thread.sleep(1_000)
         ARTracker.stopReplay()
         ARTracker.flush()
 
-        val seen = ingest.awaitUntil(20_000) { screenChunks(it).isNotEmpty() }
-        val chunks = screenChunks(seen)
-        assertTrue("an artracker-screen-v1 chunk must be uploaded", chunks.isNotEmpty())
-        val frames = chunks.last().getJSONArray("frames")
-        val frame = frames.getJSONObject(frames.length() - 1)
+        // Replay may already have been recording (an older chunk from stopReplay() above can arrive first), so wait for
+        // the frame that was on screen when the device screenshot was taken: the newest one captured since the replay
+        // started and not after the screenshot (the screen is static, so a later duplicate would never be sent anyway).
+        fun frameOnScreen(seen: List<MockIngest.Recorded>): JSONObject? =
+            screenChunks(seen)
+                .flatMap { c -> (0 until c.getJSONArray("frames").length()).map { c.getJSONArray("frames").getJSONObject(it) } }
+                .filter { it.getLong("ts") in startedAt..shotAt }
+                .maxByOrNull { it.getLong("ts") }
+        val seen = ingest.awaitUntil(20_000) { frameOnScreen(it) != null }
+        val frame = checkNotNull(frameOnScreen(seen)) {
+            "no frame captured between replay start ($startedAt) and the device screenshot ($shotAt); frame timestamps: ${
+                screenChunks(seen).flatMap { c -> (0 until c.getJSONArray("frames").length()).map { c.getJSONArray("frames").getJSONObject(it).getLong("ts") } }
+            }"
+        }
         assertEquals("image/jpeg", frame.getString("mime"))
         val bytes = Base64.decode(frame.getString("data"), Base64.DEFAULT)
         val image = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
 
+        // Keep both images next to the app's files: a failure is easier to judge by eye (adb pull the folder).
+        rule.activity.getExternalFilesDir(null)?.let { dir ->
+            java.io.File(dir, "screenshot-frame.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            java.io.File(dir, "screenshot-device.png").outputStream().use { device.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        }
         val decor = rule.activity.window.decorView
         val origin = IntArray(2).also { decor.getLocationOnScreen(it) }
         val scale = image.width.toFloat() / decor.width
-        val density = rule.activity.resources.displayMetrics.density
-        val maskTopPx = (160 + 160) * density
-        val maskBottomPx = maskTopPx + 120 * density
+        // The system bars are drawn by SystemUI over the screen, not by the app window the SDK copies: leave them out.
+        val bars = ViewCompat.getRootWindowInsets(decor)?.getInsets(WindowInsetsCompat.Type.systemBars())
+        val barTop = (bars?.top ?: 0) + 4
+        val barBottom = decor.height - (bars?.bottom ?: 0) - 4
+        val band = checkNotNull(maskBand) { "the masked box was never laid out" }
 
         var checked = 0
         var agreed = 0
+        val badRows = java.util.TreeMap<Int, Int>() // frame row -> disagreeing samples, for the failure message
         var y = 8
         while (y < image.height - 8) {
             var x = 8
             while (x < image.width - 8) {
                 val windowY = y / scale
-                if (windowY < maskTopPx - 4 || windowY > maskBottomPx + 4) { // skip the masked band and its edges
+                val outsideMask = windowY < band.top - 4 || windowY > band.bottom + 4 // the masked band and its edges are skipped
+                if (outsideMask && windowY > barTop && windowY < barBottom) {
                     val px = image.getPixel(x, y)
                     val dx = (origin[0] + x / scale).toInt().coerceIn(0, device.width - 1)
                     val dy = (origin[1] + y / scale).toInt().coerceIn(0, device.height - 1)
@@ -104,6 +132,8 @@ class ScreenshotFlowTest {
                         abs(Color.blue(px) - Color.blue(ref)) <= 8
                     ) {
                         agreed++
+                    } else {
+                        badRows.merge(y, 1, Int::plus)
                     }
                 }
                 x += 16
@@ -111,10 +141,14 @@ class ScreenshotFlowTest {
             y += 16
         }
         assertTrue("too few samples: $checked", checked > 50)
-        assertTrue("only $agreed of $checked samples within 8/255", agreed >= checked * 0.95)
+        assertTrue(
+            "only $agreed of $checked samples within 8/255; image ${image.width}x${image.height}, window ${decor.width}x${decor.height} " +
+                "at ${origin.toList()}, device ${device.width}x${device.height}, disagreeing rows: $badRows",
+            agreed >= checked * 0.95,
+        )
 
         // And the masked band really is masked: no pure red left in it.
-        val my = (((maskTopPx + maskBottomPx) / 2) * scale).toInt().coerceIn(0, image.height - 1)
+        val my = (((band.top + band.bottom) / 2) * scale).toInt().coerceIn(0, image.height - 1)
         val mp = image.getPixel(image.width / 2, my)
         assertTrue("the masked band must not show the app's red", !(Color.red(mp) > 200 && Color.green(mp) < 60))
     }

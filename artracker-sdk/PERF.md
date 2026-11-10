@@ -161,4 +161,9 @@ mode) and `Replay watchdog: fps lowered to ...` when the watchdog fires.
 
 | Device / API | Quality | Minutes | Total chunk MB | Jank delta (pp) | Watchdog fired? |
 | --- | --- | --- | --- | --- | --- |
-| _not measured_ | | | | | |
+| OPPO CPH2387, API 34, debug build, `ScreenshotBudgetTest` | STANDARD, 2 fps | 1 (partial) | 4.09 (110 frames; limit for 1 min: 5.00) | -3.92, but the baseline already had 83 % of frames over 16 ms (heavy list, debug build), so this says nothing about the 2-point limit | not recorded |
+
+Only the data budget of a one-minute run is measured (inside the limit). The 5-minute run and a jank comparison with a
+light, realistic baseline are still to do: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, install both
+with `adb install -r -t`, then `adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotBudgetTest -e durationMs 300000 id.art.tracker.test/id.art.tracker.PlaygroundTestRunner`
+(it prints a `budget_report` line with the uploaded MB and both jank figures).
