@@ -11,7 +11,7 @@ val sdkVersion = "0.1.0"
 android {
     namespace = "id.art.tracker.sdk"
     compileSdk {
-        version = release(36)
+        version = release(35)
     }
 
     defaultConfig {
@@ -47,6 +47,10 @@ android {
 kotlin {
     explicitApi()
     compilerOptions {
+        // AGP 9's built-in Kotlin compiles with 2.2.x by default, which writes Kotlin 2.2 metadata into the AAR and
+        // breaks hosts on Kotlin 2.0.x. Pin language/API level so the AAR is readable by Kotlin 2.0.21.
+        languageVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
+        apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
         // The SDK itself uses its experimental API (NetworkConfig.sender); only hosts get the warning.
         optIn.add("id.art.tracker.ExperimentalARTrackerApi")
     }
@@ -56,7 +60,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.lifecycle.process)
-    implementation(libs.androidx.core.ktx)
+    // 1.15.0 is the last core-ktx that builds with compileSdk 35 (1.16+ forces minCompileSdk 36 into the AAR metadata).
+    implementation(libs.androidx.core.ktx.sdk)
 
     compileOnly(libs.okhttp)
     compileOnly(libs.androidx.fragment.ktx)
@@ -77,8 +82,22 @@ dependencies {
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.compose.ui.test.manifest)
-    testImplementation(libs.androidx.activity.compose)
+    // 1.10.1: activity 1.11 requires compileSdk 36.
+    testImplementation(libs.androidx.activity.compose.sdk.test)
     testImplementation(libs.androidx.compose.material3)
+}
+
+// Release AAR for apps that consume the file directly (no Maven repository):
+// `./gradlew :artracker-sdk:exportReleaseAar` -> artracker-sdk/build/dist/artracker-android-<version>.aar
+// AGP's own output (artracker-sdk/build/outputs/aar/artracker-sdk-release.aar) has a generic name and no version.
+// A bare AAR does not carry its dependencies: see docs/release-aar.md for the list the host app must add.
+val exportReleaseAar by tasks.registering(Copy::class) {
+    group = "publishing"
+    description = "Builds the release AAR and copies it, with the SDK version in its name, to artracker-sdk/build/dist."
+    dependsOn("bundleReleaseAar")
+    from(layout.buildDirectory.file("outputs/aar/artracker-sdk-release.aar"))
+    into(layout.buildDirectory.dir("dist"))
+    rename { "artracker-android-$sdkVersion.aar" }
 }
 
 // Publishing: only mavenLocal by default (`./gradlew :artracker-sdk:publishToMavenLocal`). No remote repository and
