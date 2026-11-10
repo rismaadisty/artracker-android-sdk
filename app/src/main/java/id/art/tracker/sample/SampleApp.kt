@@ -9,6 +9,8 @@ import id.art.tracker.BeforeSend
 import id.art.tracker.ExperimentalARTrackerApi
 import id.art.tracker.NetworkConfig
 import id.art.tracker.ReplayConfig
+import id.art.tracker.ReplayMode
+import id.art.tracker.ReplayQuality
 import id.art.tracker.playground.settings.PlaygroundSettings
 
 /** Sample-app glue around the SDK, kept free of `BuildConfig` so it can be unit tested. */
@@ -16,7 +18,7 @@ object SampleApp {
     private const val TAG = "ARTrackerSample"
 
     /**
-     * Initialises ARTracker with demo settings (replay on, every session sampled; SDK debug logging only when
+     * Initialises ARTracker with demo settings (replay on with real, masked screenshots, every session sampled; SDK debug logging only when
      * [debug] is true, i.e. `BuildConfig.DEBUG` in the real app).
      * With a blank [key] it logs once and skips the SDK, so the app still runs without a backend.
      * [settings] (null = the legacy fixed demo config) and [beforeSend] are optional; when [settings] is given,
@@ -55,7 +57,10 @@ object SampleApp {
         apiKey = key,
         environment = "sample",
         debug = debug,
-        replay = ReplayConfig(enabled = true, sampleRate = 1.0, framesPerSecond = 1.0),
+        replay = ReplayConfig(
+            enabled = true, sampleRate = 1.0, framesPerSecond = 2.0,
+            mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.STANDARD,
+        ),
         network = NetworkConfig(sender = sender),
         beforeSend = beforeSend,
     )

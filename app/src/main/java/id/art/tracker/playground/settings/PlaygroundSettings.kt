@@ -17,9 +17,12 @@ data class PlaygroundSettings(
     val environment: String = "sample",
     val replayEnabled: Boolean = true,
     val replaySampleRate: Double = 1.0,
-    val replayFps: Double = 1.0,
-    /** Screenshot replay is opt-in (and the server can still switch it off): off unless the user turns it on in Settings. */
-    val replayMode: ReplayMode = ReplayMode.WIREFRAME,
+    val replayFps: Double = 2.0,
+    /**
+     * The sample records real, masked screenshots so they can be tried out of the box (the SDK's own default is
+     * WIREFRAME, opt-in). The server can still switch screenshots off; Settings can switch back to wireframes.
+     */
+    val replayMode: ReplayMode = ReplayMode.SCREENSHOT,
     val replayQuality: ReplayQuality = ReplayQuality.STANDARD,
     val maskAllInputs: Boolean = true,
     val maskAllText: Boolean = false,

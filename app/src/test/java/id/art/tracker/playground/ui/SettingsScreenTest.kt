@@ -163,9 +163,10 @@ class SettingsScreenTest {
     }
 
     @Test
-    fun screenshotReplay_isAnOptInSwitch_withAQualityChoice() {
+    fun screenshotReplay_isOnByDefaultInTheSample_withAQualityChoice() {
         show()
-        rule.onNodeWithText("Replay screenshot", substring = true).performScrollTo().performClick()
+        rule.onNodeWithText("Replay screenshot", substring = true).assertExists()
+        rule.onNodeWithText("STANDARD").assertExists()
         rule.onNodeWithText("HIGH").performScrollTo().performClick()
         rule.onNodeWithText("Terapkan & restart").performScrollTo().performClick()
         val s = saved.last()
@@ -174,10 +175,11 @@ class SettingsScreenTest {
     }
 
     @Test
-    fun screenshotReplay_isOffUntilSwitchedOn_soThereIsNoQualityChoiceYet() {
+    fun switchingScreenshotReplayOff_hidesTheQualityChoice_andSavesWireframes() {
         show()
-        rule.onNodeWithText("Replay screenshot", substring = true).assertExists()
+        rule.onNodeWithText("Replay screenshot", substring = true).performScrollTo().performClick()
         rule.onNodeWithText("HIGH").assertDoesNotExist()
-        rule.onNodeWithText("Terapkan & restart").performScrollTo().assertIsNotEnabled() // nothing changed
+        rule.onNodeWithText("Terapkan & restart").performScrollTo().performClick()
+        assertEquals(id.art.tracker.ReplayMode.WIREFRAME, saved.last().replayMode)
     }
 }

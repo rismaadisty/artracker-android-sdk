@@ -88,12 +88,12 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun anOldSavedStateWithoutTheScreenshotKeys_loadsAsWireframes() {
+    fun anOldSavedStateWithoutTheScreenshotKeys_loadsTheSampleDefaults() {
         // Saved before screenshot mode existed: no replayMode / replayQuality keys.
         SharedPrefsSettingsStore(context).save(PlaygroundSettings.DEFAULT)
         prefs.edit().remove("replayMode").remove("replayQuality").commit()
         val loaded = SharedPrefsSettingsStore(context).load()
-        assertEquals(ReplayMode.WIREFRAME, loaded.replayMode)
+        assertEquals(ReplayMode.SCREENSHOT, loaded.replayMode)
         assertEquals(ReplayQuality.STANDARD, loaded.replayQuality)
     }
 }

@@ -49,8 +49,8 @@
     <string name="settings_replay_enabled">Replay aktif</string>
     <string name="settings_replay_rate">Replay sampleRate (0..1)</string>
     <string name="settings_replay_fps">Replay fps</string>
-    <string name="settings_replay_screenshot">Replay screenshot (opt-in)</string>
-    <string name="settings_replay_screenshot_note">Foto layar asli yang di-mask di perangkat sebelum dikirim. Hanya aktif bila server mengizinkan; sink lokal mengizinkannya. Disarankan fps 2.</string>
+    <string name="settings_replay_screenshot">Replay screenshot</string>
+    <string name="settings_replay_screenshot_note">Foto layar asli yang di-mask di perangkat sebelum dikirim. Aktif bila server mengizinkan (sink lokal mengizinkan); selain itu aplikasi merekam wireframe. Matikan untuk kembali ke wireframe. Disarankan fps 2.</string>
     <string name="settings_replay_quality">Kualitas gambar</string>
     <string name="settings_mask_inputs">Mask semua input</string>
     <string name="settings_mask_text">Mask semua teks</string>
