@@ -1,6 +1,9 @@
 package id.art.tracker.transport
 
+import android.content.ContentValues
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.testutil.FakeClock
 import org.junit.After
@@ -15,6 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -41,8 +45,13 @@ class ReplayStoreTest {
         maxAttempts: Int = 8,
     ): ReplayStore = ReplayStore(context, clock, maxBytes, maxBatches, maxAttempts, dbName).also { opened += it }
 
+    private val bodiesDir: File get() = File(context.noBackupFilesDir, "artracker/replay")
+
+    private fun bodyFiles(): List<File> = bodiesDir.listFiles()?.toList().orEmpty()
+
     private fun batch(
         session: String,
+        format: String = ReplayFormat.RRWEB,
         firstTs: Long = 1_000L,
         lastTs: Long = 2_000L,
         body: ByteArray = byteArrayOf(1, 2, 3),
@@ -57,6 +66,7 @@ class ReplayStoreTest {
         hasError = hasError,
         userId = userId,
         environment = "test",
+        format = format,
     )
 
     @Test
@@ -233,5 +243,141 @@ class ReplayStoreTest {
         assertNull(u.userId)
         assertEquals("test", u.environment)
         assertFalse(u.id.isEmpty())
+    }
+
+    @Test
+    fun body_isAFileUnderNoBackupFiles_notABlob_andCompleteDeletesIt() {
+        val s = store()
+        s.enqueue(batch("A"))
+        assertEquals(1, bodyFiles().size)
+        val u = s.claim()!!
+        assertEquals(1, bodyFiles().size) // in flight: still on disk
+        s.complete(u.id)
+        assertEquals(0, bodyFiles().size)
+    }
+
+    @Test
+    fun aBodyLargerThanTheCursorWindow_roundTrips() {
+        val s = store()
+        val body = ByteArray(3 * 1024 * 1024) { (it * 13).toByte() }
+        s.enqueue(batch("A", body = body))
+        assertArrayEquals(body, s.claim()!!.gzipBody)
+    }
+
+    @Test
+    fun format_roundTrips_andDefaultsToRrweb() {
+        val s = store()
+        s.enqueue(batch("A"))
+        clock.advance(1)
+        s.enqueue(batch("A", format = ReplayFormat.SCREEN_V1))
+        assertEquals(ReplayFormat.RRWEB, s.claim()!!.format)
+        assertEquals(ReplayFormat.SCREEN_V1, s.claim()!!.format)
+    }
+
+    @Test
+    fun clearFormat_removesOnlyPendingBatchesOfThatFormat_withTheirFiles() {
+        val s = store()
+        s.enqueue(batch("A", format = ReplayFormat.SCREEN_V1))
+        clock.advance(1)
+        s.enqueue(batch("A", format = ReplayFormat.RRWEB))
+        clock.advance(1)
+        s.enqueue(batch("A", format = ReplayFormat.SCREEN_V1))
+        s.clearFormat(ReplayFormat.SCREEN_V1)
+        assertEquals(1, s.pendingCount())
+        assertEquals(1, bodyFiles().size)
+        assertEquals(ReplayFormat.RRWEB, s.claim()!!.format)
+    }
+
+    @Test
+    fun eviction_andClear_andPurge_deleteTheirFiles() {
+        val s = store(maxBatches = 2)
+        s.enqueue(batch("A")); clock.advance(1)
+        s.enqueue(batch("A")); clock.advance(1)
+        s.enqueue(batch("A")); clock.advance(1)
+        assertEquals(2, bodyFiles().size) // the oldest was evicted with its file
+        s.purgeOlderThan(clock.nowMs() - 1)
+        assertEquals(1, bodyFiles().size)
+        s.clear()
+        assertEquals(0, bodyFiles().size)
+    }
+
+    @Test
+    fun claim_skipsAndRemovesARowWhoseFileIsGone() {
+        val s = store()
+        s.enqueue(batch("A")); clock.advance(1)
+        s.enqueue(batch("B", body = byteArrayOf(9, 9)))
+        bodyFiles().minByOrNull { it.name }!!.delete() // ids are time-ordered: this is A's body
+        val u = s.claim()!!
+        assertEquals("B", u.sessionId)
+        assertEquals(0, s.pendingCount())
+        s.release(u.id)
+        assertEquals(1, s.pendingCount()) // A's row is gone, only B remains
+    }
+
+    @Test
+    fun resetOrphaned_sweepsFilesNoRowPointsTo() {
+        val s = store()
+        s.enqueue(batch("A"))
+        bodiesDir.mkdirs()
+        File(bodiesDir, "stray.gz").writeBytes(byteArrayOf(1))
+        s.resetOrphaned()
+        assertEquals(1, bodyFiles().size)
+        assertTrue(bodyFiles().none { it.name == "stray.gz" })
+    }
+
+    @Test
+    fun defaultCap_is50Megabytes() {
+        assertEquals(50L * 1024 * 1024, ReplayStore.DEFAULT_MAX_BYTES)
+    }
+
+    @Test
+    fun upgradeFromV1_writesTheBlobBodiesOutToFiles() {
+        val body = ByteArray(1000) { (it * 7).toByte() }
+        object : SQLiteOpenHelper(context, dbName, null, 1) {
+            override fun onCreate(db: SQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE replay_batches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, " +
+                        "created_at INTEGER NOT NULL, first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, " +
+                        "event_count INTEGER NOT NULL, has_error INTEGER NOT NULL, user_id TEXT, environment TEXT NOT NULL, " +
+                        "body BLOB NOT NULL, size_bytes INTEGER NOT NULL, claimed INTEGER NOT NULL DEFAULT 0, " +
+                        "attempts INTEGER NOT NULL DEFAULT 0)",
+                )
+                db.execSQL("CREATE INDEX idx_replay_pending ON replay_batches(claimed, created_at, seq)")
+                db.execSQL(
+                    "CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL, " +
+                        "start_ms INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+                )
+            }
+
+            override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) = Unit
+        }.also { h ->
+            val db = h.writableDatabase
+            db.insertOrThrow(
+                "replay_batches", null,
+                ContentValues().apply {
+                    put("id", "old-1"); put("session_id", "OLD"); put("seq", 0); put("created_at", 500L)
+                    put("first_ts", 1L); put("last_ts", 2L); put("event_count", 4); put("has_error", 1)
+                    put("environment", "prod"); put("body", body); put("size_bytes", body.size)
+                },
+            )
+            db.insertOrThrow(
+                "replay_seq", null,
+                ContentValues().apply { put("session_id", "OLD"); put("next_seq", 1); put("start_ms", 1L); put("updated_at", 500L) },
+            )
+            h.close()
+        }
+
+        val s = store()
+        assertEquals(1, s.pendingCount())
+        val u = s.claim()!!
+        assertEquals("OLD", u.sessionId)
+        assertEquals(0, u.seq)
+        assertArrayEquals(body, u.gzipBody)
+        assertEquals(ReplayFormat.RRWEB, u.format)
+        assertTrue(u.hasError)
+        assertEquals(1, bodyFiles().size)
+        // the session counter survived: the next batch continues the sequence
+        s.enqueue(batch("OLD"))
+        assertEquals(1, s.claim()!!.seq)
     }
 }

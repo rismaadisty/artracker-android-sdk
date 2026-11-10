@@ -68,4 +68,7 @@ internal interface ReplayQueue {
 
     /** Deletes batches and `seq` counters last touched before [cutoffMs]. */
     fun purgeOlderThan(cutoffMs: Long)
+
+    /** Deletes the pending (not in-flight) batches of one [ReplayFormat]; the `seq` counters stay. */
+    fun clearFormat(format: String)
 }

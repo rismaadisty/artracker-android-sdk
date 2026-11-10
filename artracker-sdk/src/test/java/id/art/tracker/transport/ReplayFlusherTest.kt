@@ -214,6 +214,23 @@ class ReplayFlusherTest {
         assertEquals(2, store.pendingCount())
     }
 
+    @Test
+    fun screenshotDisabled_dropsTheBatch_clearsQueuedScreenshots_andTellsTheOwner() {
+        store.enqueue(NewReplayBatch("s", byteArrayOf(1), 1, 1_000, 2_000, false, null, "test", ReplayFormat.SCREEN_V1))
+        store.enqueue(NewReplayBatch("s", byteArrayOf(2), 1, 1_000, 2_000, false, null, "test", ReplayFormat.SCREEN_V1))
+        store.enqueue(NewReplayBatch("s", byteArrayOf(3), 1, 1_000, 2_000, false, null, "test", ReplayFormat.RRWEB))
+        var told = 0
+        val f = ReplayFlusher(store, sender, killSwitch, clock, Backoff(random = maxJitter), scheduler, onScreenshotDisabled = { told++ })
+        results += ReplayResult.ScreenshotDisabled
+
+        assertEquals(FlushOutcome.DROPPED, f.flushOnce())
+
+        assertEquals("replay_screenshot_disabled", f.lastResult)
+        assertEquals(1, told)
+        assertEquals(1, store.pendingCount()) // only the wireframe batch is left
+        assertEquals(ReplayFormat.RRWEB, store.claim()!!.format)
+    }
+
     /** Counts claim() calls so the test can tell how many drain rounds the kicker ran. */
     private class CountingQueue(private val inner: ReplayQueue) : ReplayQueue by inner {
         val claims = AtomicInteger()
