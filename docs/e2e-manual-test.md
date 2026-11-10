@@ -73,7 +73,8 @@ Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artr
 2. Use Login, Feed, Payment, a dialog and a bottom sheet for a minute, background the app and open the session in the dashboard. Compare it with a device screen recording: fonts, icons, photos, colors, dialogs, bottom sheets and system-bar colors should match; navigation transitions and scrolling should show as motion at 4 fps. The keyboard shows as a grey "keyboard" band.
 3. Password and number fields, `artrackerMask()` areas and a WebView must show the grey cross-stripe pattern, and no typed secret may be readable in any frame. A screen with `FLAG_SECURE` must be fully masked.
 4. Switch the project's screenshot setting off on the server (`screenshot_enabled: false`, or `403 screenshot_disabled` on `chunk-url`): the running session must continue as a wireframe recording (a full snapshot) and queued screenshot chunks must disappear.
-5. On API 24-25 expect the `View.draw` path: no `SurfaceView`/video content, everything else the same.
+5. Machine-checked part of steps 2-3 (run on a device, passed on an OPPO CPH2387, API 34): `id.art.tracker.e2e.ScreenshotScreensTest` compares an uploaded frame with `UiAutomation.takeScreenshot()` for fonts (bold, italic monospace, serif), vector icons, a gradient picture, colors and a dialog with its dim (8/255, 93 % of grid samples); `ScreenshotFlowTest` does the same for flat colors plus a masked band. What stays for a person: motion at 4 fps, bottom sheets, real photos and the dashboard itself. Run with `adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotScreensTest id.art.tracker.test/id.art.tracker.PlaygroundTestRunner` (frames are left in the app's external files folder as `screens-*-frame.png` and `screens-*-device.png`).
+6. On API 24-25 expect the `View.draw` path: no `SurfaceView`/video content, everything else the same.
 
 ## 7. Extras
 
