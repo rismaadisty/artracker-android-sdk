@@ -67,6 +67,14 @@ Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artr
 4. Fetch the events JSON and grep it for the typed secrets, for example `curl -H "Authorization: Bearer $TOKEN" ... | grep -c 'hunter2-secret'`. Expected: `0`. Card digits and the payment total must not appear either (the total is masked by `Modifier.artrackerMask()`).
 5. Open the Legacy XML screen and type into the password and number fields; the tagged containers (`artracker-mask`) must be masked in the uploaded replay too.
 
+### 6b. Screenshot replay (opt-in)
+
+1. Build the sample with `ReplayConfig(mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.HIGH, framesPerSecond = 4.0)` on a real device (API 26+), against a backend whose `GET /api/v1/replay/config` returns `{"screenshot_enabled": true}`.
+2. Use Login, Feed, Payment, a dialog and a bottom sheet for a minute, background the app and open the session in the dashboard. Compare it with a device screen recording: fonts, icons, photos, colors, dialogs, bottom sheets and system-bar colors should match; navigation transitions and scrolling should show as motion at 4 fps. The keyboard shows as a grey "keyboard" band.
+3. Password and number fields, `artrackerMask()` areas and a WebView must show the grey cross-stripe pattern, and no typed secret may be readable in any frame. A screen with `FLAG_SECURE` must be fully masked.
+4. Switch the project's screenshot setting off on the server (`screenshot_enabled: false`, or `403 screenshot_disabled` on `chunk-url`): the running session must continue as a wireframe recording (a full snapshot) and queued screenshot chunks must disappear.
+5. On API 24-25 expect the `View.draw` path: no `SurfaceView`/video content, everything else the same.
+
 ## 7. Extras
 
 - Diagnostics panel refreshes every second (pending items, last send result).

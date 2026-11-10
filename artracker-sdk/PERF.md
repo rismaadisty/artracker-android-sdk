@@ -144,3 +144,21 @@ $ANDROID_HOME/build-tools/<version>/d8 --lib $ANDROID_HOME/platforms/android-36/
 - Method count (section 5).
 - Playback of the exported chunks in `rrweb-player` (`tools/replay-viewer/index.html`); only the structure was checked,
   by `validate-chunks.mjs`.
+
+## 4. Screenshot replay (`ReplayMode.SCREENSHOT`)
+
+Targets: **<= 25 MB of chunks for 5 minutes of continuous scrolling** at `STANDARD`, 2 fps (the governor aims at <= 5 MB
+per minute), and host-app jank (`FrameMetrics`, frames > 16 ms) up **<= 2 percentage points** versus replay disabled.
+Not yet measured on a device: the table is empty until someone runs it.
+
+Procedure: sample app, debug build, `ReplayConfig(enabled = true, sampleRate = 1.0, framesPerSecond = 2.0,
+mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.STANDARD)` against a backend whose `GET /replay/config` answers
+`screenshot_enabled: true`. Scroll the Feed for 5 minutes, then sum the queued/uploaded chunk bytes (the `size_bytes` of
+the `chunk-url` calls, or the files in `files/artracker/replay/` when offline). For the jank figure run a Macrobenchmark
+scroll of the Feed with and without replay (`FrameTimingMetric`, `frameOverrunMs`) and compare the share of frames over 16 ms.
+`adb logcat -s ARTracker:D` shows `replay capture took ... us` per capture (main-thread cost, budget 16 ms in screenshot
+mode) and `Replay watchdog: fps lowered to ...` when the watchdog fires.
+
+| Device / API | Quality | Minutes | Total chunk MB | Jank delta (pp) | Watchdog fired? |
+| --- | --- | --- | --- | --- | --- |
+| _not measured_ | | | | | |

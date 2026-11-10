@@ -221,7 +221,7 @@ Modifier.artrackerMask() / Modifier.artrackerUnmask()
 | **A. Wireframe → event rrweb** *(direkomendasikan)* | Player rrweb di dashboard bisa langsung memutarnya; ukuran kecil (target <45 KB/menit, sesuai klaim landing page); masking struktural (teks diganti sebelum keluar); sesuai batas 24 KB/item | Visual tidak *pixel-perfect* (foto/gambar besar = placeholder, custom drawing tidak terekam; warna, bentuk, font, dan icon kecil terekam) |
 | B. Screenshot (PixelCopy) | Pixel-perfect | 30–100 KB/frame WebP sehingga melanggar soft cap 24 KB per item dan kuota event; masking butuh menggambar kotak di bitmap (rawan bocor bila koordinat meleset); biaya CPU/baterai tinggi |
 
-Mode screenshot dicatat sebagai pekerjaan masa depan (§13), bukan v1.
+Wireframe tetap menjadi mode bawaan. **Mode screenshot sekarang ada sebagai opsi opt-in** (`ReplayConfig.mode = SCREENSHOT`): lihat §6.6. Catatan tabel di atas (kuota 24 KB, biaya) berlaku untuk jalur `/ingest` lama; screenshot memakai Session Replay API dengan anggaran data sendiri.
 
 ### 6.2 Capture
 
@@ -240,6 +240,8 @@ Mode screenshot dicatat sebagai pekerjaan masa depan (§13), bukan v1.
 
 ### 6.4 Encoding ke rrweb
 
+Mutasi ditulis **satu entri `adds` per node**, urutan pre-order (parent selalu sebelum anak): node elemen dikirim tanpa anaknya (`childNodes: []`), node teks menjadi entri sendiri, dan `nextId` hanya ada di akar subtree (entri lain `null`). Replayer rrweb membangun tiap entri dengan `skipChild`, jadi `childNodes` bersarang akan membangun anak dua kali dan add berikutnya tidak menemukan parent-nya. `font-family` ditulis `Roboto,<generik>`; `overflow:hidden` hanya untuk node yang memang memotong (`clipToOutline`, scroll container, clip Compose).
+
 | Kejadian | Event rrweb |
 | --- | --- |
 | Mulai/ganti layar/rotasi, dan checkout tiap 2 menit | `Meta (4)` `{href:"android://<screen>", width, height}` + `FullSnapshot (2)`: dokumen sintetis `html>body>div` dengan `div` absolute per wireframe (`style="left:..;top:..;width:..;height:..;background:..;color:..;font-size:.."`) |
@@ -257,6 +259,26 @@ Mode screenshot dicatat sebagai pekerjaan masa depan (§13), bukan v1.
 - Flush tick tiap 5 detik memindahkan chunk ke batch; batch ditutup menurut aturan di atas.
 - Upload replay lewat `ARTrackerSender` bila host mengaturnya (`NetworkConfig.sender`), jadi Chucker, certificate pinning, dan proxy host ikut mencakupnya; tanpa sender dipakai `HttpURLConnection` bawaan (`ReplayClient`). Karena itu `SendRequest` punya `method` (`POST`, atau `PUT` untuk upload) dan `SendResponse` punya `body` (langkah `chunk-url` membaca `upload_url` darinya). `FlushWorker` di proses tanpa `init` selalu memakai transport bawaan.
 - **Default `replay.enabled = false`** (opt-in, setara keputusan D2 web) dan `sampleRate = 0.1`. Sampling deterministik: `hash(session_id) < sampleRate`.
+
+### 6.6 Mode screenshot (opt-in)
+
+Tujuan: dashboard menampilkan persis yang dilihat pengguna (font, icon, foto, warna, gerak), dengan data sensitif tetap di-mask **di perangkat**. API: `ReplayConfig(mode = ReplayMode.SCREENSHOT, quality = ReplayQuality.LOW|STANDARD|HIGH)`; `WIREFRAME` tetap default. Preset (sisi pendek gambar / kualitas JPEG): LOW 480 px / 50, STANDARD 720 px / 60, HIGH 1080 px / 75, tidak pernah di-upscale. `framesPerSecond` dijepit 0,5–4 (wireframe) atau 0,5–10 (screenshot; disarankan 2).
+
+**Resolusi mode** (`ReplayController`): mode efektif = `SCREENSHOT` hanya bila dikonfigurasi **dan** `screenshot_enabled` dari `GET /api/v1/replay/config` bernilai true (cache di `KeyValueStore`, diperbarui tiap replay start oleh `ReplayRemote`). Sebelum jawaban pertama sesi merekam wireframe lalu pindah (screenshot pertama dipaksa). `403 {"error":"screenshot_disabled"}` pada `chunk-url` (→ `ReplayResult.ScreenshotDisabled`), atau jawaban "disabled", menjadikan cache `false`, menghapus chunk screenshot di antrean (`ReplayQueue.clearFormat`), dan menurunkan sesi berjalan ke wireframe dengan full snapshot; dicatat sekali. `max_fps` dari server membatasi fps; fallback wireframe tidak pernah lebih cepat dari 4 fps.
+
+**Capture** (`replay/screenshot/`):
+
+| Kelas | Tugas |
+| --- | --- |
+| `ScreenshotCapturer` (main thread) | `PixelCopy` window Activity (API 26+; `View.draw` di API 24–25 atau bila copy gagal), dialog/popup di-`draw` di atas dengan dim window; satu bitmap ukuran layar dari `BitmapPool` (2 buffer dipakai ulang). Window `FLAG_SECURE` tidak pernah di-copy/di-draw, areanya masuk daftar mask. Area keyboard (IME, proses lain) dikembalikan sebagai placeholder |
+| `MaskCollector` / `ComposeMaskCollector` (main thread, satu pass yang sama) | Kumpulkan rect mask dalam koordinat layar dari `MaskingPolicy` (password, sensitif, mask eksplisit, `maskAllInputs`, `maskAllText`, `sensitiveViewClasses`, view terblokir) dan pass semantics Compose khusus mask (`ComposeMaskRules`, tanpa membaca gaya). Gagal membaca → frame dibuang |
+| `ScreenshotEncoder` (thread pemrosesan) | Cat mask (`MaskPainter`, pola silang) **di bitmap ukuran penuh sebelum** fingerprint, scale, dan JPEG; fingerprint CRC dari downscale 64×64 menekan frame kembar; scale ke preset; JPEG |
+| `ByteBudgetGovernor` | Jendela 60 s byte terenkode; >5 MB → fps dibagi dua (min 0,5, paling sering tiap 10 s); overrun menetap di lantai fps → kualitas turun satu preset (tidak naik lagi dalam sesi); pulih di bawah 80 % |
+| `ScreenChunker` | Chunk `artracker-screen-v1` (JSON gzip `{format, platform:"android", seq, frames:[{ts,screen,w,h,vw,vh,mime,data(base64),masked}], touches:[{ts,x,y,kind}]}`), tutup di 10 s, 2 MB gzip, atau ganti sesi; frame yang tidak muat sendirian di-encode ulang satu preset lebih rendah, kalau masih tidak muat dibuang |
+
+Pemicu capture memakai `FrameScheduler` yang sama (dirty flag + `requestSoon`), watchdog 16 ms per capture dan `capFps` dari governor/server. Keputusan: `SurfaceView`/`TextureView`/`VideoView`/peta/WebView tetap **terblokir** oleh `MaskingPolicy`, sehingga areanya di-mask, bukan di-composite lewat `PixelCopy(surfaceView)`. Upload memakai `ReplayClient` yang sama (`format` ikut di body `chunk-url`, `event_count` = frame + sentuhan).
+
+**Antrean**: lihat `ReplayStore` di bawah: badan batch berupa file, batas 50 MB.
 
 ---
 
@@ -360,13 +382,14 @@ Database terpisah, dibuka **malas**: tidak dibuat bila replay tidak pernah dipak
 CREATE TABLE replay_batches (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
   first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, event_count INTEGER NOT NULL, has_error INTEGER NOT NULL,
-  user_id TEXT, environment TEXT NOT NULL, body BLOB NOT NULL, size_bytes INTEGER NOT NULL,
-  claimed INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
+  user_id TEXT, environment TEXT NOT NULL, file TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'rrweb',
+  size_bytes INTEGER NOT NULL, claimed INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL, start_ms INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 ```
 
-- Batas: **20 MiB / 200 batch**; eviction membuang batch pending tertua (yang sedang diunggah tidak pernah). Maksimal **8 attempt** per batch, lalu dibuang. Retensi **7 hari** (batch dan counter `seq`).
+- **Badan batch adalah file** di `noBackupFilesDir/artracker/replay/<id>.gz` (DB versi 2); kolom `file` menyimpan namanya dan `format` bernilai `rrweb` atau `artracker-screen-v1`. Alasan: `CursorWindow` Android ±2 MB membuat BLOB besar bisa ditulis tapi tidak bisa dibaca. File ditulis sebelum barisnya dan dihapus bersama barisnya (selesai, evict, `clear`, purge); `resetOrphaned()` menyapu file tanpa baris. Migrasi v1→v2 menulis BLOB lama ke file.
+- Batas: **50 MB / 200 batch**; eviction membuang batch pending tertua (yang sedang diunggah tidak pernah). Maksimal **8 attempt** per batch, lalu dibuang. Retensi **7 hari** (batch dan counter `seq`).
 - `replay_seq` bertahan setelah batch selesai, di-`clear()` (opt-out), atau dievict, supaya `seq` tidak pernah dipakai ulang: PUT menimpa objek lama sedangkan ack ditolak server.
 - `ReplayFlusher` mengunggah satu batch pada satu waktu (maks 2 batch per detik saat drain). `401/403` pada `chunk-url`/`chunk-ack` menyalakan kill-switch; `401/403` pada PUT berarti tanda tangan kedaluwarsa dan hanya mengulang dari langkah 1. Opt-out mengosongkan antrean dan membuang batch yang terbuka. `FlushWorker` ikut mengirim antrean ini di background.
 
@@ -446,7 +469,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | --- | --- | --- |
 | Q1 | Nama API | **`ARTracker.init`** (issue + parity web). Snippet `ARTracker.start` di landing page diperbarui terpisah |
 | Q2 | Package | **Tetap `id.art.tracker`**: seluruh kode Kotlin SDK berada di package `id.art.tracker` (dan sub-package `core`, `transport`, …); groupId Maven `id.art.tracker`. Sample app **tidak diubah** (namespace & package tetap `id.art.tracker`). Agar kelas `R`/`BuildConfig` hasil generate tidak bentrok dengan app, properti Gradle `android.namespace` modul library diisi `id.art.tracker.sdk`. Ini hanya memengaruhi kelas generate, bukan package kode. SDK tidak boleh memakai sub-package `id.art.tracker.ui` (dipakai sample app) |
-| Q3 | Format replay | Wireframe → rrweb (§6.1). Screenshot sebagai opsi masa depan |
+| Q3 | Format replay | Wireframe → rrweb (§6.1) sebagai default. Screenshot tersedia sebagai opsi opt-in (§6.6) |
 | Q4 | Replay default | Off + sampling 0.1 (parity web) |
 | Q5 | `maskAllInputs` default `true` | Lebih aman daripada hanya password/numerik; bisa dilonggarkan per view |
 | R1 | `ViewRootForTest.semanticsOwner` dan `WindowManagerGlobal` adalah API internal/reflection | Dibungkus `runCatching` + fallback; diuji di setiap bump versi Compose |

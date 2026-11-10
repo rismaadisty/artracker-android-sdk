@@ -64,3 +64,10 @@ recording (pass the password you typed). Timestamps that go backwards are only w
 
 This proves the structure, not the pixels: whether `rrweb-player` renders it correctly still has to be checked by
 opening it in `index.html`.
+
+## Screenshot chunks
+
+The viewer and `validate-chunks.mjs` handle rrweb (wireframe) chunks only. Screenshot replay
+(`ReplayMode.SCREENSHOT`) uploads `artracker-screen-v1` chunks (gzipped JSON of base64 JPEG frames and touches); play them
+in the dashboard, or decode one by hand: `gunzip -c chunk.gz | jq '.frames[0] | {ts, screen, w, h, vw, vh, masked}'` and
+`jq -r '.frames[0].data' | base64 -d > frame.jpg`.
