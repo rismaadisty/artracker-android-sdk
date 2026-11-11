@@ -159,4 +159,26 @@ class ARTrackerConfigTest {
         assertTrue(c.debug)
         assertEquals(5_000L, c.flushIntervalMs)
     }
+
+    @Test
+    fun performance_isOffByDefault() {
+        assertFalse(config().performance.enabled)
+    }
+
+    @Test
+    fun builder_setsPerformance() {
+        val built = ARTrackerConfig.Builder(endpoint, validKey)
+            .performance(PerformanceConfig(enabled = true))
+            .build()
+        assertTrue(built.performance.enabled)
+    }
+
+    @Test
+    fun sampleInterval_outsideRange_isError() {
+        fun errors(ms: Long) = ARTrackerConfig(endpoint, validKey, performance = PerformanceConfig(sampleIntervalMs = ms)).validate()
+        assertTrue(errors(499).any { it.contains("sampleIntervalMs") })
+        assertTrue(errors(10_001).any { it.contains("sampleIntervalMs") })
+        assertTrue(errors(500).none { it.contains("sampleIntervalMs") })
+        assertTrue(errors(10_000).none { it.contains("sampleIntervalMs") })
+    }
 }

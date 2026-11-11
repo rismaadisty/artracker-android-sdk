@@ -15,6 +15,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
     public val flushIntervalMs: Long = 10_000,
     public val sessionTimeoutMs: Long = 1_800_000,
     public val beforeSend: BeforeSend? = null,
+    public val performance: PerformanceConfig = PerformanceConfig(),
 ) {
     /** Fluent builder for Java callers. */
     public class Builder(private val endpoint: String, private val apiKey: String) {
@@ -27,6 +28,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
         private var flushIntervalMs: Long = 10_000
         private var sessionTimeoutMs: Long = 1_800_000
         private var beforeSend: BeforeSend? = null
+        private var performance: PerformanceConfig = PerformanceConfig()
 
         public fun environment(value: String): Builder = apply { environment = value }
         public fun appVersion(value: String?): Builder = apply { appVersion = value }
@@ -37,6 +39,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
         public fun flushIntervalMs(value: Long): Builder = apply { flushIntervalMs = value }
         public fun sessionTimeoutMs(value: Long): Builder = apply { sessionTimeoutMs = value }
         public fun beforeSend(value: BeforeSend?): Builder = apply { beforeSend = value }
+        public fun performance(value: PerformanceConfig): Builder = apply { performance = value }
 
         public fun build(): ARTrackerConfig = ARTrackerConfig(
             endpoint = endpoint,
@@ -50,6 +53,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
             flushIntervalMs = flushIntervalMs,
             sessionTimeoutMs = sessionTimeoutMs,
             beforeSend = beforeSend,
+            performance = performance,
         )
     }
 }
@@ -68,6 +72,18 @@ public class ReplayConfig @JvmOverloads constructor(
     public val sampleRate: Double = 0.1,
     public val framesPerSecond: Double = 1.0,
     public val quality: ReplayQuality = ReplayQuality.STANDARD,
+)
+
+/**
+ * Session profiling: while the app is in the foreground, a sample of CPU, memory, frame rate, threads, battery and
+ * thermal state is taken every [sampleIntervalMs] (500..10_000) and sent in batches as `perf.samples` items.
+ * Off by default; nothing (thread, loop or callback) is created while [enabled] is false.
+ * [trackFrames] turns the frame rate / jank / frozen-frame counters (API 24+ `FrameMetrics`) on or off.
+ */
+public class PerformanceConfig @JvmOverloads constructor(
+    public val enabled: Boolean = false,
+    public val sampleIntervalMs: Long = 1_000,
+    public val trackFrames: Boolean = true,
 )
 
 /** Privacy masking settings. */
@@ -99,6 +115,8 @@ private const val KEY_MIN_LENGTH: Int = 32
 private const val KEY_MAX_LENGTH: Int = 128
 private const val MIN_FLUSH_INTERVAL_MS: Long = 1_000
 private const val MIN_SESSION_TIMEOUT_MS: Long = 1_000
+private const val MIN_SAMPLE_INTERVAL_MS: Long = 500
+private const val MAX_SAMPLE_INTERVAL_MS: Long = 10_000
 private const val DEFAULT_FPS: Double = 1.0
 private const val MIN_FPS: Double = 0.5
 private const val MAX_FPS: Double = 10.0
@@ -124,6 +142,9 @@ internal fun ARTrackerConfig.validate(): List<String> {
     }
     if (sessionTimeoutMs < MIN_SESSION_TIMEOUT_MS) {
         errors += "sessionTimeoutMs must be >= $MIN_SESSION_TIMEOUT_MS"
+    }
+    if (performance.sampleIntervalMs !in MIN_SAMPLE_INTERVAL_MS..MAX_SAMPLE_INTERVAL_MS) {
+        errors += "performance.sampleIntervalMs must be between $MIN_SAMPLE_INTERVAL_MS and $MAX_SAMPLE_INTERVAL_MS"
     }
     if (!replay.framesPerSecond.isFinite()) {
         errors += "replay.framesPerSecond must be a finite number"

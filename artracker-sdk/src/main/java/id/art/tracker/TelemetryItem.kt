@@ -8,6 +8,7 @@ public enum class ItemType(internal val wire: String) {
     EVENT("event"),
     LOG("log"),
     SESSION("session"),
+    PERF("perf"),
 }
 
 /** A single telemetry item. */
