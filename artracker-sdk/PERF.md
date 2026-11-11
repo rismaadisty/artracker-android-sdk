@@ -177,3 +177,26 @@ Read of the result:
 Reproduce: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, `adb install -r -t` both APKs, then
 `adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotBudgetTest -e durationMs 300000 id.art.tracker.test/id.art.tracker.PlaygroundTestRunner`
 (it prints a `budget_report` line with the uploaded MB and both jank figures).
+
+## 4. Session profiling overhead (target: average CPU differs by <= 1 % of one core)
+
+Status: **NOT MEASURED.** It needs a real device and none was available for this change; nothing below is an estimate.
+
+What is being measured: the cost of `PerformanceConfig(enabled = true)` in the foreground (one `/proc` read per
+interval, the frame-metrics callbacks, a coroutine wake-up). The sample app turns it on with its debug toggle
+(`performance = PerformanceConfig(enabled = debug)`), so a debug build has it on.
+
+Procedure (physical device, same build, screen on, the Feed screen scrolling the same way for each run):
+
+1. Run A, profiling on: start the sample app in the foreground for 5 minutes. The SDK's own `cpu` samples are the
+   figure: take the mean of the `cpu` values of the `perf.samples` items (from the backend, or from `adb logcat -s
+   ARTracker:D`) and multiply by the core count (`device.cores`) to get "% of one core".
+2. Run B, profiling off: in `PlaygroundSettings` / `SampleApp.config` pass `performance = PerformanceConfig(enabled = false)`,
+   reinstall, run the same 5 minutes and sample the process with `adb shell top -b -d 5 -n 60 -p <pid>`. Take the mean
+   of the `%CPU` column (already "% of one core").
+3. The difference A - B must be <= 1 % of one core. If it is not, record the real numbers and open an issue; do not
+   change the target.
+
+| Device / API | Run A: profiling on (% of one core) | Run B: profiling off (% of one core) | Difference |
+| --- | --- | --- | --- |
+| NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |

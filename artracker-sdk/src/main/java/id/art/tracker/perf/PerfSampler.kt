@@ -1,6 +1,7 @@
 package id.art.tracker.perf
 
 import id.art.tracker.core.Clock
+import id.art.tracker.core.SdkLog
 
 private const val BYTES_PER_MB = 1_048_576.0
 
@@ -63,6 +64,15 @@ internal class PerfSampler(
             battery = runCatching { device.batteryFraction() }.getOrNull(),
             thermal = runCatching { device.thermal() }.getOrNull(),
         )
+    }
+
+    /** Starts what feeds the sampler (the frame source's thread and window listener); no-op without one. */
+    fun start() {
+        frames?.let { runCatching { it.start() }.onFailure { t -> SdkLog.w("starting the frame source failed", t) } }
+    }
+
+    fun stop() {
+        frames?.let { runCatching { it.stop() }.onFailure { t -> SdkLog.w("stopping the frame source failed", t) } }
     }
 
     /**

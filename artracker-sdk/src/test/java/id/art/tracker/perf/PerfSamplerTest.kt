@@ -159,4 +159,14 @@ class PerfSamplerTest {
         assertTrue(full.containsKey("mem_mb"))
         assertNotNull(full["thermal"])
     }
+
+    @Test
+    fun `start and stop drive the frame source`() {
+        val s = sampler()
+        s.start()
+        s.stop()
+        assertEquals(1, frames.started)
+        assertEquals(1, frames.stopped)
+        sampler(withFrames = false).also { it.start(); it.stop() } // no frame source: nothing to drive
+    }
 }

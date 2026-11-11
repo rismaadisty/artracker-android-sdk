@@ -3,6 +3,16 @@
 All notable changes to `id.art.tracker:artracker-android`. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- **Session profiling (opt-in).** `ARTrackerConfig.performance = PerformanceConfig(enabled, sampleIntervalMs, trackFrames)`,
+  off by default. While the app is in the foreground it samples process CPU %, RSS memory, fps / jank / frozen frames,
+  thread count, battery and thermal state every `sampleIntervalMs` (500..10_000) and sends them in batches as
+  `perf.samples` items (`ItemType.PERF`), plus `perf.memory_warning` and `perf.thermal_change` events. Nothing is sampled
+  in the background, and nothing is created while it is disabled. See the README section "Performance monitoring".
+
 ## [1.0.0] - 2026-11-10
 
 ### Added (distribution)

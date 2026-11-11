@@ -194,4 +194,24 @@ class PerfMonitorTest {
             "]}"
         assertEquals(expected, Json.encode(item.attributes))
     }
+
+    @Test
+    fun `onBackground flushes the buffer and stops the frame source`() {
+        val m = monitor()
+        m.onForeground()
+        repeat(4) { m.tickOnce() }
+        m.onBackground()
+        assertEquals(4, samplesOf(perfItems().single().second).size)
+        assertEquals(1, frames.started)
+        assertEquals(1, frames.stopped)
+    }
+
+    @Test
+    fun `discard drops buffered samples`() {
+        val m = monitor()
+        repeat(4) { m.tickOnce() }
+        m.discard()
+        m.flush()
+        assertTrue(emitted.isEmpty())
+    }
 }

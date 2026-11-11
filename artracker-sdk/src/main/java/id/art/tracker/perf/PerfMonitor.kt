@@ -66,10 +66,24 @@ internal class PerfMonitor(
         }
     }
 
-    /** Sampling resumes after the app was in the background: the next sample is a fresh baseline. */
+    /** Sampling (re)starts: the frame source starts and the next sample is a fresh baseline. */
     @Synchronized
     fun onForeground() {
+        sampler.start()
         sampler.resetBaseline()
+    }
+
+    /** Sampling stops: the last samples go out and the frame source shuts down. */
+    @Synchronized
+    fun onBackground() {
+        flush()
+        sampler.stop()
+    }
+
+    /** Drops the buffered samples without sending them (the user opted out). */
+    @Synchronized
+    fun discard() {
+        buffer.clear()
     }
 
     private fun deviceAttributes(): Map<String, Any?> {
