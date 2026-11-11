@@ -45,6 +45,9 @@ private const val DEFAULT_CLK_TCK = 100L
 private const val DEFAULT_PAGE_SIZE = 4096L
 private const val BYTES_PER_MB = 1_048_576L
 
+/** Bytes to MB, rounded to the nearest integer. */
+private fun bytesToMb(bytes: Long): Int = Math.round(bytes.toDouble() / BYTES_PER_MB).toInt()
+
 /** Maps `PowerManager.THERMAL_STATUS_*` to the wire vocabulary; null for a value this SDK does not know. */
 internal fun mapThermalStatus(status: Int): String? = when (status) {
     PowerManager.THERMAL_STATUS_NONE, PowerManager.THERMAL_STATUS_LIGHT -> "nominal"
@@ -60,6 +63,8 @@ internal fun mapThermalStatus(status: Int): String? = when (status) {
 internal class AndroidDeviceProbe(
     context: Context,
     private val sdkInt: Int = Build.VERSION.SDK_INT,
+    /** Test seam: builds the `StatFs` for a path; may throw (some devices reject the data directory). */
+    private val statFs: (String) -> StatFs = { StatFs(it) },
 ) : DeviceProbe {
     private val app: Context = context.applicationContext ?: context
 
@@ -67,7 +72,7 @@ internal class AndroidDeviceProbe(
         runCatching {
             val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             val info = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-            (info.totalMem / BYTES_PER_MB).toInt().takeIf { it > 0 }
+            bytesToMb(info.totalMem).takeIf { it > 0 }
         }.getOrNull()
     }
 
@@ -102,17 +107,17 @@ internal class AndroidDeviceProbe(
     override fun ramFreeMb(): Int? = runCatching {
         val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val info = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-        (info.availMem / BYTES_PER_MB).toInt().takeIf { it >= 0 }
+        bytesToMb(info.availMem).takeIf { it >= 0 }
     }.getOrNull()
 
     private val storageTotal: Int? by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        runCatching { (StatFs(Environment.getDataDirectory().path).totalBytes / BYTES_PER_MB).toInt().takeIf { it > 0 } }.getOrNull()
+        runCatching { bytesToMb(statFs(Environment.getDataDirectory().path).totalBytes).takeIf { it > 0 } }.getOrNull()
     }
 
     override fun storageTotalMb(): Int? = storageTotal
 
     override fun storageFreeMb(): Int? =
-        runCatching { (StatFs(Environment.getDataDirectory().path).availableBytes / BYTES_PER_MB).toInt().takeIf { it >= 0 } }.getOrNull()
+        runCatching { bytesToMb(statFs(Environment.getDataDirectory().path).availableBytes).takeIf { it >= 0 } }.getOrNull()
 
     override fun network(): String? = runCatching {
         val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager

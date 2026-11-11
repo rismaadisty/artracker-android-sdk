@@ -1,6 +1,9 @@
 package id.art.tracker.perf
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
+import android.os.Environment
 import android.os.PowerManager
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
@@ -11,6 +14,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowStatFs
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -74,6 +79,33 @@ class DeviceProbeTest {
         val free = probe.ramFreeMb()
         assertTrue(free == null || free >= 0)
         if (total != null && free != null) assertTrue(free <= total)
+    }
+
+    @Test
+    fun `ram free is availMem in MB`() {
+        val info = ActivityManager.MemoryInfo().apply {
+            totalMem = 8_192L * 1_048_576
+            availMem = 2_310L * 1_048_576
+        }
+        val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        shadowOf(am).setMemoryInfo(info)
+        assertEquals(2310, AndroidDeviceProbe(app).ramFreeMb())
+    }
+
+    @Test
+    fun `storage reads the data volume`() {
+        ShadowStatFs.registerStats(Environment.getDataDirectory().path, 31_250_000, 25_000_000, 25_000_000)
+        val probe = AndroidDeviceProbe(app)
+        assertEquals(97_656, probe.storageFreeMb())
+        assertEquals(122_070, probe.storageTotalMb())
+    }
+
+    @Test
+    fun `storage failure omits storage fields only`() {
+        val probe = AndroidDeviceProbe(app, statFs = { throw IllegalArgumentException("no such volume") })
+        assertNull(probe.storageFreeMb())
+        assertNull(probe.storageTotalMb())
+        assertNotNull(probe.ramFreeMb())
     }
 
     @Test
