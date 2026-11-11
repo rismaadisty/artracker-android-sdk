@@ -23,8 +23,12 @@ internal class PerfMonitor(
     private var bufferSession: String? = null
     private var lastThermal: String? = null
 
+    /** False between [onBackground] / [discard] and the next [onForeground]: a tick already in flight then does nothing. */
+    private var running = true
+
     @Synchronized
     fun tick() {
+        if (!running) return
         val sid = sessionId() ?: return
         if (bufferSession != null && bufferSession != sid) flush()
         val sample = sampler.sample()
@@ -69,6 +73,7 @@ internal class PerfMonitor(
     /** Sampling (re)starts: the frame source starts and the next sample is a fresh baseline. */
     @Synchronized
     fun onForeground() {
+        running = true
         sampler.start()
         sampler.resetBaseline()
     }
@@ -77,12 +82,14 @@ internal class PerfMonitor(
     @Synchronized
     fun onBackground() {
         flush()
+        running = false
         sampler.stop()
     }
 
     /** Drops the buffered samples without sending them (the user opted out). */
     @Synchronized
     fun discard() {
+        running = false
         buffer.clear()
     }
 

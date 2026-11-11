@@ -223,6 +223,8 @@ internal class ARTrackerCore(
     internal var perf: PerfMonitor? = null
         private set
 
+    private val perfLoopLock = Any()
+
     @Volatile
     private var perfJob: Job? = null
     private var memoryCallbacks: MemoryWarningCallbacks? = null
@@ -374,21 +376,27 @@ internal class ARTrackerCore(
     /** Starts the frame source and the sampling loop on [scope]; idempotent while the loop runs. */
     private fun startPerfLoop() {
         val monitor = perf ?: return
-        if (perfJob?.isActive == true) return
-        runCatching { monitor.onForeground() }.onFailure { SdkLog.w("starting performance sampling failed", it) }
-        val interval = config.performance.sampleIntervalMs
-        perfJob = scope.launch {
-            while (isActive) {
-                perfDelay(interval)
-                if (isDisabled()) continue
-                runCatching { monitor.tick() }.onFailure { SdkLog.w("performance sample failed", it) }
+        // Callers race (main thread on foreground, any thread on opt-in): check and launch are one step, and the
+        // foreground state is re-read inside it so a loop is never started after [onBackground] stopped it.
+        synchronized(perfLoopLock) {
+            if (perfJob?.isActive == true || !foreground || isDisabled()) return
+            runCatching { monitor.onForeground() }.onFailure { SdkLog.w("starting performance sampling failed", it) }
+            val interval = config.performance.sampleIntervalMs
+            perfJob = scope.launch {
+                while (isActive) {
+                    perfDelay(interval)
+                    if (isDisabled()) continue
+                    runCatching { monitor.tick() }.onFailure { SdkLog.w("performance sample failed", it) }
+                }
             }
         }
     }
 
     private fun stopPerfLoop() {
-        perfJob?.cancel()
-        perfJob = null
+        synchronized(perfLoopLock) {
+            perfJob?.cancel()
+            perfJob = null
+        }
     }
 
     /** The replay controller, created once (cheap: no view or Compose access happens here). */

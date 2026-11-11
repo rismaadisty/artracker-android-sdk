@@ -12,6 +12,9 @@ versions follow semantic versioning.
   thread count, battery and thermal state every `sampleIntervalMs` (500..10_000) and sends them in batches as
   `perf.samples` items (`ItemType.PERF`), plus `perf.memory_warning` and `perf.thermal_change` events. Nothing is sampled
   in the background, and nothing is created while it is disabled. See the README section "Performance monitoring".
+  `perf.memory_warning` relies on trim levels 10 and 15, which Android 14+ no longer delivers. Adding the `performance`
+  parameter to `ARTrackerConfig` also changes its Kotlin default-arguments constructor: Kotlin libraries compiled against
+  1.0.0 must be recompiled (Java callers and apps are unaffected).
 
 ## [1.0.0] - 2026-11-10
 

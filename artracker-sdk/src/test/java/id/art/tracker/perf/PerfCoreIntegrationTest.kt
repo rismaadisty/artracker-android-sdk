@@ -268,4 +268,29 @@ class PerfCoreIntegrationTest {
         controller.resume()
         assertEquals(listOf("resumed", "paused"), events)
     }
+
+    @Test
+    fun `concurrent opt-in and foreground leave a single loop that stops in the background`() {
+        val c = startCore(enabled())
+        repeat(100) {
+            val d = delays.get()
+            val racers = listOf(
+                Thread { c.optOut(false) },
+                Thread { c.onForeground() },
+            )
+            c.onForeground()
+            racers.forEach { it.start() }
+            racers.forEach { it.join() }
+            waitUntil { delays.get() > d }
+            c.onBackground()
+        }
+        c.onForeground()
+        waitUntil { delays.get() >= 1 }
+        c.onBackground()
+        settle()
+        val before = delays.get()
+        repeat(20) { gate.trySend(Unit) }
+        Thread.sleep(300)
+        assertEquals("a loop kept running in the background", before, delays.get())
+    }
 }

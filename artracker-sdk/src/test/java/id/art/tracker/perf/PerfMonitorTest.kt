@@ -214,4 +214,25 @@ class PerfMonitorTest {
         m.flush()
         assertTrue(emitted.isEmpty())
     }
+
+    @Test
+    fun `a tick racing background or opt-out is ignored until foreground`() {
+        val m = monitor()
+        m.onForeground()
+        m.tickOnce()
+        m.onBackground() // flushes 1 sample
+        m.tickOnce() // a tick that was already past the loop's checks
+        m.flush()
+        assertEquals(1, perfItems().sumOf { samplesOf(it.second).size })
+        m.onForeground()
+        m.tickOnce()
+        m.discard() // opt-out
+        m.tickOnce()
+        m.flush()
+        assertEquals(1, perfItems().sumOf { samplesOf(it.second).size })
+        m.onForeground() // opted back in
+        m.tickOnce()
+        m.flush()
+        assertEquals(2, perfItems().sumOf { samplesOf(it.second).size })
+    }
 }

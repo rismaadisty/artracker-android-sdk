@@ -350,7 +350,7 @@ A metric that cannot be read is omitted, never sent as 0. Samples are batched: 1
 the app goes to the background and when the session changes (old samples go out under the old session id). The item's
 `attributes` also carry `v`, `platform`, `interval_ms` and `device` (`ram_mb`, `cores`, `refresh_hz`).
 
-Two events accompany the samples: `perf.memory_warning {level}` for trim levels 10 and 15 while in the foreground, and
+Two events accompany the samples: `perf.memory_warning {level}` for trim levels 10 and 15 while in the foreground (Android 14 / API 34 and later no longer deliver those two levels to apps, so on current devices this event is rare or absent), and
 `perf.thermal_change {from, to}`. Opting out discards the buffered samples. To measure what profiling costs, see
 `artracker-sdk/PERF.md` section 4.
 
