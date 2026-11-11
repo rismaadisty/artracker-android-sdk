@@ -63,6 +63,9 @@ internal class PerfSampler(
             threads = stat?.threads,
             battery = runCatching { device.batteryFraction() }.getOrNull(),
             thermal = runCatching { device.thermal() }.getOrNull(),
+            ramFreeMb = runCatching { device.ramFreeMb() }.getOrNull(),
+            storageFreeMb = runCatching { device.storageFreeMb() }.getOrNull(),
+            network = runCatching { device.network() }.getOrNull(),
         )
     }
 

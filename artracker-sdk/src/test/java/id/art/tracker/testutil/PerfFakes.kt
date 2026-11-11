@@ -43,7 +43,22 @@ internal class FakeDeviceProbe(
     var thermal: String? = "nominal",
     var clkTck: Long = 100,
     var pageSize: Long = 4096,
+    var osVersion: String? = "14",
+    var ramFree: Int? = 1500,
+    var storageTotal: Int? = 128_000,
+    var storageFree: Int? = 64_000,
+    var network: String? = "wifi",
 ) : DeviceProbe {
+    override fun osVersion(): String? = osVersion
+
+    override fun ramFreeMb(): Int? = ramFree
+
+    override fun storageTotalMb(): Int? = storageTotal
+
+    override fun storageFreeMb(): Int? = storageFree
+
+    override fun network(): String? = network
+
     override fun ramMb(): Int? = ram
 
     override fun cores(): Int = cores

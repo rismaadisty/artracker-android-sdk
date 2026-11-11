@@ -2,9 +2,13 @@ package id.art.tracker.perf
 
 import android.app.ActivityManager
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.BatteryManager
+import android.os.Environment
 import android.os.Build
 import android.os.PowerManager
+import android.os.StatFs
 import android.system.Os
 import android.system.OsConstants
 
@@ -21,6 +25,20 @@ internal interface DeviceProbe {
     fun clkTck(): Long
 
     fun pageSizeBytes(): Long
+
+    /** Android release, e.g. "14". */
+    fun osVersion(): String?
+
+    /** Free RAM (`MemoryInfo.availMem`) in MB, read on every call. */
+    fun ramFreeMb(): Int?
+
+    /** Size and free space of the data partition in MB. */
+    fun storageTotalMb(): Int?
+
+    fun storageFreeMb(): Int?
+
+    /** Active transport: `wifi`, `cellular`, `ethernet`, `other`, or `none` when offline. */
+    fun network(): String?
 }
 
 private const val DEFAULT_CLK_TCK = 100L
@@ -78,6 +96,35 @@ internal class AndroidDeviceProbe(
             mapThermalStatus(pm.currentThermalStatus)
         }.getOrNull()
     }
+
+    override fun osVersion(): String? = runCatching { Build.VERSION.RELEASE?.takeIf { it.isNotBlank() } }.getOrNull()
+
+    override fun ramFreeMb(): Int? = runCatching {
+        val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val info = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        (info.availMem / BYTES_PER_MB).toInt().takeIf { it >= 0 }
+    }.getOrNull()
+
+    private val storageTotal: Int? by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        runCatching { (StatFs(Environment.getDataDirectory().path).totalBytes / BYTES_PER_MB).toInt().takeIf { it > 0 } }.getOrNull()
+    }
+
+    override fun storageTotalMb(): Int? = storageTotal
+
+    override fun storageFreeMb(): Int? =
+        runCatching { (StatFs(Environment.getDataDirectory().path).availableBytes / BYTES_PER_MB).toInt().takeIf { it >= 0 } }.getOrNull()
+
+    override fun network(): String? = runCatching {
+        val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val caps = cm.activeNetwork?.let(cm::getNetworkCapabilities)
+        when {
+            caps == null -> "none"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            else -> "other"
+        }
+    }.getOrNull()
 
     override fun clkTck(): Long = clkTck
 

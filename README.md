@@ -345,10 +345,14 @@ While the app is in the foreground, one sample is taken every `sampleIntervalMs`
 | `threads` | thread count | `/proc` unreadable |
 | `battery` | 0.0 to 1.0 | unavailable |
 | `thermal` | `nominal`, `fair`, `serious` or `critical` (API 29+) | below API 29 |
+| `ram_free_mb` | free RAM in MB (`ActivityManager.MemoryInfo.availMem`) | unavailable |
+| `storage_free_mb` | free space of the data partition in MB | unavailable |
+| `network` | `wifi`, `cellular`, `ethernet`, `other`, or `none` when offline | unavailable |
 
 A metric that cannot be read is omitted, never sent as 0. Samples are batched: 10 per item (at most 60), and flushed when
 the app goes to the background and when the session changes (old samples go out under the old session id). The item's
-`attributes` also carry `v`, `platform`, `interval_ms` and `device` (`ram_mb`, `cores`, `refresh_hz`).
+`attributes` also carry `v`, `platform`, `interval_ms` and `device` (`os_version`, `ram_mb`, `storage_mb`, `cores`,
+`refresh_hz`).
 
 Two events accompany the samples: `perf.memory_warning {level}` for trim levels 10 and 15 while in the foreground (Android 14 / API 34 and later no longer deliver those two levels to apps, so on current devices this event is rare or absent), and
 `perf.thermal_change {from, to}`. Opting out discards the buffered samples. To measure what profiling costs, see

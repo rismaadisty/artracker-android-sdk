@@ -56,6 +56,27 @@ class DeviceProbeTest {
     }
 
     @Test
+    fun `os version storage and network are readable`() {
+        val probe = AndroidDeviceProbe(app)
+        assertTrue(!probe.osVersion().isNullOrBlank())
+        val total = probe.storageTotalMb()
+        val free = probe.storageFreeMb()
+        assertTrue(total == null || total > 0)
+        assertTrue(free == null || free >= 0)
+        if (total != null && free != null) assertTrue(free <= total)
+        assertTrue(probe.network() in listOf(null, "wifi", "cellular", "ethernet", "other", "none"))
+    }
+
+    @Test
+    fun `free ram is below total ram`() {
+        val probe = AndroidDeviceProbe(app)
+        val total = probe.ramMb()
+        val free = probe.ramFreeMb()
+        assertTrue(free == null || free >= 0)
+        if (total != null && free != null) assertTrue(free <= total)
+    }
+
+    @Test
     fun `battery is a fraction or null`() {
         val b = AndroidDeviceProbe(app).batteryFraction()
         assertTrue(b == null || b in 0.0..1.0)

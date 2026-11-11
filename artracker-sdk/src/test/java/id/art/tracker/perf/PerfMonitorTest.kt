@@ -143,6 +143,8 @@ class PerfMonitorTest {
         assertNull(dev["refresh_hz"])
         assertEquals(4, dev["cores"])
         assertEquals(4096, dev["ram_mb"])
+        assertEquals("14", dev["os_version"])
+        assertEquals(128_000, dev["storage_mb"])
     }
 
     @Test
@@ -184,12 +186,14 @@ class PerfMonitorTest {
         val item = perfItems().single().second
         assertNull(StrictJson.validate(item.toJson()))
         val expected = "{\"v\":1,\"platform\":\"android\",\"interval_ms\":1000," +
-            "\"device\":{\"ram_mb\":3072,\"cores\":8,\"refresh_hz\":120}," +
+            "\"device\":{\"os_version\":\"14\",\"ram_mb\":3072,\"storage_mb\":128000,\"cores\":8,\"refresh_hz\":120}," +
             "\"samples\":[" +
-            "{\"t\":2000,\"mem_mb\":2.0,\"jank\":0,\"frozen\":0,\"threads\":20,\"battery\":0.5,\"thermal\":\"nominal\"}," +
+            "{\"t\":2000,\"mem_mb\":2.0,\"jank\":0,\"frozen\":0,\"threads\":20,\"battery\":0.5,\"thermal\":\"nominal\"," +
+            "\"ram_free_mb\":1500,\"storage_free_mb\":64000,\"network\":\"wifi\"}," +
             (0 until 9).joinToString(",") { i ->
                 "{\"t\":${3000 + i * 1000},\"cpu\":12.5,\"mem_mb\":2.0,\"fps\":58.0,\"jank\":2,\"frozen\":1," +
-                    "\"threads\":20,\"battery\":0.5,\"thermal\":\"nominal\"}"
+                    "\"threads\":20,\"battery\":0.5,\"thermal\":\"nominal\"," +
+                    "\"ram_free_mb\":1500,\"storage_free_mb\":64000,\"network\":\"wifi\"}"
             } +
             "]}"
         assertEquals(expected, Json.encode(item.attributes))

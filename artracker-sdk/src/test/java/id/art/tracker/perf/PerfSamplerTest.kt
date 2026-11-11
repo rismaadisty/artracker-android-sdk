@@ -63,6 +63,24 @@ class PerfSamplerTest {
     }
 
     @Test
+    fun `free ram free storage and network come from the probe`() {
+        device.ramFree = 900
+        device.storageFree = 12_345
+        device.network = "cellular"
+        val s = sampler().sample()
+        assertEquals(900, s.ramFreeMb)
+        assertEquals(12_345, s.storageFreeMb)
+        assertEquals("cellular", s.network)
+        device.ramFree = null
+        device.storageFree = null
+        device.network = null
+        val none = sampler().sample()
+        assertNull(none.ramFreeMb)
+        assertNull(none.storageFreeMb)
+        assertNull(none.network)
+    }
+
+    @Test
     fun `unreadable proc omits cpu mem threads`() {
         reader.stat = null
         reader.statm = null
@@ -153,6 +171,11 @@ class PerfSamplerTest {
         assertEquals(12.3, full["cpu"])
         assertEquals(56.8, full["mem_mb"])
         assertEquals(58.3, full["fps"])
+        val extra = PerfSample(1L, null, null, null, null, null, null, null, null, 900, 12_345, "wifi").toMap()
+        assertEquals(
+            mapOf<String, Any?>("t" to 1L, "ram_free_mb" to 900, "storage_free_mb" to 12_345, "network" to "wifi"),
+            extra,
+        )
         val sparse = PerfSample(1L, null, null, null, null, null, null, null, null).toMap()
         assertEquals(mapOf<String, Any?>("t" to 1L), sparse)
         assertFalse(sparse.containsKey("memMb"))

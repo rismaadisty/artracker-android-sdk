@@ -94,8 +94,10 @@ internal class PerfMonitor(
     }
 
     private fun deviceAttributes(): Map<String, Any?> {
-        val m = LinkedHashMap<String, Any?>(3)
+        val m = LinkedHashMap<String, Any?>(5)
+        device.osVersion()?.let { m["os_version"] = it }
         device.ramMb()?.let { m["ram_mb"] = it }
+        device.storageTotalMb()?.let { m["storage_mb"] = it }
         m["cores"] = device.cores()
         sampler.refreshHz?.let { m["refresh_hz"] = it.roundToInt() }
         return m
