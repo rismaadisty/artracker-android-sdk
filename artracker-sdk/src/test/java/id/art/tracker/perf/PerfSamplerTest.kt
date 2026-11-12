@@ -3,6 +3,7 @@ package id.art.tracker.perf
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.FakeDeviceProbe
 import id.art.tracker.testutil.FakeFrameSource
+import id.art.tracker.testutil.FakeNetworkProbe
 import id.art.tracker.testutil.FakeProcessReader
 import id.art.tracker.testutil.statLine
 import org.junit.Assert.assertEquals
@@ -18,9 +19,10 @@ class PerfSamplerTest {
     private val reader = FakeProcessReader(statLine(0, 0, threads = 34), "1000 2560 0 0 0 0 0")
     private val device = FakeDeviceProbe(cores = 1)
     private val frames = FakeFrameSource()
+    private val network = FakeNetworkProbe()
 
     private fun sampler(withFrames: Boolean = true) =
-        PerfSampler(reader, if (withFrames) frames else null, device, clock) { mono }
+        PerfSampler(reader, if (withFrames) frames else null, device, network, clock) { mono }
 
     private fun advance(ms: Long, ticks: Long) {
         clock.advance(ms)
@@ -63,21 +65,34 @@ class PerfSamplerTest {
     }
 
     @Test
-    fun `free ram free storage and network come from the probe`() {
-        device.ramFree = 900
-        device.storageFree = 12_345
-        device.network = "cellular"
+    fun `sample carries ram storage and net`() {
+        device.ramFree = 2310
+        device.storageFree = 51_200
+        network.net = "wifi"
         val s = sampler().sample()
-        assertEquals(900, s.ramFreeMb)
-        assertEquals(12_345, s.storageFreeMb)
-        assertEquals("cellular", s.network)
+        assertEquals(2310, s.ramFreeMb)
+        assertEquals(51_200, s.storageFreeMb)
+        assertEquals("wifi", s.net)
+        val wire = s.toMap()
+        assertEquals(2310, wire["ram_free_mb"])
+        assertEquals(51_200, wire["storage_free_mb"])
+        assertEquals("wifi", wire["net"])
+    }
+
+    @Test
+    fun `null readings are omitted`() {
         device.ramFree = null
         device.storageFree = null
-        device.network = null
-        val none = sampler().sample()
-        assertNull(none.ramFreeMb)
-        assertNull(none.storageFreeMb)
-        assertNull(none.network)
+        network.net = null
+        val s = sampler().sample()
+        assertNull(s.ramFreeMb)
+        assertNull(s.storageFreeMb)
+        assertNull(s.net)
+        val wire = s.toMap()
+        assertFalse(wire.containsKey("ram_free_mb"))
+        assertFalse(wire.containsKey("storage_free_mb"))
+        assertFalse(wire.containsKey("net"))
+        assertFalse(wire.containsKey("network"))
     }
 
     @Test
@@ -173,7 +188,7 @@ class PerfSamplerTest {
         assertEquals(58.3, full["fps"])
         val extra = PerfSample(1L, null, null, null, null, null, null, null, null, 900, 12_345, "wifi").toMap()
         assertEquals(
-            mapOf<String, Any?>("t" to 1L, "ram_free_mb" to 900, "storage_free_mb" to 12_345, "network" to "wifi"),
+            mapOf<String, Any?>("t" to 1L, "ram_free_mb" to 900, "storage_free_mb" to 12_345, "net" to "wifi"),
             extra,
         )
         val sparse = PerfSample(1L, null, null, null, null, null, null, null, null).toMap()

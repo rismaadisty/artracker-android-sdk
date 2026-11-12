@@ -7,11 +7,13 @@ import id.art.tracker.core.Json
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.FakeDeviceProbe
 import id.art.tracker.testutil.FakeFrameSource
+import id.art.tracker.testutil.FakeNetworkProbe
 import id.art.tracker.testutil.FakeProcessReader
 import id.art.tracker.testutil.StrictJson
 import id.art.tracker.testutil.statLine
 import id.art.tracker.toJson
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,14 +24,15 @@ class PerfMonitorTest {
     private val reader = FakeProcessReader(statLine(0, 0, threads = 20), "100 256 0 0 0 0 0")
     private val device = FakeDeviceProbe(ram = 4096, cores = 4, battery = 0.5, thermal = "nominal")
     private val frames = FakeFrameSource()
+    private val network = FakeNetworkProbe()
     private var session: String? = "s1"
     private val emitted = ArrayList<Pair<String, TelemetryItem>>()
     private var ticks = 0L
 
     private fun monitor(withFrames: Boolean = true, flushEvery: Int = PerfMonitor.FLUSH_EVERY): PerfMonitor {
-        val sampler = PerfSampler(reader, if (withFrames) frames else null, device, clock) { mono }
+        val sampler = PerfSampler(reader, if (withFrames) frames else null, device, network, clock) { mono }
         return PerfMonitor(
-            sampler, device, intervalMs = 1_000, sessionId = { session }, flushEvery = flushEvery,
+            sampler, device, network, intervalMs = 1_000, sessionId = { session }, flushEvery = flushEvery,
             emit = { sid, build -> emitted += sid to build(ItemFactory(clock, { sid }, { null })) },
         )
     }
@@ -148,6 +151,58 @@ class PerfMonitorTest {
     }
 
     @Test
+    fun `device block has os version and storage`() {
+        device.ram = 3072
+        device.cores = 8
+        frames.window = FrameWindow(0, 0, 0, 120f)
+        val m = monitor()
+        m.tickOnce()
+        m.tickOnce()
+        m.flush()
+        @Suppress("UNCHECKED_CAST")
+        val dev = perfItems().single().second.attributes["device"] as Map<String, Any?>
+        assertEquals(
+            mapOf<String, Any?>("os_version" to "14", "ram_mb" to 3072, "storage_mb" to 128_000, "cores" to 8, "refresh_hz" to 120),
+            dev,
+        )
+    }
+
+    @Test
+    fun `blank os version is omitted`() {
+        device.osVersion = "  "
+        val m = monitor()
+        m.tickOnce()
+        m.flush()
+        @Suppress("UNCHECKED_CAST")
+        val dev = perfItems().single().second.attributes["device"] as Map<String, Any?>
+        assertFalse(dev.containsKey("os_version"))
+    }
+
+    @Test
+    fun `os version is cut to 32 chars and storage is omitted when unknown`() {
+        device.osVersion = "x".repeat(40)
+        device.storageTotal = null
+        val m = monitor()
+        m.tickOnce()
+        m.flush()
+        @Suppress("UNCHECKED_CAST")
+        val dev = perfItems().single().second.attributes["device"] as Map<String, Any?>
+        assertEquals("x".repeat(32), dev["os_version"])
+        assertFalse(dev.containsKey("storage_mb"))
+    }
+
+    @Test
+    fun `stop stops the network probe`() {
+        val m = monitor()
+        m.onForeground()
+        assertEquals(1, network.starts)
+        assertEquals(0, network.stops)
+        m.onBackground()
+        assertEquals(1, network.starts)
+        assertEquals(1, network.stops)
+    }
+
+    @Test
     fun `onForeground resets the baseline`() {
         val m = monitor()
         m.tickOnce()
@@ -189,11 +244,11 @@ class PerfMonitorTest {
             "\"device\":{\"os_version\":\"14\",\"ram_mb\":3072,\"storage_mb\":128000,\"cores\":8,\"refresh_hz\":120}," +
             "\"samples\":[" +
             "{\"t\":2000,\"mem_mb\":2.0,\"jank\":0,\"frozen\":0,\"threads\":20,\"battery\":0.5,\"thermal\":\"nominal\"," +
-            "\"ram_free_mb\":1500,\"storage_free_mb\":64000,\"network\":\"wifi\"}," +
+            "\"ram_free_mb\":1500,\"storage_free_mb\":64000,\"net\":\"wifi\"}," +
             (0 until 9).joinToString(",") { i ->
                 "{\"t\":${3000 + i * 1000},\"cpu\":12.5,\"mem_mb\":2.0,\"fps\":58.0,\"jank\":2,\"frozen\":1," +
                     "\"threads\":20,\"battery\":0.5,\"thermal\":\"nominal\"," +
-                    "\"ram_free_mb\":1500,\"storage_free_mb\":64000,\"network\":\"wifi\"}"
+                    "\"ram_free_mb\":1500,\"storage_free_mb\":64000,\"net\":\"wifi\"}"
             } +
             "]}"
         assertEquals(expected, Json.encode(item.attributes))

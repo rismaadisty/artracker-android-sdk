@@ -2,6 +2,7 @@ package id.art.tracker.perf
 
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.ItemFactory
+import id.art.tracker.core.SdkLog
 import kotlin.math.roundToInt
 
 /**
@@ -12,6 +13,8 @@ import kotlin.math.roundToInt
 internal class PerfMonitor(
     private val sampler: PerfSampler,
     private val device: DeviceProbe,
+    /** Started and stopped with sampling; only [PerfSampler] reads it. */
+    private val network: NetworkProbe,
     private val intervalMs: Long,
     /** The current session id, or null while there is none (nothing is sampled then). */
     private val sessionId: () -> String?,
@@ -74,6 +77,7 @@ internal class PerfMonitor(
     @Synchronized
     fun onForeground() {
         running = true
+        runCatching { network.start() }.onFailure { SdkLog.w("starting the network probe failed", it) }
         sampler.start()
         sampler.resetBaseline()
     }
@@ -83,6 +87,7 @@ internal class PerfMonitor(
     fun onBackground() {
         flush()
         running = false
+        runCatching { network.stop() }.onFailure { SdkLog.w("stopping the network probe failed", it) }
         sampler.stop()
     }
 
@@ -95,7 +100,7 @@ internal class PerfMonitor(
 
     private fun deviceAttributes(): Map<String, Any?> {
         val m = LinkedHashMap<String, Any?>(5)
-        device.osVersion()?.let { m["os_version"] = it }
+        device.osVersion()?.takeIf { it.isNotBlank() }?.let { m["os_version"] = it.take(MAX_OS_VERSION) }
         device.ramMb()?.let { m["ram_mb"] = it }
         device.storageTotalMb()?.let { m["storage_mb"] = it }
         m["cores"] = device.cores()
@@ -106,5 +111,6 @@ internal class PerfMonitor(
     companion object {
         const val FLUSH_EVERY = 10
         const val MAX_SAMPLES = 60
+        private const val MAX_OS_VERSION = 32
     }
 }

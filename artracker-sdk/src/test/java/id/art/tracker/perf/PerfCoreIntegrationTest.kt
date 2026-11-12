@@ -17,6 +17,7 @@ import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.FakeDeviceProbe
+import id.art.tracker.testutil.FakeNetworkProbe
 import id.art.tracker.testutil.FakeProcessReader
 import id.art.tracker.transport.ReplayStore
 import java.util.concurrent.CopyOnWriteArrayList
@@ -81,8 +82,9 @@ class PerfCoreIntegrationTest {
             app, config, clock,
             perfFactory = { owner ->
                 val probe = FakeDeviceProbe(cores = 4)
-                val sampler = PerfSampler(FakeProcessReader(null, "100 256 0 0 0 0 0"), null, probe, clock) { clock.nowMs() }
-                owner.newPerfMonitor(sampler, probe)
+                val net = FakeNetworkProbe()
+                val sampler = PerfSampler(FakeProcessReader(null, "100 256 0 0 0 0 0"), null, probe, net, clock) { clock.nowMs() }
+                owner.newPerfMonitor(sampler, probe, net)
             },
             perfDelay = { delays.incrementAndGet(); gate.receive() },
         )

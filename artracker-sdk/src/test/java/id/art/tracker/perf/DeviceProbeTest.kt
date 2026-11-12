@@ -61,7 +61,7 @@ class DeviceProbeTest {
     }
 
     @Test
-    fun `os version storage and network are readable`() {
+    fun `os version and storage are readable`() {
         val probe = AndroidDeviceProbe(app)
         assertTrue(!probe.osVersion().isNullOrBlank())
         val total = probe.storageTotalMb()
@@ -69,7 +69,6 @@ class DeviceProbeTest {
         assertTrue(total == null || total > 0)
         assertTrue(free == null || free >= 0)
         if (total != null && free != null) assertTrue(free <= total)
-        assertTrue(probe.network() in listOf(null, "wifi", "cellular", "ethernet", "other", "none"))
     }
 
     @Test

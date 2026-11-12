@@ -14,6 +14,7 @@ internal class PerfSampler(
     private val reader: ProcessReader,
     private val frames: FrameSource?,
     private val device: DeviceProbe,
+    private val network: NetworkProbe,
     private val clock: Clock,
     private val monotonicMs: () -> Long,
 ) {
@@ -65,7 +66,7 @@ internal class PerfSampler(
             thermal = runCatching { device.thermal() }.getOrNull(),
             ramFreeMb = runCatching { device.ramFreeMb() }.getOrNull(),
             storageFreeMb = runCatching { device.storageFreeMb() }.getOrNull(),
-            network = runCatching { device.network() }.getOrNull(),
+            net = runCatching { network.current() }.getOrNull(),
         )
     }
 

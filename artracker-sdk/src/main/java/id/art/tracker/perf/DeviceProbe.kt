@@ -2,8 +2,6 @@ package id.art.tracker.perf
 
 import android.app.ActivityManager
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Environment
 import android.os.Build
@@ -36,9 +34,6 @@ internal interface DeviceProbe {
     fun storageTotalMb(): Int?
 
     fun storageFreeMb(): Int?
-
-    /** Active transport: `wifi`, `cellular`, `ethernet`, `other`, or `none` when offline. */
-    fun network(): String?
 }
 
 private const val DEFAULT_CLK_TCK = 100L
@@ -118,18 +113,6 @@ internal class AndroidDeviceProbe(
 
     override fun storageFreeMb(): Int? =
         runCatching { bytesToMb(statFs(Environment.getDataDirectory().path).availableBytes).takeIf { it >= 0 } }.getOrNull()
-
-    override fun network(): String? = runCatching {
-        val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val caps = cm.activeNetwork?.let(cm::getNetworkCapabilities)
-        when {
-            caps == null -> "none"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-            else -> "other"
-        }
-    }.getOrNull()
 
     override fun clkTck(): Long = clkTck
 

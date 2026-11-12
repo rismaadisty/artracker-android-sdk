@@ -16,9 +16,11 @@ import id.art.tracker.lifecycle.AppLifecycleObserver
 import id.art.tracker.lifecycle.NavTracker
 import id.art.tracker.lifecycle.ScreenTracker
 import id.art.tracker.perf.AndroidDeviceProbe
+import id.art.tracker.perf.ConnectivityNetworkProbe
 import id.art.tracker.perf.DeviceProbe
 import id.art.tracker.perf.FrameMetricsFrameSource
 import id.art.tracker.perf.MemoryWarningCallbacks
+import id.art.tracker.perf.NetworkProbe
 import id.art.tracker.perf.PerfMonitor
 import id.art.tracker.perf.PerfSampler
 import id.art.tracker.perf.ProcSelfReader
@@ -358,14 +360,16 @@ internal class ARTrackerCore(
 
     private fun createPerfMonitor(owner: ARTrackerCore): PerfMonitor {
         val probe = AndroidDeviceProbe(app)
+        val network = ConnectivityNetworkProbe(app)
         val frames = if (config.performance.trackFrames) FrameMetricsFrameSource(owner.windowRegistry) else null
-        return owner.newPerfMonitor(PerfSampler(ProcSelfReader, frames, probe, clock, SystemClock::elapsedRealtime), probe)
+        return owner.newPerfMonitor(PerfSampler(ProcSelfReader, frames, probe, network, clock, SystemClock::elapsedRealtime), probe, network)
     }
 
     /** A monitor wired to this core: the current session, the user and the pipeline (items stay off while disabled). */
-    internal fun newPerfMonitor(sampler: PerfSampler, device: DeviceProbe): PerfMonitor = PerfMonitor(
+    internal fun newPerfMonitor(sampler: PerfSampler, device: DeviceProbe, network: NetworkProbe): PerfMonitor = PerfMonitor(
         sampler = sampler,
         device = device,
+        network = network,
         intervalMs = config.performance.sampleIntervalMs,
         sessionId = { session.peekId() },
         emit = { sessionId, build ->

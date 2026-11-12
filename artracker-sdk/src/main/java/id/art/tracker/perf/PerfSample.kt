@@ -13,7 +13,7 @@ internal data class PerfSample(
     val thermal: String?,
     val ramFreeMb: Int? = null,
     val storageFreeMb: Int? = null,
-    val network: String? = null,
+    val net: String? = null,
 ) {
     fun toMap(): Map<String, Any?> {
         val m = LinkedHashMap<String, Any?>(13)
@@ -28,7 +28,7 @@ internal data class PerfSample(
         thermal?.let { m["thermal"] = it }
         ramFreeMb?.let { m["ram_free_mb"] = it }
         storageFreeMb?.let { m["storage_free_mb"] = it }
-        network?.let { m["network"] = it }
+        net?.let { m["net"] = it }
         return m
     }
 
