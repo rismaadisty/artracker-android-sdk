@@ -6,7 +6,7 @@ plugins {
 
 // Single source of truth for the SDK version: it feeds BuildConfig.SDK_VERSION (User-Agent, envelope `sdk.version`)
 // and the Maven publication below. Bump it here (and in CHANGELOG.md) before tagging a release.
-val sdkVersion = "1.0.0"
+val sdkVersion = "1.0.1"
 
 android {
     namespace = "id.art.tracker.sdk"
