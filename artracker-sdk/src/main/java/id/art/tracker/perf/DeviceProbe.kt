@@ -105,11 +105,13 @@ internal class AndroidDeviceProbe(
         bytesToMb(info.availMem).takeIf { it >= 0 }
     }.getOrNull()
 
-    private val storageTotal: Int? by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        runCatching { bytesToMb(statFs(Environment.getDataDirectory().path).totalBytes).takeIf { it > 0 } }.getOrNull()
-    }
+    /** The partition size does not change, so a successful read is kept; a failed one is retried on the next call. */
+    @Volatile
+    private var storageTotal: Int? = null
 
-    override fun storageTotalMb(): Int? = storageTotal
+    override fun storageTotalMb(): Int? = storageTotal ?: runCatching {
+        bytesToMb(statFs(Environment.getDataDirectory().path).totalBytes).takeIf { it > 0 }
+    }.getOrNull().also { storageTotal = it }
 
     override fun storageFreeMb(): Int? =
         runCatching { bytesToMb(statFs(Environment.getDataDirectory().path).availableBytes).takeIf { it >= 0 } }.getOrNull()

@@ -45,6 +45,11 @@ internal class ConnectivityNetworkProbe(context: Context) : NetworkProbe {
             kind = networkKind(cm.activeNetwork?.let(cm::getNetworkCapabilities))
         }.onFailure { SdkLog.w("reading the active network failed", it) }
         val cb = object : ConnectivityManager.NetworkCallback() {
+            // Before API 26 `onAvailable` is not always followed by `onCapabilitiesChanged`.
+            override fun onAvailable(network: Network) {
+                kind = runCatching { networkKind(cm.getNetworkCapabilities(network)) }.getOrNull()
+            }
+
             override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
                 kind = networkKind(networkCapabilities)
             }

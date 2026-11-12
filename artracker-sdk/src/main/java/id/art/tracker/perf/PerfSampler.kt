@@ -46,6 +46,9 @@ internal class PerfSampler(
         val pages = runCatching { reader.readStatm()?.let(::parseStatmResidentPages) }.getOrNull()
         val memMb = pages?.let { it * device.pageSizeBytes() / BYTES_PER_MB }
 
+        // Warm the cached device facts here, on the sampling thread: a flush from onBackground runs on the main thread.
+        runCatching { device.ramMb(); device.storageTotalMb() }
+
         val window = frames?.let { runCatching { it.drain() }.getOrNull() }
         val drainedAt = lastDrainAtMs
         val fps = if (window != null && drainedAt != null) window.fps(mono - drainedAt) else null

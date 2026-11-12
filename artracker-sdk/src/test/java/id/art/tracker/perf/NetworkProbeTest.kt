@@ -79,6 +79,20 @@ class NetworkProbeTest {
     }
 
     @Test
+    fun `onAvailable alone updates the cache on API 24 and 25`() {
+        val probe = ConnectivityNetworkProbe(app)
+        probe.start()
+        val callback = shadowOf(cm).networkCallbacks.single()
+        val net: Network = ShadowNetwork.newInstance(7)
+        callback.onLost(net)
+        assertEquals("none", probe.current())
+        shadowOf(cm).setNetworkCapabilities(net, caps(NetworkCapabilities.TRANSPORT_CELLULAR))
+        callback.onAvailable(net) // before API 26 no onCapabilitiesChanged follows
+        assertEquals("cellular", probe.current())
+        probe.stop()
+    }
+
+    @Test
     fun `start twice registers one callback`() {
         val probe = ConnectivityNetworkProbe(app)
         probe.start()

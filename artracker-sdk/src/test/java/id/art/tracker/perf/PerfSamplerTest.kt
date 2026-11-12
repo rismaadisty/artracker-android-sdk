@@ -80,6 +80,13 @@ class PerfSamplerTest {
     }
 
     @Test
+    fun `sampling warms the cached device facts off the flushing thread`() {
+        sampler().sample()
+        assertTrue(device.storageTotalReads >= 1)
+        assertTrue(device.ramReads >= 1)
+    }
+
+    @Test
     fun `null readings are omitted`() {
         device.ramFree = null
         device.storageFree = null

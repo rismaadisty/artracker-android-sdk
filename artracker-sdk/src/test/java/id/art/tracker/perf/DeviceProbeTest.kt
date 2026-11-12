@@ -108,6 +108,19 @@ class DeviceProbeTest {
     }
 
     @Test
+    fun `a failed storage read is retried and not cached`() {
+        var calls = 0
+        val probe = AndroidDeviceProbe(app, statFs = {
+            if (calls++ == 0) throw IllegalArgumentException("transient") else android.os.StatFs(it)
+        })
+        ShadowStatFs.registerStats(Environment.getDataDirectory().path, 31_250_000, 25_000_000, 25_000_000)
+        assertNull(probe.storageTotalMb())
+        assertEquals(122_070, probe.storageTotalMb())
+        assertEquals(122_070, probe.storageTotalMb())
+        assertEquals(2, calls)
+    }
+
+    @Test
     fun `battery is a fraction or null`() {
         val b = AndroidDeviceProbe(app).batteryFraction()
         assertTrue(b == null || b in 0.0..1.0)

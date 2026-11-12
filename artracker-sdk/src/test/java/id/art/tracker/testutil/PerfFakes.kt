@@ -53,11 +53,14 @@ internal class FakeDeviceProbe(
 
     override fun ramFreeMb(): Int? = ramFree
 
-    override fun storageTotalMb(): Int? = storageTotal
+    var storageTotalReads = 0
+    var ramReads = 0
+
+    override fun storageTotalMb(): Int? = storageTotal.also { storageTotalReads++ }
 
     override fun storageFreeMb(): Int? = storageFree
 
-    override fun ramMb(): Int? = ram
+    override fun ramMb(): Int? = ram.also { ramReads++ }
 
     override fun cores(): Int = cores
 
