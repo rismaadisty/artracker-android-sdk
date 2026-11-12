@@ -5,6 +5,8 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-12
+
 ### Added
 
 - **Session profiling (opt-in).** `ARTrackerConfig.performance = PerformanceConfig(enabled, sampleIntervalMs, trackFrames)`,

@@ -1,10 +1,10 @@
 # artracker-android-sdk
 Native Android SDK for session replay — capture UI layout states, touch events, and user flows
 
-Version `1.0.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
+Version `1.0.1`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
 [ARTracker](https://github.com/tiofani03/artracker) backend (`POST {endpoint}/api/v1/ingest`).
 
-> **Status: what is verified and what is NOT** (read this before adopting `1.0.0`)
+> **Status: what is verified and what is NOT** (read this before adopting `1.0.1`)
 >
 > | Area | State |
 > | --- | --- |
@@ -28,13 +28,13 @@ Version `1.0.0`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 
 ## Installation
 
-Coordinates: `id.art.tracker:artracker-android:1.0.0`, published to **GitHub Packages**
+Coordinates: `id.art.tracker:artracker-android:1.0.1`, published to **GitHub Packages**
 (`https://maven.pkg.github.com/rismaadisty/artracker-android-sdk`).
 
 ```kotlin
 // build.gradle.kts of the app module
 dependencies {
-    implementation("id.art.tracker:artracker-android:1.0.0")
+    implementation("id.art.tracker:artracker-android:1.0.1")
 }
 ```
 
@@ -61,7 +61,7 @@ dependencyResolutionManagement {
 
 Step by step (creating the token, Groovy, version catalog, CI, troubleshooting): [`docs/github-packages.md`](docs/github-packages.md).
 To try an unreleased build instead, publish it to your local Maven repository and add `mavenLocal()`:
-`./gradlew :artracker-sdk:publishToMavenLocal` (writes to `~/.m2/repository/id/art/tracker/artracker-android/1.0.0/`).
+`./gradlew :artracker-sdk:publishToMavenLocal` (writes to `~/.m2/repository/id/art/tracker/artracker-android/1.0.1/`).
 
 The SDK pulls in `kotlinx-coroutines-android`, `androidx.work:work-runtime-ktx`, `androidx.lifecycle:lifecycle-process`,
 `androidx.core:core-ktx` and the Kotlin stdlib. It has no Room, no kotlinx.serialization and no OkHttp dependency.
@@ -408,7 +408,7 @@ The AAR ships consumer rules (`consumer-rules.pro`); you need no rules of your o
 The public API (`ARTracker`, `ARTrackerConfig`, ...) is deliberately **not** kept: you call it directly, so R8 knows it
 is used.
 
-Obfuscated builds: stack traces are sent as they are (no symbolication in `1.0.0`). Screen names default to the class
+Obfuscated builds: stack traces are sent as they are (no symbolication in `1.0.1`). Screen names default to the class
 simple name, so a Fragment created in code, or a Compose destination, can show up as an obfuscated name such as `a`;
 use `@ARTrackerScreenName("...")`, `ARTracker.screen("...")` or a `-keepnames` rule for such classes. Activities
 declared in the manifest are kept by AGP's own rules.

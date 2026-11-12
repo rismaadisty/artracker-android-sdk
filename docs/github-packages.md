@@ -6,7 +6,7 @@ For app teams that consume the SDK (Alfagift, Apo, ...). Maintainers: see [`rele
 | --- | --- |
 | Group ID | `id.art.tracker` |
 | Artifact ID | `artracker-android` |
-| Dependency | `id.art.tracker:artracker-android:1.0.0` |
+| Dependency | `id.art.tracker:artracker-android:1.0.1` |
 | Packaging | `aar` (Gradle module metadata + POM, with `-sources` and `-javadoc` jars) |
 | Registry URL | `https://maven.pkg.github.com/rismaadisty/artracker-android-sdk` |
 | Requirements | `minSdk 24`, a host on Kotlin 2.0 or newer (verified with 2.0.21 and 2.2.10), JDK 17 for the Gradle build |
@@ -92,7 +92,7 @@ If the project still declares repositories in the root `build.gradle` (`allproje
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("id.art.tracker:artracker-android:1.0.0")
+    implementation("id.art.tracker:artracker-android:1.0.1")
 }
 ```
 
@@ -100,7 +100,7 @@ Or with a version catalog (`gradle/libs.versions.toml`):
 
 ```toml
 [versions]
-artracker = "1.0.0"
+artracker = "1.0.1"
 
 [libraries]
 artracker-android = { group = "id.art.tracker", name = "artracker-android", version.ref = "artracker" }
@@ -129,7 +129,7 @@ in your app.
 | --- | --- |
 | `Received status code 401 from server: Unauthorized` | No credentials reached the request, or the token is wrong/expired. Check `gpr.user` / `gpr.key` (or `GPR_USER` / `GPR_KEY` in CI) and that the token has `read:packages`. |
 | `403 Forbidden` | The token's account cannot read the package (private repository without access, or SSO not authorised for the token). Ask the SDK maintainers for access; authorise the token for SSO. |
-| `Could not find id.art.tracker:artracker-android:1.0.0` / `404 Not Found` | Wrong URL (owner/repository in the path), a version that was not published yet, or the registry is not declared where Gradle looks (for example only in `allprojects` while `FAIL_ON_PROJECT_REPOS` is on). Check the URL above and the version on the repository's *Packages* page. |
+| `Could not find id.art.tracker:artracker-android:1.0.1` / `404 Not Found` | Wrong URL (owner/repository in the path), a version that was not published yet, or the registry is not declared where Gradle looks (for example only in `allprojects` while `FAIL_ON_PROJECT_REPOS` is on). Check the URL above and the version on the repository's *Packages* page. |
 | `401` although the properties look set | A property that is missing makes `.orNull` return `null`, and Gradle then sends no credentials. Define **both** `gpr.user` and `gpr.key`, and make sure they are in the user-level `~/.gradle/gradle.properties`, not only in another project. |
 | `Module was compiled with an incompatible version of Kotlin` | The host's Kotlin compiler is older than 2.0. Upgrade the host to Kotlin 2.0+. |
 | Build passes locally, fails in CI | CI does not have the secrets, or the job only exposes them to protected branches. Check the secret names against the snippet. |
