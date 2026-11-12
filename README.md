@@ -131,6 +131,7 @@ SDK uninitialised and every other call a no-op; each validation error is logged 
 | `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false, sender = null)` | The first four are used by the OkHttp interceptor; `captureHeaders` is reserved: headers are never captured. `sender` replaces the transport, see "Custom transport" |
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
 | `sessionTimeoutMs` | `1_800_000` | Idle timeout (30 min), minimum 1000; a session never lasts more than 24 h |
+| `performance` | `PerformanceConfig(enabled = false, sampleIntervalMs = 1_000, trackFrames = true)` | Session profiling, opt-in. `sampleIntervalMs` must be 500..10_000, otherwise the config is invalid. See "Performance monitoring" |
 | `beforeSend` | `null` | `BeforeSend { item -> item }`: modify an item, or return `null` to drop it. Runs before the item is queued |
 
 ## API
@@ -317,6 +318,51 @@ replay = ReplayConfig(
   halved (down to 0.5 fps) and, if that persists, the quality drops one preset for the session. Chunks (gzipped JSON of
   frames and touches, `artracker-screen-v1`) close at 10 s or 2 MB and upload on Wi-Fi and cellular; offline they are
   kept up to 50 MB (files under `noBackupFilesDir`).
+
+## Performance monitoring
+
+Opt-in: `PerformanceConfig(enabled = false)` by default. When it is off nothing is created: no thread, no sampling loop,
+no `ComponentCallbacks2`.
+
+```kotlin
+ARTrackerConfig(
+    endpoint = "https://ingest.example.com",
+    apiKey = "art_live_...",
+    performance = PerformanceConfig(enabled = true, sampleIntervalMs = 1_000, trackFrames = true),
+)
+```
+
+While the app is in the foreground, one sample is taken every `sampleIntervalMs` (500 to 10 000 ms) and sent as a
+`perf.samples` item (`type "perf"`). Nothing is sampled in the background.
+
+| Sample key | Meaning | Left out when |
+| --- | --- | --- |
+| `t` | epoch ms, from the SDK clock | never |
+| `cpu` | process CPU, % of the whole device (all cores), from `/proc/self/stat` | first sample after (re)start; `/proc` unreadable |
+| `mem_mb` | resident set size from `/proc/self/statm` | `/proc` unreadable |
+| `fps` | frames per second of the resumed Activity (`FrameMetrics`) | `trackFrames = false`, or fewer than 2 frames in the interval (an idle screen is not 0 fps) |
+| `jank`, `frozen` | frames over 2 vsync periods, frames over 700 ms | `trackFrames = false` |
+| `threads` | thread count | `/proc` unreadable |
+| `battery` | 0.0 to 1.0 | unavailable |
+| `thermal` | `nominal`, `fair`, `serious` or `critical` (API 29+) | below API 29 |
+| `ram_free_mb` | free RAM in MB (`ActivityManager.MemoryInfo.availMem`) | unavailable |
+| `storage_free_mb` | free space of the data partition in MB | unavailable |
+| `net` | default network: `wifi`, `cellular`, `ethernet`, or `none` when there is no active network | unavailable, or a transport that is not one of the three (VPN, Bluetooth, ...) |
+
+A metric that cannot be read is omitted, never sent as 0. Samples are batched: 10 per item (at most 60), and flushed when
+the app goes to the background and when the session changes (old samples go out under the old session id). The item's
+`attributes` also carry `v`, `platform`, `interval_ms` and `device` (`os_version`, `ram_mb`, `storage_mb`, `cores`,
+`refresh_hz`).
+
+The device context (`os_version` of at most 32 characters, `ram_mb`, `storage_mb` of the data partition, and the per-sample
+`ram_free_mb`, `storage_free_mb` and `net`) travels with `perf.samples` only, never with `session.start`. All values are MB
+rounded to an integer, and a value that cannot be read is omitted (an empty `os_version` too). `net` comes from a cached
+`ConnectivityManager` default-network callback that is registered only while performance monitoring runs in the
+foreground and is unregistered when it stops; it needs no permission beyond the `ACCESS_NETWORK_STATE` the SDK already declares.
+
+Two events accompany the samples: `perf.memory_warning {level}` for trim levels 10 and 15 while in the foreground (Android 14 / API 34 and later no longer deliver those two levels to apps, so on current devices this event is rare or absent), and
+`perf.thermal_change {from, to}`. Opting out discards the buffered samples. To measure what profiling costs, see
+`artracker-sdk/PERF.md` section 4.
 
 ## Crash, ANR and offline behaviour
 

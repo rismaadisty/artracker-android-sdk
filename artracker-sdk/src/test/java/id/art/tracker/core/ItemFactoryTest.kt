@@ -1,5 +1,6 @@
 package id.art.tracker.core
 
+import id.art.tracker.ItemType
 import id.art.tracker.LogLevel
 import id.art.tracker.priority
 import id.art.tracker.testutil.FakeClock
@@ -91,5 +92,16 @@ class ItemFactoryTest {
         // Replay no longer travels through the ingest queue: an item with that name is like any other.
         assertEquals(2, f.session("replay_chunk").priority())
         assertEquals(2, f.event("replay_chunk").priority())
+    }
+
+    @Test
+    fun perf_buildsPerfSamplesItemWithoutLevel() {
+        val item = ItemFactory(FakeClock(1000), { "s1" }, { null }).perf(mapOf("v" to 1))
+        assertEquals(ItemType.PERF, item.type)
+        assertEquals("perf.samples", item.name)
+        assertEquals("s1", item.sessionId)
+        val json = item.toJson()
+        assertTrue(json.contains("\"type\":\"perf\""))
+        assertFalse(json.contains("\"level\""))
     }
 }

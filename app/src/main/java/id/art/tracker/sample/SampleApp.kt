@@ -8,6 +8,7 @@ import id.art.tracker.ARTrackerSender
 import id.art.tracker.BeforeSend
 import id.art.tracker.ExperimentalARTrackerApi
 import id.art.tracker.NetworkConfig
+import id.art.tracker.PerformanceConfig
 import id.art.tracker.ReplayConfig
 import id.art.tracker.ReplayQuality
 import id.art.tracker.playground.settings.PlaygroundSettings
@@ -61,5 +62,6 @@ object SampleApp {
         ),
         network = NetworkConfig(sender = sender),
         beforeSend = beforeSend,
+        performance = PerformanceConfig(enabled = debug),
     )
 }

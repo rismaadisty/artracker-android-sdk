@@ -5,6 +5,7 @@ import id.art.tracker.ARTrackerSender
 import id.art.tracker.BeforeSend
 import id.art.tracker.ExperimentalARTrackerApi
 import id.art.tracker.NetworkConfig
+import id.art.tracker.PerformanceConfig
 import id.art.tracker.PrivacyConfig
 import id.art.tracker.ReplayConfig
 import id.art.tracker.ReplayQuality
@@ -78,6 +79,8 @@ data class PlaygroundSettings(
             flushIntervalMs = flushIntervalMs,
             sessionTimeoutMs = sessionTimeoutMs,
             beforeSend = beforeSend,
+            // Session profiling follows the debug toggle: on for debug builds, off otherwise.
+            performance = PerformanceConfig(enabled = debug),
         )
 
     companion object {

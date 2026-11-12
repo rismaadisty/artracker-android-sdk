@@ -177,3 +177,49 @@ Read of the result:
 Reproduce: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, `adb install -r -t` both APKs, then
 `adb shell am instrument -w -r -e class id.art.tracker.e2e.ScreenshotBudgetTest -e durationMs 300000 id.art.tracker.test/id.art.tracker.PlaygroundTestRunner`
 (it prints a `budget_report` line with the uploaded MB and both jank figures).
+
+## 4. Session profiling overhead (target: average CPU differs by <= 1 % of one core)
+
+Status: **measured on an emulator only; the target is NOT MET there, and it has not been run on a physical device.**
+The numbers below are an emulator on a laptop host, which is noisy and not a substitute for the device run the plan asks
+for. Do not lower the target: repeat on a physical device before release, and treat a miss there as an issue.
+
+What is being measured: the cost of `PerformanceConfig(enabled = true)` in the foreground (one `/proc` read per
+interval, the frame-metrics callbacks, a coroutine wake-up, and the extra `perf.samples` items that are persisted, gzipped
+and sent). The sample app turns it on with its debug toggle (`performance = PerformanceConfig(enabled = debug)`).
+
+Procedure used (what was actually run): `Medium_Phone` AVD (API 30, x86, 4 cores), debug build of the sample app on its
+default SINK endpoint (local on the device), the app idle in the foreground on `MainActivity` with the screen kept on,
+session replay on in every run (it is the sample's default, so it is part of the baseline). Each run: force-stop, launch,
+30 s warm-up, then `adb shell top -b -d 5 -n 60 -p <pid>` (about 5 minutes); the first `top` iteration (since process
+start) is dropped, leaving 59 samples; the figure is the mean `%CPU` of one core. Deviation from the plan: `top` was used
+for BOTH sides instead of the SDK's own `cpu` samples for the "on" side, so that the two sides are measured the same way.
+"Off" was a temporary local build with `performance = PerformanceConfig(enabled = false)`; it was not committed.
+
+| Run | Config | Mean CPU (% of one core) | Max over the run |
+| --- | --- | --- | --- |
+| A1 | perf on, frames on | 6.58 | 20.2 |
+| B1 | perf off | 3.33 | 26.0 |
+| B2 | perf off | 2.80 | 7.8 |
+| A2 | perf on, frames on | 6.09 | 13.8 |
+| C | perf on, `trackFrames = false` | 5.59 | 14.4 |
+
+Reading: perf on averaged 6.34 %, perf off 3.07 %, a difference of about **3.3 % of one core, above the 1 % target**.
+The two pairs agree with each other (3.25 and 3.29), so it is not just one noisy run, but each configuration was run
+twice and the emulator is shared with the host. With frame tracking off (C) the cost only drops to 5.59 %, so the frame
+callbacks are not the main part (about 0.75 points, within the run-to-run spread). The cause of the rest is **not
+determined**. Candidates, none verified: the extra items per interval going through the persistence, gzip and send path
+(10 samples per item, one flush every 10 s); the battery and thermal binder calls on the emulator; one-off JIT of the new
+code. A profile (Perfetto or a method trace) of a physical device run would settle it.
+
+| Device / API | Run A: profiling on (% of one core) | Run B: profiling off (% of one core) | Difference |
+| --- | --- | --- | --- |
+| Emulator, API 30 (2 runs each) | 6.34 | 3.07 | **+3.27, target missed** |
+| Physical device | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+
+## Device context fields
+
+The samples carry `ram_free_mb`, `storage_free_mb` and `net`, and the `device` block carries `os_version` and `storage_mb`.
+Reading them costs one `ActivityManager.getMemoryInfo`, one `StatFs` and a volatile read per tick on the sampling
+scope; the network type comes from a callback, so no `ConnectivityManager` call is made per sample. This overhead is
+NOT measured separately: the section 4 measurement predates these fields.

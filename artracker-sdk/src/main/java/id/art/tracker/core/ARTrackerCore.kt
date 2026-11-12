@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.ARTrackerConfig
@@ -14,6 +15,16 @@ import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.lifecycle.AppLifecycleObserver
 import id.art.tracker.lifecycle.NavTracker
 import id.art.tracker.lifecycle.ScreenTracker
+import id.art.tracker.perf.AndroidDeviceProbe
+import id.art.tracker.perf.ConnectivityNetworkProbe
+import id.art.tracker.perf.DeviceProbe
+import id.art.tracker.perf.FrameMetricsFrameSource
+import id.art.tracker.perf.MemoryWarningCallbacks
+import id.art.tracker.perf.NetworkProbe
+import id.art.tracker.perf.PerfMonitor
+import id.art.tracker.perf.PerfSampler
+import id.art.tracker.perf.ProcSelfReader
+import id.art.tracker.perf.WindowListenerRegistry
 import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.ReplayControllerFactory
@@ -43,6 +54,7 @@ import id.art.tracker.transport.TransportConfigStore
 import id.art.tracker.transport.WorkManagerScheduler
 import java.io.File
 import java.lang.ref.WeakReference
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +62,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -71,6 +85,10 @@ internal class ARTrackerCore(
     private val replayFactory: (ARTrackerCore, Handler) -> ReplayController = ReplayControllerFactory::create,
     /** Where closed replay batches go; tests inject one. The default queues them for upload (see [replaySink]). */
     replaySink: ReplaySink? = null,
+    /** Builds the performance monitor when `performance.enabled` (tests inject one with fakes); null = the real one. */
+    private val perfFactory: ((ARTrackerCore) -> PerfMonitor)? = null,
+    /** The wait between two samples; tests inject one they control instead of real time. */
+    private val perfDelay: suspend (Long) -> Unit = { delay(it) },
 ) {
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
@@ -127,6 +145,8 @@ internal class ARTrackerCore(
         }
 
         override fun onSessionEnd(id: String, durationMs: Long) {
+            // Samples buffered in this session go out under its id, before the session closes.
+            runCatching { perf?.flush() }
             runCatching {
                 if (isDisabled()) return@runCatching
                 // Stamped with the id of the session that ended, never with the current one.
@@ -171,17 +191,45 @@ internal class ARTrackerCore(
     @Volatile
     private var resumedActivity: WeakReference<Activity>? = null
 
+    /** Further window listeners (the performance frame source); the replay controller keeps its own hook above. */
+    private val extraWindowListeners = CopyOnWriteArrayList<ActivityTracker.WindowListener>()
+
     private val windowListener = object : ActivityTracker.WindowListener {
         override fun onActivityResumed(a: Activity) {
             resumedActivity = WeakReference(a)
             replay?.onActivityResumed(a)
+            extraWindowListeners.forEach { runCatching { it.onActivityResumed(a) } }
         }
 
         override fun onActivityPaused(a: Activity) {
             if (resumedActivity?.get() === a) resumedActivity = null
             replay?.onActivityPaused(a)
+            extraWindowListeners.forEach { runCatching { it.onActivityPaused(a) } }
         }
     }
+
+    /** Lets the frame source follow the resumed Activity; an Activity that is already resumed is replayed on [add]. */
+    internal val windowRegistry: WindowListenerRegistry = object : WindowListenerRegistry {
+        override fun add(l: ActivityTracker.WindowListener) {
+            extraWindowListeners += l
+            resumedActivity?.get()?.let { runCatching { l.onActivityResumed(it) } }
+        }
+
+        override fun remove(l: ActivityTracker.WindowListener) {
+            extraWindowListeners -= l
+        }
+    }
+
+    /** Session profiling; created in [start] only when `performance.enabled`. */
+    @Volatile
+    internal var perf: PerfMonitor? = null
+        private set
+
+    private val perfLoopLock = Any()
+
+    @Volatile
+    private var perfJob: Job? = null
+    private var memoryCallbacks: MemoryWarningCallbacks? = null
 
     private val activityTracker = ActivityTracker(screens, windowListener)
     private val navTracker = NavTracker(screens)
@@ -294,7 +342,65 @@ internal class ARTrackerCore(
         app.registerActivityLifecycleCallbacks(activityTracker)
         // Before the process observer: the foreground it replays then finds the controller in place.
         if (config.replay.enabled) ensureReplay()?.start(manual = false)
+        if (config.performance.enabled) startPerformance()
         registerProcessObserver()
+    }
+
+    /** Creates the monitor and registers the memory callbacks; nothing else (no thread, no loop) until foreground. */
+    private fun startPerformance() {
+        runCatching {
+            perf = (perfFactory ?: ::createPerfMonitor)(this)
+            val callbacks = MemoryWarningCallbacks({ foreground }) { level ->
+                if (!isDisabled()) emit(items.event("perf.memory_warning", mapOf("level" to level)))
+            }
+            app.applicationContext.registerComponentCallbacks(callbacks)
+            memoryCallbacks = callbacks
+        }.onFailure { SdkLog.w("performance monitoring unavailable", it) }
+    }
+
+    private fun createPerfMonitor(owner: ARTrackerCore): PerfMonitor {
+        val probe = AndroidDeviceProbe(app)
+        val network = ConnectivityNetworkProbe(app)
+        val frames = if (config.performance.trackFrames) FrameMetricsFrameSource(owner.windowRegistry) else null
+        return owner.newPerfMonitor(PerfSampler(ProcSelfReader, frames, probe, network, clock, SystemClock::elapsedRealtime), probe, network)
+    }
+
+    /** A monitor wired to this core: the current session, the user and the pipeline (items stay off while disabled). */
+    internal fun newPerfMonitor(sampler: PerfSampler, device: DeviceProbe, network: NetworkProbe): PerfMonitor = PerfMonitor(
+        sampler = sampler,
+        device = device,
+        network = network,
+        intervalMs = config.performance.sampleIntervalMs,
+        sessionId = { session.peekId() },
+        emit = { sessionId, build ->
+            if (!isDisabled()) emit(build(itemsFor(sessionId, endedSessionUserId ?: identity.userId)))
+        },
+    )
+
+    /** Starts the frame source and the sampling loop on [scope]; idempotent while the loop runs. */
+    private fun startPerfLoop() {
+        val monitor = perf ?: return
+        // Callers race (main thread on foreground, any thread on opt-in): check and launch are one step, and the
+        // foreground state is re-read inside it so a loop is never started after [onBackground] stopped it.
+        synchronized(perfLoopLock) {
+            if (perfJob?.isActive == true || !foreground || isDisabled()) return
+            runCatching { monitor.onForeground() }.onFailure { SdkLog.w("starting performance sampling failed", it) }
+            val interval = config.performance.sampleIntervalMs
+            perfJob = scope.launch {
+                while (isActive) {
+                    perfDelay(interval)
+                    if (isDisabled()) continue
+                    runCatching { monitor.tick() }.onFailure { SdkLog.w("performance sample failed", it) }
+                }
+            }
+        }
+    }
+
+    private fun stopPerfLoop() {
+        synchronized(perfLoopLock) {
+            perfJob?.cancel()
+            perfJob = null
+        }
     }
 
     /** The replay controller, created once (cheap: no view or Compose access happens here). */
@@ -534,9 +640,14 @@ internal class ARTrackerCore(
         if (enabled) {
             pipeline.stopTimer()
             pipeline.discardAll()
+            // Nothing recorded earlier may be sent later: the buffered samples go too.
+            stopPerfLoop()
+            runCatching { perf?.discard() }
+            runCatching { perf?.onBackground() } // stops the frame source; its flush finds nothing
             clearReplayBatches()
         } else if (foreground) {
             pipeline.startTimer()
+            startPerfLoop()
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             persistJob = scope.launch { persistOptOut() }
@@ -581,6 +692,7 @@ internal class ARTrackerCore(
         if (isDisabled()) return
         pipeline.startTimer()
         emit(items.event("app_foreground"))
+        startPerfLoop()
     }
 
     internal fun onBackground() {
@@ -588,7 +700,10 @@ internal class ARTrackerCore(
         // Stops capture, unwraps windows and flushes the open replay chunk: nothing replay-related runs in background.
         runCatching { replay?.onAppBackground() }
         val active = !isDisabled()
+        stopPerfLoop() // no sampling in the background
         if (active) emit(items.event("app_background"))
+        // Enqueued before flushNow(): the last samples travel with this flush, not with the next launch.
+        runCatching { perf?.onBackground() }
         pipeline.stopTimer()
         if (active) {
             pipeline.flushNow()
@@ -629,6 +744,9 @@ internal class ARTrackerCore(
         runCatching { activityTracker.detachAll() }
         runCatching { navTracker.clear() }
         runCatching { replay?.shutdown() }
+        stopPerfLoop()
+        runCatching { memoryCallbacks?.let(app.applicationContext::unregisterComponentCallbacks) }
+        runCatching { perf?.let { it.discard(); it.onBackground() } }
         onMain { ProcessLifecycleOwner.get().lifecycle.removeObserver(processObserver) }
         runCatching { pipeline.stopTimer() }
         runCatching { crashHandler?.uninstall() }
