@@ -347,12 +347,18 @@ While the app is in the foreground, one sample is taken every `sampleIntervalMs`
 | `thermal` | `nominal`, `fair`, `serious` or `critical` (API 29+) | below API 29 |
 | `ram_free_mb` | free RAM in MB (`ActivityManager.MemoryInfo.availMem`) | unavailable |
 | `storage_free_mb` | free space of the data partition in MB | unavailable |
-| `network` | `wifi`, `cellular`, `ethernet`, `other`, or `none` when offline | unavailable |
+| `net` | default network: `wifi`, `cellular`, `ethernet`, or `none` when there is no active network | unavailable, or a transport that is not one of the three (VPN, Bluetooth, ...) |
 
 A metric that cannot be read is omitted, never sent as 0. Samples are batched: 10 per item (at most 60), and flushed when
 the app goes to the background and when the session changes (old samples go out under the old session id). The item's
 `attributes` also carry `v`, `platform`, `interval_ms` and `device` (`os_version`, `ram_mb`, `storage_mb`, `cores`,
 `refresh_hz`).
+
+The device context (`os_version` of at most 32 characters, `ram_mb`, `storage_mb` of the data partition, and the per-sample
+`ram_free_mb`, `storage_free_mb` and `net`) travels with `perf.samples` only, never with `session.start`. All values are MB
+rounded to an integer, and a value that cannot be read is omitted (an empty `os_version` too). `net` comes from a cached
+`ConnectivityManager` default-network callback that is registered only while performance monitoring runs in the
+foreground and is unregistered when it stops; it needs no permission beyond the `ACCESS_NETWORK_STATE` the SDK already declares.
 
 Two events accompany the samples: `perf.memory_warning {level}` for trim levels 10 and 15 while in the foreground (Android 14 / API 34 and later no longer deliver those two levels to apps, so on current devices this event is rare or absent), and
 `perf.thermal_change {from, to}`. Opting out discards the buffered samples. To measure what profiling costs, see

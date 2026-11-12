@@ -216,3 +216,10 @@ code. A profile (Perfetto or a method trace) of a physical device run would sett
 | --- | --- | --- | --- |
 | Emulator, API 30 (2 runs each) | 6.34 | 3.07 | **+3.27, target missed** |
 | Physical device | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+
+## Device context fields
+
+The samples carry `ram_free_mb`, `storage_free_mb` and `net`, and the `device` block carries `os_version` and `storage_mb`.
+Reading them costs one `ActivityManager.getMemoryInfo`, one `StatFs` and a volatile read per tick on the sampling
+scope; the network type comes from a callback, so no `ConnectivityManager` call is made per sample. This overhead is
+NOT measured separately: the section 4 measurement predates these fields.
