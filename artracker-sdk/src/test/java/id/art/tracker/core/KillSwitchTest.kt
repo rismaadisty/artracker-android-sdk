@@ -89,4 +89,30 @@ class KillSwitchTest {
 
         assertFalse(k.isActive())
     }
+
+    @Test
+    fun tripNotifiesOnTripWithTheDeadline() {
+        val k = KillSwitch(store, clock)
+        var seen = -1L
+        k.onTrip = { seen = it }
+        k.trip()
+        assertEquals(clock.nowMs() + KillSwitch.DEFAULT_TRIP_MS, seen)
+        assertEquals(clock.nowMs() + KillSwitch.DEFAULT_TRIP_MS, k.disabledUntilMs())
+    }
+
+    @Test
+    fun disabledUntilIsZeroOnceExpired() {
+        val k = KillSwitch(store, clock)
+        k.trip(10L)
+        clock.advance(10L)
+        assertEquals(0L, k.disabledUntilMs())
+    }
+
+    @Test
+    fun aThrowingListenerDoesNotBreakTrip() {
+        val k = KillSwitch(store, clock)
+        k.onTrip = { error("boom") }
+        k.trip()
+        assertTrue(k.isActive())
+    }
 }

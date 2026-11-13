@@ -552,7 +552,6 @@ Hal-hal berikut berbeda dari teks di atas (atau melengkapinya) setelah implement
 - **`ComposeMaskCollector`**: `ReflectiveSemanticsAccess` tidak memakai refleksi sama sekali; ia menautkan langsung ke `ViewRootForTest` (API internal Compose) dan dibungkus try/catch dengan fallback: seluruh host Compose di-mask. Di-instansiasi hanya di balik `ClassAvailability.compose`.
 - **`stopReplay()`** mematikan perekaman juga untuk sesi berikutnya sampai `startReplay()` dipanggil.
 - `seq` chunk mulai dari 0 lagi pada tiap proses.
-- **Setelah kill-switch `401` kedaluwarsa**, perekaman tidak otomatis dilanjutkan selama aplikasi tetap di foreground (belum diperbaiki).
 
 **Pengujian**
 - Fuzz API publik (`PublicApiFuzzTest`, 1000 iterasi) menemukan dan memperbaiki 3 bug (pipeline mati oleh `Error`, `Number` non-JSON, surrogate tunggal yang tertulis sebagai JSON tidak valid; sekarang U+FFFD).
