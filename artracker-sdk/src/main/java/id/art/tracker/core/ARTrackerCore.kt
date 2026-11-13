@@ -729,6 +729,9 @@ internal class ARTrackerCore(
         // May rotate the session after a long background: that emits session_end/session_start via the listener.
         session.onForeground()
         runCatching { replay?.onAppForeground() } // checks the kill-switch itself
+        // A posted delay counts uptime, which stops while the device sleeps, but the deadline is wall-clock time:
+        // recompute the wait from the wall clock whenever the app comes back while a trip is still pending.
+        runCatching { killSwitch.disabledUntilMs().takeIf { it > 0L }?.let(::scheduleResume) }
         if (isDisabled()) return
         pipeline.startTimer()
         emit(items.event("app_foreground"))

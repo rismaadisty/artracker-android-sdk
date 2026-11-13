@@ -329,9 +329,26 @@ class PerfMonitorTest {
     fun `going low again after recovery emits again`() {
         val m = monitor(memoryInfoWarnings = true)
         m.tickWith(MemoryReading(100, true))
-        m.tickWith(MemoryReading(900, false))
+        repeat(60) { m.tickWith(MemoryReading(900, false)) } // a full cooldown of recovered memory
         m.tickWith(MemoryReading(90, true))
         assertEquals(2, memoryWarnings().size)
+    }
+
+    @Test
+    fun `a reading that flips every second warns once per cooldown at most`() {
+        val m = monitor(memoryInfoWarnings = true)
+        repeat(20) { i -> m.tickWith(MemoryReading(100, i % 2 == 0)) }
+        assertEquals(1, memoryWarnings().size)
+    }
+
+    @Test
+    fun `a missing reading in the middle of a low period does not warn again`() {
+        val m = monitor(memoryInfoWarnings = true)
+        m.tickWith(MemoryReading(100, true))
+        device.memory = null
+        m.tickOnce()
+        m.tickWith(MemoryReading(100, true))
+        assertEquals(1, memoryWarnings().size)
     }
 
     @Test

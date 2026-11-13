@@ -363,7 +363,8 @@ foreground and is unregistered when it stops; it needs no permission beyond the 
 Two events accompany the samples. `perf.memory_warning` has two sources, told apart by its `source` attribute:
 `{source: "trim", level}` for trim levels 10 and 15 while in the foreground (Android 14 / API 34 and later no longer
 deliver those two levels to apps), and, on Android 14 and later only, `{source: "memory_info", ram_free_mb}`, sent when
-a sample finds `ActivityManager.MemoryInfo.lowMemory` turned on (once per low period, not once per sample).
+a sample finds `ActivityManager.MemoryInfo.lowMemory` turned on (once per low period, not once per sample, and at most once a minute, because the system flag can flip back and forth
+while it kills cached processes).
 `perf.thermal_change {from, to}` reports thermal state changes. Opting out discards the buffered samples. To measure what profiling costs, see
 `artracker-sdk/PERF.md` section 4.
 

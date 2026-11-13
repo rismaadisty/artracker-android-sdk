@@ -13,7 +13,7 @@ versions follow semantic versioning.
   provided the app is in the foreground and the user has not opted out. Nothing starts in the background.
 - **`perf.memory_warning` was effectively dead on Android 14+**, which no longer delivers trim levels 10 and 15 to apps.
   On Android 14 and later a profiling sample that finds `ActivityManager.MemoryInfo.lowMemory` set now emits
-  `perf.memory_warning {source: "memory_info", ram_free_mb}` (once per low period). The warning from the trim callback
+  `perf.memory_warning {source: "memory_info", ram_free_mb}` (once per low period, at most once a minute). The warning from the trim callback
   now also carries `source: "trim"` next to its `level`. Below Android 14 nothing changes: the trim callback stays the
   only source, so there is no second warning for the same pressure.
 - **Recovered crash items bypassed `beforeSend` and key-based redaction.** A crash left on disk by an earlier process is

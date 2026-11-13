@@ -178,6 +178,25 @@ class KillSwitchResumeTest {
     }
 
     @Test
+    fun foregroundRearmsTheResumeFromTheWallClock() {
+        val core = startCore()
+        tripWith401(core)
+        ProcessLifecycleTestUtil.stop()
+        shadowOf(looper).idle()
+        // The device slept: wall-clock time passed while uptime (which the looper's delay counts) did not.
+        clock.advance(trip - 60_000)
+
+        ProcessLifecycleTestUtil.start()
+        shadowOf(looper).idle()
+        assertTrue(core.isDisabled())
+        assertFalse(recording(core))
+
+        advance(2 * 60_000) // the deadline is 60 s of wall time away, so the resume must fire within this
+        assertFalse(core.isDisabled())
+        assertTrue(recording(core))
+    }
+
+    @Test
     fun optOutDuringTripStaysDisabledAfterExpiry() {
         val core = startCore()
         tripWith401(core)
