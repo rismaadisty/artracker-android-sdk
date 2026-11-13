@@ -360,8 +360,11 @@ rounded to an integer, and a value that cannot be read is omitted (an empty `os_
 `ConnectivityManager` default-network callback that is registered only while performance monitoring runs in the
 foreground and is unregistered when it stops; it needs no permission beyond the `ACCESS_NETWORK_STATE` the SDK already declares.
 
-Two events accompany the samples: `perf.memory_warning {level}` for trim levels 10 and 15 while in the foreground (Android 14 / API 34 and later no longer deliver those two levels to apps, so on current devices this event is rare or absent), and
-`perf.thermal_change {from, to}`. Opting out discards the buffered samples. To measure what profiling costs, see
+Two events accompany the samples. `perf.memory_warning` has two sources, told apart by its `source` attribute:
+`{source: "trim", level}` for trim levels 10 and 15 while in the foreground (Android 14 / API 34 and later no longer
+deliver those two levels to apps), and, on Android 14 and later only, `{source: "memory_info", ram_free_mb}`, sent when
+a sample finds `ActivityManager.MemoryInfo.lowMemory` turned on (once per low period, not once per sample).
+`perf.thermal_change {from, to}` reports thermal state changes. Opting out discards the buffered samples. To measure what profiling costs, see
 `artracker-sdk/PERF.md` section 4.
 
 ## Crash, ANR and offline behaviour

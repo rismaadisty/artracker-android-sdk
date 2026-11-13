@@ -66,7 +66,7 @@ class PerfSamplerTest {
 
     @Test
     fun `sample carries ram storage and net`() {
-        device.ramFree = 2310
+        device.memory = MemoryReading(2310, false)
         device.storageFree = 51_200
         network.net = "wifi"
         val s = sampler().sample()
@@ -80,6 +80,21 @@ class PerfSamplerTest {
     }
 
     @Test
+    fun `low memory comes from the same reading and is not on the wire`() {
+        device.memory = MemoryReading(100, true)
+        val s = sampler().sample()
+        assertEquals(100, s.ramFreeMb)
+        assertEquals(true, s.lowMemory)
+        assertFalse(s.toMap().keys.any { it.contains("low") })
+    }
+
+    @Test
+    fun `no reading means no low memory flag`() {
+        device.memory = null
+        assertNull(sampler().sample().lowMemory)
+    }
+
+    @Test
     fun `sampling warms the cached device facts off the flushing thread`() {
         sampler().sample()
         assertTrue(device.storageTotalReads >= 1)
@@ -88,7 +103,7 @@ class PerfSamplerTest {
 
     @Test
     fun `null readings are omitted`() {
-        device.ramFree = null
+        device.memory = null
         device.storageFree = null
         network.net = null
         val s = sampler().sample()

@@ -29,10 +29,15 @@ class PerfMonitorTest {
     private val emitted = ArrayList<Pair<String, TelemetryItem>>()
     private var ticks = 0L
 
-    private fun monitor(withFrames: Boolean = true, flushEvery: Int = PerfMonitor.FLUSH_EVERY): PerfMonitor {
+    private fun monitor(
+        withFrames: Boolean = true,
+        flushEvery: Int = PerfMonitor.FLUSH_EVERY,
+        memoryInfoWarnings: Boolean = false,
+    ): PerfMonitor {
         val sampler = PerfSampler(reader, if (withFrames) frames else null, device, network, clock) { mono }
         return PerfMonitor(
             sampler, device, network, intervalMs = 1_000, sessionId = { session }, flushEvery = flushEvery,
+            memoryInfoWarnings = memoryInfoWarnings,
             emit = { sid, build -> emitted += sid to build(ItemFactory(clock, { sid }, { null })) },
         )
     }
@@ -48,6 +53,13 @@ class PerfMonitorTest {
     private fun perfItems() = emitted.filter { it.second.type == ItemType.PERF }
 
     private fun samplesOf(item: TelemetryItem) = (item.attributes["samples"] as List<*>)
+
+    private fun memoryWarnings() = emitted.map { it.second }.filter { it.name == "perf.memory_warning" }
+
+    private fun PerfMonitor.tickWith(memory: MemoryReading) {
+        device.memory = memory
+        tickOnce()
+    }
 
     @Test
     fun `ten ticks emit exactly one item with ten samples`() {
@@ -293,5 +305,56 @@ class PerfMonitorTest {
         m.tickOnce()
         m.flush()
         assertEquals(2, perfItems().sumOf { samplesOf(it.second).size })
+    }
+
+    @Test
+    fun `going low emits one memory warning`() {
+        val m = monitor(memoryInfoWarnings = true)
+        m.tickWith(MemoryReading(500, false))
+        assertTrue(memoryWarnings().isEmpty())
+        m.tickWith(MemoryReading(100, true))
+        val warning = memoryWarnings().single()
+        assertEquals(mapOf("source" to "memory_info", "ram_free_mb" to 100), warning.attributes)
+        assertEquals(ItemType.EVENT, warning.type)
+    }
+
+    @Test
+    fun `staying low emits nothing more`() {
+        val m = monitor(memoryInfoWarnings = true)
+        repeat(3) { m.tickWith(MemoryReading(100, true)) }
+        assertEquals(1, memoryWarnings().size)
+    }
+
+    @Test
+    fun `going low again after recovery emits again`() {
+        val m = monitor(memoryInfoWarnings = true)
+        m.tickWith(MemoryReading(100, true))
+        m.tickWith(MemoryReading(900, false))
+        m.tickWith(MemoryReading(90, true))
+        assertEquals(2, memoryWarnings().size)
+    }
+
+    @Test
+    fun `a new foreground resets the edge`() {
+        val m = monitor(memoryInfoWarnings = true)
+        m.tickWith(MemoryReading(100, true))
+        m.onBackground()
+        m.onForeground()
+        m.tickWith(MemoryReading(100, true))
+        assertEquals(2, memoryWarnings().size)
+    }
+
+    @Test
+    fun `with the flag off a low reading emits no warning`() {
+        val m = monitor(memoryInfoWarnings = false)
+        m.tickWith(MemoryReading(100, true))
+        assertTrue(memoryWarnings().isEmpty())
+    }
+
+    @Test
+    fun `memory info warnings are for Android 14 and later only`() {
+        assertFalse(PerfMonitor.memoryInfoWarningsFor(33))
+        assertTrue(PerfMonitor.memoryInfoWarningsFor(34))
+        assertTrue(PerfMonitor.memoryInfoWarningsFor(35))
     }
 }

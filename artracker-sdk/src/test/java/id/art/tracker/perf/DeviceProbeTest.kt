@@ -75,7 +75,7 @@ class DeviceProbeTest {
     fun `free ram is below total ram`() {
         val probe = AndroidDeviceProbe(app)
         val total = probe.ramMb()
-        val free = probe.ramFreeMb()
+        val free = probe.memory()?.freeMb
         assertTrue(free == null || free >= 0)
         if (total != null && free != null) assertTrue(free <= total)
     }
@@ -88,7 +88,19 @@ class DeviceProbeTest {
         }
         val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         shadowOf(am).setMemoryInfo(info)
-        assertEquals(2310, AndroidDeviceProbe(app).ramFreeMb())
+        assertEquals(MemoryReading(2310, false), AndroidDeviceProbe(app).memory())
+    }
+
+    @Test
+    fun `memory reading carries the low memory flag of the system`() {
+        val info = ActivityManager.MemoryInfo().apply {
+            totalMem = 8_192L * 1_048_576
+            availMem = 120L * 1_048_576
+            lowMemory = true
+        }
+        val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        shadowOf(am).setMemoryInfo(info)
+        assertEquals(MemoryReading(120, true), AndroidDeviceProbe(app).memory())
     }
 
     @Test
@@ -104,7 +116,7 @@ class DeviceProbeTest {
         val probe = AndroidDeviceProbe(app, statFs = { throw IllegalArgumentException("no such volume") })
         assertNull(probe.storageFreeMb())
         assertNull(probe.storageTotalMb())
-        assertNotNull(probe.ramFreeMb())
+        assertNotNull(probe.memory())
     }
 
     @Test

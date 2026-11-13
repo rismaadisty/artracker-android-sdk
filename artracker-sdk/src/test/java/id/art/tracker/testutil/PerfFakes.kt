@@ -1,6 +1,7 @@
 package id.art.tracker.testutil
 
 import id.art.tracker.perf.DeviceProbe
+import id.art.tracker.perf.MemoryReading
 import id.art.tracker.perf.FrameSource
 import id.art.tracker.perf.FrameWindow
 import id.art.tracker.perf.NetworkProbe
@@ -45,13 +46,13 @@ internal class FakeDeviceProbe(
     var clkTck: Long = 100,
     var pageSize: Long = 4096,
     var osVersion: String? = "14",
-    var ramFree: Int? = 1500,
+    var memory: MemoryReading? = MemoryReading(1500, false),
     var storageTotal: Int? = 128_000,
     var storageFree: Int? = 64_000,
 ) : DeviceProbe {
     override fun osVersion(): String? = osVersion
 
-    override fun ramFreeMb(): Int? = ramFree
+    override fun memory(): MemoryReading? = memory
 
     var storageTotalReads = 0
     var ramReads = 0

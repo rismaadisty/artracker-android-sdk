@@ -14,6 +14,8 @@ internal data class PerfSample(
     val ramFreeMb: Int? = null,
     val storageFreeMb: Int? = null,
     val net: String? = null,
+    /** The system's own low-memory flag from the same reading as [ramFreeMb]. Drives a warning; never sent as is. */
+    val lowMemory: Boolean? = null,
 ) {
     fun toMap(): Map<String, Any?> {
         val m = LinkedHashMap<String, Any?>(13)

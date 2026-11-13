@@ -2,6 +2,7 @@ package id.art.tracker.core
 
 import android.app.Activity
 import android.app.Application
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -385,7 +386,7 @@ internal class ARTrackerCore(
         runCatching {
             perf = (perfFactory ?: ::createPerfMonitor)(this)
             val callbacks = MemoryWarningCallbacks({ foreground }) { level ->
-                if (!isDisabled()) emit(items.event("perf.memory_warning", mapOf("level" to level)))
+                if (!isDisabled()) emit(items.event("perf.memory_warning", mapOf("level" to level, "source" to "trim")))
             }
             app.applicationContext.registerComponentCallbacks(callbacks)
             memoryCallbacks = callbacks
@@ -405,6 +406,7 @@ internal class ARTrackerCore(
         device = device,
         network = network,
         intervalMs = config.performance.sampleIntervalMs,
+        memoryInfoWarnings = PerfMonitor.memoryInfoWarningsFor(Build.VERSION.SDK_INT),
         sessionId = { session.peekId() },
         emit = { sessionId, build ->
             if (!isDisabled()) emit(build(itemsFor(sessionId, endedSessionUserId ?: identity.userId)))
