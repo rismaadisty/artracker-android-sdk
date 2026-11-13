@@ -105,7 +105,9 @@ internal class CrashHandler(
 /**
  * Builds the final JSON of a `log`/`fatal`/`crash` item (same shape as `TelemetryItem.toJson()`), by hand and
  * without coroutines, database or network, because it runs on a dying process. The exception message, the stack
- * trace header lines and the breadcrumbs are redacted here since nothing downstream will touch this JSON.
+ * trace header lines and the breadcrumbs are redacted here by value pattern, as a first layer: the dying process
+ * cannot do more. On the next launch `CrashRecovery` reads the item back and runs it through `beforeSend` and the
+ * pipeline's full redaction (by key as well), like every other item.
  * Work is budgeted: breadcrumbs beyond [BUDGET_NANOS] are dropped rather than redacted late.
  */
 internal object CrashItemBuilder {

@@ -11,6 +11,7 @@ import id.art.tracker.ARTrackerConfig
 import id.art.tracker.Diagnostics
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
+import id.art.tracker.telemetryItemFromJson
 import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.lifecycle.AppLifecycleObserver
 import id.art.tracker.lifecycle.NavTracker
@@ -494,7 +495,11 @@ internal class ARTrackerCore(
             collectExitInfo()
             return
         }
-        if (CrashRecovery.recover(crashStore, queue) > 0) leftoverItems = true
+        // The crash JSON goes through beforeSend and the same redaction as every other item before it is queued.
+        val recovered = CrashRecovery.recover(crashStore, queue) { json ->
+            telemetryItemFromJson(json)?.let(pipeline::prepareRecovered)
+        }
+        if (recovered > 0) leftoverItems = true
         collectExitInfo()
     }
 

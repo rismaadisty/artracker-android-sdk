@@ -432,9 +432,11 @@ Read these before shipping to production.
 - With `maskAllInputs = false`, Compose fields that hold numbers or PINs stay **clear** in replay: Compose has no input
   type, so the numeric/phone/autofill rules of the View engine do not exist there. Use
   `PasswordVisualTransformation` or `Modifier.artrackerMask()` for them. (Views keep masking numeric/phone inputs.)
-- **Crash items bypass `beforeSend` and key-based redaction.** They are written synchronously in the crash handler
-  and recovered on the next launch; only value patterns (email, card, JWT, Bearer) are redacted in them, and the
-  breadcrumbs attached to them are not key-scrubbed. Do not put secrets in exception messages.
+- **Crash items are redacted in two steps.** The crash handler writes them synchronously and can only redact value
+  patterns (email, card, JWT, Bearer). On the next launch they are recovered and pass `beforeSend` and the key-based
+  redaction like any other item, so `beforeSend` can modify or drop a recovered crash and a breadcrumb under a key such
+  as `token` is replaced. A crash that was not saved yet when the process died is lost, and `beforeSend` never sees the
+  crash at the moment it happens. Do not put secrets in exception messages.
 - Popup and dropdown windows (spinners, `PopupWindow`, menus) are separate window roots and do **not** inherit the
   masking of the view they are anchored to.
 - WebView content is never captured (the block is drawn, the DOM is invisible to the View hierarchy). In screenshot
@@ -445,10 +447,9 @@ Read these before shipping to production.
 - What is redacted, exactly. Items sent through the pipeline (`track`, `log`, `captureException`, `screen`, HTTP
   records, `ApplicationExitInfo` items) pass `beforeSend`, then **by key** (attribute keys such as `password`, `token`,
   `cookie`: value replaced) and **by value pattern** (email, Luhn card, JWT, `Bearer`: in attribute values and also in the
-  item `name` and `message`, so a `log` message, a `track` name or an ANR description is covered). Crash items are the
-  exception: they skip `beforeSend` and key-based redaction, and only their message, stack trace header lines,
-  screen and breadcrumbs get the value patterns. Value patterns are pattern matching only; do not put personal data in
-  names, messages or exception messages.
+  item `name` and `message`, so a `log` message, a `track` name or an ANR description is covered). Crash items
+  join them on the next launch, when they are recovered from disk. Value patterns are pattern matching only; do not put
+  personal data in names, messages or exception messages.
 - Card numbers that pass the Luhn check are redacted to `**** **** **** NNNN` (the last four digits are kept, same as
   the web SDK); emails, JWTs and `Bearer` tokens are replaced entirely.
 - Backups: by default Android cloud backup and device transfer copy the app's data. For ARTracker that is the

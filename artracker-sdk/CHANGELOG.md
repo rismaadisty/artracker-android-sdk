@@ -11,6 +11,10 @@ versions follow semantic versioning.
   now stops replay at once and schedules the way back: when the deadline passes (also one persisted by an earlier run, or
   moved out by the background `FlushWorker`), replay, the flush timer and performance sampling start again on their own,
   provided the app is in the foreground and the user has not opted out. Nothing starts in the background.
+- **Recovered crash items bypassed `beforeSend` and key-based redaction.** A crash left on disk by an earlier process is
+  now read back and goes through `beforeSend` and the same redaction as every other item (a breadcrumb under a key such as
+  `token` is replaced, and returning `null` from `beforeSend` drops the crash). A crash file that cannot be parsed is
+  dropped rather than sent unredacted.
 - **Session replay masked the whole screen of a Compose page while a text field had focus.** A focused Compose text field
   makes its host view report `onCheckIsTextEditor() == true`, so the view rules took the host for an input and, with
   `maskAllInputs = true`, painted over all of it without reading the semantics tree. The host is no longer treated as an
