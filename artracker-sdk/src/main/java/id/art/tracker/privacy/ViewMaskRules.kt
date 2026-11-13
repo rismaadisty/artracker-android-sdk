@@ -11,6 +11,7 @@ import android.widget.EditText
 import android.widget.TextView
 import android.widget.VideoView
 import id.art.tracker.sdk.R
+import java.util.concurrent.ConcurrentHashMap
 
 /** Stateless view classification used by [MaskingPolicy]. */
 internal object ViewMaskRules {
@@ -65,9 +66,25 @@ internal object ViewMaskRules {
      * per the framework, or a [TextView] with an input type. Fails closed (true) if the view throws.
      */
     fun isInput(v: View): Boolean = try {
-        v is EditText || v.onCheckIsTextEditor() || (v is TextView && v.inputType != 0)
+        // A Compose host reports onCheckIsTextEditor() = true while any of its text fields has focus, which would mask
+        // the whole page. Its fields are judged one by one through the semantics tree (see ComposeMaskRules); a host
+        // whose tree cannot be read is masked as a whole by the mask collector, so skipping it here fails nowhere open.
+        !isComposeHost(v) && (v is EditText || v.onCheckIsTextEditor() || (v is TextView && v.inputType != 0))
     } catch (_: Throwable) {
         true
+    }
+
+    private const val COMPOSE_HOST_CLASS = "androidx.compose.ui.platform.AndroidComposeView"
+    private val composeHostCache = ConcurrentHashMap<Class<*>, Boolean>()
+
+    /** By class name, so Compose types are never referenced here. */
+    fun isComposeHost(v: View): Boolean = composeHostCache.getOrPut(v.javaClass) {
+        var c: Class<*>? = v.javaClass
+        while (c != null && c != View::class.java) {
+            if (c.name == COMPOSE_HOST_CLASS) return@getOrPut true
+            c = c.superclass
+        }
+        false
     }
 
     fun isBlocked(v: View): Boolean {

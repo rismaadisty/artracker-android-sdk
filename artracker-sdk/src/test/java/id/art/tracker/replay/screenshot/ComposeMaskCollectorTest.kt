@@ -6,8 +6,12 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.text
@@ -90,6 +94,30 @@ class ComposeMaskCollectorTest {
         val out = ArrayList<MaskRect>()
         ComposeMaskCollector(MaskingPolicy(PrivacyConfig()), semanticsAccess = SemanticsAccess { null }).collect(view, false, out)
         assertEquals(1, out.size)
+    }
+
+    @Test
+    fun aFocusedComposeTextField_masksOnlyTheField_notTheWholeHost() {
+        rule.setContent {
+            Column {
+                BasicTextField(value = "typed", onValueChange = {}, modifier = Modifier.size(100.dp, 30.dp).testTag("field"))
+                Text("plain label")
+                Box(Modifier.size(200.dp))
+            }
+        }
+        rule.onNodeWithTag("field").performClick() // focus: the host view then reports itself as a text editor
+        rule.waitForIdle()
+        val view = host()
+        assertTrue("precondition: the focused Compose host reports onCheckIsTextEditor()", view.onCheckIsTextEditor())
+
+        val policy = MaskingPolicy(PrivacyConfig())
+        val out = ArrayList<MaskRect>()
+        assertTrue(MaskCollector(policy, ComposeMaskCollectorFactory.create(policy)).collect(rule.activity.window.decorView, out))
+
+        val loc = IntArray(2).also { view.getLocationOnScreen(it) }
+        val hostRect = MaskRect(loc[0], loc[1], loc[0] + view.width, loc[1] + view.height)
+        assertTrue("the text field must still be masked, got $out", out.isNotEmpty())
+        assertTrue("the whole Compose host must not be masked, got $out", out.none { it.contains(hostRect) })
     }
 
     @Test
