@@ -205,7 +205,7 @@ Modifier.artrackerMask() / Modifier.artrackerUnmask()
 - Semua fungsi sebelum `init()` menjadi no-op dengan warning, bukan exception.
 - `props`: `Map<String, Any?>` dengan nilai primitif, `List`, `Map`, atau `Date`. Nilai lain di-`toString()`. Kedalaman maks 6, maks 1000 node, hasil ≤24 KB.
 - `beforeSend: ((Item) -> Item?)?` disediakan sebagai hook terakhir untuk redaksi kustom atau drop.
-- Global properties: snapshot diambil saat enqueue, digabung di thread pipeline sebelum `beforeSend` (key item menang dan didahulukan untuk anggaran 24 KB). Tidak berlaku untuk item PERF, exit ANR/native proses sebelumnya, dan crash yang dipulihkan.
+- Global properties: snapshot diambil saat enqueue, digabung di thread pipeline sebelum `beforeSend` (key item menang dan didahulukan untuk anggaran 24 KB). Tidak berlaku untuk item PERF, exit ANR/native proses sebelumnya, dan crash yang dipulihkan (jadi tidak ada item crash/ANR/native crash yang membawanya).
 
 ---
 

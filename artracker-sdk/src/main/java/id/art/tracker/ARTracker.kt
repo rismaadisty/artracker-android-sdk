@@ -119,7 +119,8 @@ public object ARTracker {
      *
      * Kept in memory only: set them again after every [init]. [reset] does not clear them; call
      * [clearGlobalProperties] on logout when they describe the user. Items already tracked keep what they had.
-     * Not applied to a crash recovered from an earlier run. A call before [init] is ignored.
+     * Crash, ANR and native crash items never carry them (a crash is sent by the next process). A call before [init]
+     * is ignored.
      */
     @JvmStatic
     public fun setGlobalProperties(properties: Map<String, Any?>) {

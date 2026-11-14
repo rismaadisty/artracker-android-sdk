@@ -19,7 +19,7 @@ versions follow semantic versioning.
 - **Global properties.** Attributes set once are merged into every event, log and session item (not `perf.samples`)
   before `beforeSend`; an item's own attribute wins on a key conflict. They are redacted like any attribute, one entry
   at a time, so a hostile value costs only its own entry, and they can never push an item's own attributes out of the
-  24 KB budget. Not applied to recovered crashes or to ANR / native crash exits of an earlier process.
+  24 KB budget. Crash, ANR and native crash items never carry them (they are sent by a later process).
   `ARTracker.setGlobalProperties(map)` replaces the whole set and `clearGlobalProperties()` removes it; both are in memory
   only (set them again after every `init`) and `reset()` does not clear them.
 - **Rage tap detection in session replay.** Three or more taps within 1 s, each within 24 dp of the first, flag the replay

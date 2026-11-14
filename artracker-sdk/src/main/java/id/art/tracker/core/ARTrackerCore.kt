@@ -782,7 +782,7 @@ internal class ARTrackerCore(
     fun isDisabled(): Boolean = killSwitch.isActive()
 
     /** The globals in force NOW travel with the item (not those in force when the pipeline gets to it). */
-    private fun emit(item: TelemetryItem, withGlobals: Boolean = true) {
+    internal fun emit(item: TelemetryItem, withGlobals: Boolean = true) {
         pipeline.enqueue(item, if (withGlobals) globals.current() else GlobalSnapshot.EMPTY)
     }
 

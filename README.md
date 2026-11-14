@@ -434,8 +434,10 @@ Read these before shipping to production.
 
 **Behaviour**
 
-- Global properties apply to items enqueued **after** the call. They are not added to a crash recovered from an earlier
-  run, nor to ANR / native crash exits reported for an earlier process, and a call before `init` is ignored.
+- Global properties apply to items enqueued **after** the call, and a call before `init` is ignored. **Crash, ANR and
+  native crash items never carry them**: a JVM crash is written when the process dies and sent by the next process, and
+  ANR / native crash exits are reported by a later process, whose properties do not describe them. If you need the
+  tenant or experiment on a crash, add it through `beforeSend` from your own state.
 
 **Privacy**
 

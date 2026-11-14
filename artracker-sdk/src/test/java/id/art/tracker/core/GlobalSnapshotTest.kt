@@ -67,6 +67,18 @@ class GlobalSnapshotTest {
     }
 
     @Test
+    fun aNonStringKey_costsOnlyThatEntry() {
+        // A raw Java map can hold any key; one such entry must not take the entries after it down with it.
+        val raw = LinkedHashMap<Any?, Any?>()
+        raw[1] = "numeric key"
+        raw[null] = "null key"
+        raw["ok"] = 1
+        @Suppress("UNCHECKED_CAST")
+        val out = GlobalSnapshot(raw as Map<String, Any?>).applyTo(factory.event("e"))
+        assertEquals(1, out.attributes["ok"])
+    }
+
+    @Test
     fun sensitiveGlobals_areRedacted() {
         val out = snap("password" to "hunter2", "contact" to "budi@example.com").applyTo(factory.event("e"))
         assertEquals(AttributeRedactor.REDACTED, out.attributes["password"])

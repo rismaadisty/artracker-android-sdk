@@ -225,6 +225,31 @@ class EventPipelineTest {
     }
 
     @Test
+    fun globalsAreRedactedOnce_inEffect_andBeforeSendNeverSeesARawValue() = runTest {
+        val globals = linkedMapOf<String, Any?>(
+            "password" to "hunter2",
+            "contact" to "budi@example.com",
+            "auth" to "Bearer abcdef0123456789",
+            "card" to "4111 1111 1111 1111",
+            "plain" to "hello",
+        )
+        val seen = ArrayList<TelemetryItem>()
+        val p = pipeline(beforeSend = BeforeSend { seen += it; it })
+        val item = factory.event("e")
+        p.enqueue(item, GlobalSnapshot(globals))
+        p.awaitIdle()
+
+        val expected = id.art.tracker.privacy.AttributeRedactor.redact(globals)
+        val stored = attributesOf(item.id)
+        for ((key, value) in expected) {
+            assertEquals("seen by beforeSend: $key", value, seen.single().attributes[key])
+            assertEquals("stored: $key", value.toString(), stored.get(key).toString())
+        }
+        assertFalse(stored.toString().contains("hunter2"))
+        assertFalse(seen.single().attributes.values.any { it.toString().contains("budi@example.com") })
+    }
+
+    @Test
     fun defaultEnqueue_hasNoGlobals() = runTest {
         val p = pipeline()
         val item = factory.event("e", mapOf("a" to 1))

@@ -34,12 +34,13 @@ internal class GlobalSnapshot(private val raw: Map<String, Any?>) {
         var total = 2 // "{}"
         var seen = 0
         try {
-            for ((key, value) in raw) {
+            // As Map<*, *>: a raw Java map can hold any key, and reading it as String would throw outside the per-entry try.
+            for (entry in (raw as Map<*, *>).entries) {
                 seen++
                 // Nothing more can fit: stop instead of redacting thousands of entries that would be dropped anyway.
                 if (total >= AttributeRedactor.MAX_BYTES - MIN_ENTRY_BYTES) break
                 try {
-                    val one = AttributeRedactor.redact(mapOf(key to value))
+                    val one = AttributeRedactor.redact(mapOf(entry.key.toString() to entry.value))
                     if (one.containsKey(TRUNCATED_KEY)) continue // alone it is bigger than the whole budget
                     for ((k, v) in one) {
                         val size = byteSize(Json.encode(k)) + 1 + byteSize(Json.encode(v)) + 1
