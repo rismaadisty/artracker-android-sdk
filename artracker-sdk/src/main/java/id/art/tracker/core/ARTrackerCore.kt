@@ -165,6 +165,9 @@ internal class ARTrackerCore(
         listener = sessionListener,
     )
 
+    /** The properties the host set for every later event, log and session item (in memory only). */
+    private val globals = GlobalProperties()
+
     val items: ItemFactory = ItemFactory(
         clock,
         { session.currentId().also { crashSessionId = it } },
@@ -518,7 +521,8 @@ internal class ARTrackerCore(
                 return@runCatching
             }
             val exits = collector.collect()
-            exits.forEach(::emit)
+            // Exits of an earlier process: this process's global properties do not describe them.
+            exits.forEach { emit(it, withGlobals = false) }
             if (exits.isNotEmpty()) leftoverItems = true
         }.onFailure { SdkLog.w("collecting exit reasons failed", it) }
     }
@@ -653,7 +657,23 @@ internal class ARTrackerCore(
         replay?.stop()
     }
 
-    /** Logout: forgets the user and starts a new session. Works while disabled (clearing is always safe). */
+    /**
+     * Replaces the global properties: from now on every event, log and session item carries them (see [GlobalSnapshot]).
+     * Allowed while disabled (the value is kept, nothing is emitted). A map that cannot be copied throws before
+     * anything changes, so the previous properties stay; the facade swallows the exception.
+     */
+    fun setGlobalProperties(properties: Map<String, Any?>) {
+        globals.set(properties)
+    }
+
+    fun clearGlobalProperties() {
+        globals.clear()
+    }
+
+    /**
+     * Logout: forgets the user and starts a new session. Works while disabled (clearing is always safe). The global
+     * properties are NOT cleared: the host calls [clearGlobalProperties] when they describe the user.
+     */
     fun reset() {
         endedSessionUserId = identity.userId
         try {
@@ -761,8 +781,9 @@ internal class ARTrackerCore(
     /** True while the user opted out or the 401 kill-switch is tripped. Cheap: in-memory prefs reads. */
     fun isDisabled(): Boolean = killSwitch.isActive()
 
-    private fun emit(item: TelemetryItem) {
-        pipeline.enqueue(item)
+    /** The globals in force NOW travel with the item (not those in force when the pipeline gets to it). */
+    private fun emit(item: TelemetryItem, withGlobals: Boolean = true) {
+        pipeline.enqueue(item, if (withGlobals) globals.current() else GlobalSnapshot.EMPTY)
     }
 
     private fun itemsFor(sessionId: String, userId: String?) = ItemFactory(clock, { sessionId }, { userId })

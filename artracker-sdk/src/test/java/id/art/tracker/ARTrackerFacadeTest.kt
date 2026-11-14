@@ -99,6 +99,8 @@ class ARTrackerFacadeTest {
         ARTracker.optOut(false)
         ARTracker.startReplay()
         ARTracker.stopReplay()
+        ARTracker.setGlobalProperties(mapOf("a" to 1))
+        ARTracker.clearGlobalProperties()
         assertFalse(ARTracker.isInitialized())
         val d = ARTracker.diagnostics()
         assertFalse(d.initialized)

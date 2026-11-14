@@ -149,6 +149,8 @@ invalid config, while the user is opted out, or while the SDK is disabled by the
 | `ARTracker.captureException(throwable, attributes = emptyMap())` | `error` log named `exception` with stack trace, fingerprint, breadcrumbs, current screen. At most 10 identical errors per session |
 | `ARTracker.flush()` | Asks the SDK to send what is queued; returns immediately |
 | `ARTracker.reset()` | Logout: forgets the user and starts a new session |
+| `ARTracker.setGlobalProperties(properties)` | Replaces the set of attributes added to every later event, log and session item (not `perf.samples`); the item's own attribute wins on a key conflict. Kept in memory only: set them again after every `init`. Not cleared by `reset()` |
+| `ARTracker.clearGlobalProperties()` | Removes them (call it on logout if they describe the user) |
 | `ARTracker.optOut(enabled)` | `true`: records and sends nothing, and **deletes everything already queued**. Persisted across restarts |
 | `ARTracker.startReplay()` / `stopReplay()` | Force replay on (still never while opted out) or stop it; `stopReplay` stays off across new sessions until `startReplay` |
 | `ARTracker.diagnostics()` | `Diagnostics(initialized, sessionId, pendingItems, lastSendResult, disabled)`. Reads the database: **never call it on the main thread** |
@@ -429,6 +431,11 @@ sample app itself.
 ## Known limitations & privacy notes
 
 Read these before shipping to production.
+
+**Behaviour**
+
+- Global properties apply to items enqueued **after** the call. They are not added to a crash recovered from an earlier
+  run, nor to ANR / native crash exits reported for an earlier process, and a call before `init` is ignored.
 
 **Privacy**
 

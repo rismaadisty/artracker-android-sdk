@@ -113,6 +113,26 @@ public object ARTracker {
     }
 
     /**
+     * Replaces the set of attributes added to every later `event`, `log` and `session` item (not to `perf.samples`):
+     * set it once instead of repeating the same map in every `track()`. An item's own attribute wins on a key conflict,
+     * and the properties are redacted like any attribute and pass through `beforeSend`.
+     *
+     * Kept in memory only: set them again after every [init]. [reset] does not clear them; call
+     * [clearGlobalProperties] on logout when they describe the user. Items already tracked keep what they had.
+     * Not applied to a crash recovered from an earlier run. A call before [init] is ignored.
+     */
+    @JvmStatic
+    public fun setGlobalProperties(properties: Map<String, Any?>) {
+        withCore("setGlobalProperties") { it.setGlobalProperties(properties) }
+    }
+
+    /** Removes the properties set with [setGlobalProperties]. */
+    @JvmStatic
+    public fun clearGlobalProperties() {
+        withCore("clearGlobalProperties") { it.clearGlobalProperties() }
+    }
+
+    /**
      * Starts session replay recording for this process, regardless of `ReplayConfig.enabled` and the sample rate
      * (still never while the user opted out). Safe from any thread: the work happens on the main thread.
      */

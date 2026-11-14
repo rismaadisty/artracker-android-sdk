@@ -261,6 +261,22 @@ class PerfCoreIntegrationTest {
     }
 
     @Test
+    fun `perf samples do not get global properties`() {
+        val c = startCore(enabled())
+        c.setGlobalProperties(mapOf("tenant" to "acme"))
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(10)
+        c.track("marker", emptyMap())
+        c.onBackground()
+        settle()
+
+        assertTrue("a perf.samples item was emitted", perfItems().isNotEmpty())
+        assertTrue(perfItems().none { it.attributes.containsKey("tenant") })
+        assertEquals("acme", seen.first { it.name == "marker" }.attributes["tenant"])
+    }
+
+    @Test
     fun `shutdown unregisters the memory callbacks`() {
         val c = startCore(enabled())
         c.onForeground()

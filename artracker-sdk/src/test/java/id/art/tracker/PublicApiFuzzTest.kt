@@ -199,6 +199,11 @@ class PublicApiFuzzTest {
                 guard("trackNavController(${describe(any)})") { ARTracker.trackNavController(any) }
             }
             11 -> guard("track(\"track_fuzz\")") { ARTracker.track("track_fuzz", hostileMap()) }
+            12 -> {
+                val globals = if (random.nextInt(3) == 0) giantMap() else hostileMap()
+                guard("setGlobalProperties(${globals.size} entries)") { ARTracker.setGlobalProperties(globals) }
+            }
+            13 -> guard("clearGlobalProperties()") { ARTracker.clearGlobalProperties() }
             else -> error("unknown op $op")
         }
     }
@@ -528,7 +533,7 @@ class PublicApiFuzzTest {
         const val SEED = 0x5EEDA27L
         const val ITERATIONS = 1000
         const val CHECKPOINT_EVERY = 25
-        const val OP_COUNT = 12
+        const val OP_COUNT = 14
         const val ATTRIBUTES_MARKER = ",\"attributes\":"
         val REQUIRED_KEYS = listOf("id", "type", "name", "timestamp", "session_id", "attributes")
         val UUID_V7 = Regex("[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")

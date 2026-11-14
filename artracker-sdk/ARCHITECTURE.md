@@ -190,6 +190,8 @@ ARTracker.captureException(throwable, handled = true)
 ARTracker.flush()
 ARTracker.reset()                                          // logout: user_id hilang, sesi baru
 ARTracker.optOut(true) / ARTracker.startReplay() / ARTracker.stopReplay()
+ARTracker.setGlobalProperties(mapOf("tenant" to "acme"))   // ikut di setiap event/log/session berikutnya, hanya di memori
+ARTracker.clearGlobalProperties()                            // reset() tidak menghapusnya
 
 // OkHttp
 OkHttpClient.Builder().addInterceptor(ARTrackerOkHttpInterceptor()).build()
