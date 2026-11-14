@@ -14,6 +14,7 @@ import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.ARTracker
 import id.art.tracker.ARTrackerConfig
 import android.app.Activity
+import android.view.MotionEvent
 import android.widget.TextView
 import id.art.tracker.LogLevel
 import id.art.tracker.ReplayConfig
@@ -196,6 +197,44 @@ class ARTrackerCoreTest {
         settle()
 
         assertFalse(app.getDatabasePath(ReplayStore.DB_NAME).exists())
+    }
+
+    @Test
+    fun rageTaps_reachTheAckAsHasRageClick() {
+        val backend = FakeReplayBackend()
+        try {
+            val dispatcher = ManualDispatcher()
+            val core = ARTrackerCore(
+                app,
+                configWith(endpoint = backend.endpoint, replay = ReplayConfig(enabled = true, sampleRate = 1.0)),
+                replayFactory = { c, handler -> testReplayController(c, handler, dispatcher) },
+            )
+            ARTrackerCore.install(core)
+            core.start()
+            ProcessLifecycleTestUtil.start()
+            val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+            activity.setContentView(TextView(activity).apply { text = "hello replay" })
+            shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1_000))
+            core.replayController!!.captureFrame()
+            dispatcher.runAll()
+
+            // Three taps on one spot, all within a second of the SDK clock.
+            repeat(3) { i ->
+                activity.window.callback.dispatchTouchEvent(MotionEvent.obtain(0, i * 50L, MotionEvent.ACTION_DOWN, 100f, 200f, 0))
+                activity.window.callback.dispatchTouchEvent(MotionEvent.obtain(0, i * 50L + 10, MotionEvent.ACTION_UP, 100f, 200f, 0))
+            }
+            dispatcher.runAll()
+            core.replayController!!.flushChunks()
+            dispatcher.runAll()
+
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15)
+            while (backend.requestsTo(FakeReplayBackend.ACK).isEmpty() && System.nanoTime() < deadline) Thread.sleep(20)
+            val ack = backend.requestsTo(FakeReplayBackend.ACK).single().json()
+            assertTrue(ack.getBoolean("has_rage_click"))
+            assertFalse(ack.getBoolean("has_error"))
+        } finally {
+            backend.shutdown()
+        }
     }
 
     @Test

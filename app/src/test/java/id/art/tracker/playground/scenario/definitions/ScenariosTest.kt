@@ -9,6 +9,7 @@ import id.art.tracker.playground.scenario.shop.ShopTargets
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -130,8 +131,10 @@ class ScenariosTest {
     }
 
     @Test
-    fun frustratedTapsAdmitsTheSdkHasNoRageClickDetection() {
-        assertTrue(scenario("frustrated_taps").description.contains("SDK tidak mendeteksi rage click"))
+    fun frustratedTapsSaysTheSdkFlagsTheChunkAsARageClick() {
+        val description = scenario("frustrated_taps").description
+        assertTrue(description.contains("has_rage_click"))
+        assertFalse("the SDK detects rage taps now", description.contains("tidak mendeteksi"))
     }
 
     @Test

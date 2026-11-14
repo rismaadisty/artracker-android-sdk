@@ -557,6 +557,66 @@ class ReplayControllerTest {
     }
 
     @Test
+    fun rapidTapsOnOneSpot_flagTheChunkHasRageClick() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        repeat(3) {
+            touch(activity, MotionEvent.ACTION_DOWN, 10, 100f, 200f)
+            touch(activity, MotionEvent.ACTION_UP, 20, 100f, 200f)
+            clock.advance(200)
+        }
+        dispatcher.runAll()
+        flushChunks()
+
+        assertTrue(batches().single().hasRageClick)
+    }
+
+    @Test
+    fun aRageOnAStaticScreenWithNoOpenChunk_opensAChunkAtOnce_soTheFlagIsNotLost() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        // The 10 s timer closes the chunk (unlike flushChunks(), it keeps the duplicate filter): the screen is static,
+        // so no later frame is sent and no chunk is open any more.
+        clock.advance(10_000)
+        idle(5_000)
+        settle()
+        assertEquals(1, batches().size)
+
+        repeat(3) { // the burst completes on the third tap, with nothing open to carry the flag
+            touch(activity, MotionEvent.ACTION_DOWN, 10, 100f, 200f)
+            clock.advance(100)
+        }
+        dispatcher.runAll()
+        applyPosted() // what the controller asked for: a frame of the unchanged screen, which opens a chunk
+        flushChunks()
+
+        assertEquals(2, batches().size)
+        assertFalse(batches()[0].hasRageClick)
+        assertTrue(batches()[1].hasRageClick)
+    }
+
+    @Test
+    fun tapsFarApartInPixels_areComparedInDp() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        val density = activity.resources.displayMetrics.density
+        touch(activity, MotionEvent.ACTION_DOWN, 10, 100f, 200f)
+        clock.advance(100)
+        // 25 dp from the first tap (in pixels: 25 * density): outside the 24 dp radius, so no burst of three.
+        repeat(2) {
+            touch(activity, MotionEvent.ACTION_DOWN, 10, 100f + 25 * density, 200f)
+            clock.advance(100)
+        }
+        dispatcher.runAll()
+        flushChunks()
+
+        assertFalse(batches().single().hasRageClick)
+    }
+
+    @Test
     fun screenshotDisabled_stopsRecordingForTheProcess_andDropsTheOpenChunk() {
         startCore()
         val (activity, _) = textActivity()

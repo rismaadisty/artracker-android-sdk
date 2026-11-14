@@ -30,6 +30,7 @@ class ReplayClientTest {
     private fun upload(
         userId: String? = "user-1",
         hasError: Boolean = true,
+        hasRageClick: Boolean = false,
     ) = ReplayUpload(
         id = "row-1",
         sessionId = "session_abc-123",
@@ -41,6 +42,7 @@ class ReplayClientTest {
         hasError = hasError,
         userId = userId,
         environment = "staging",
+        hasRageClick = hasRageClick,
     )
 
     private fun client(endpoint: String = backend.endpoint, apiKey: String = key) = ReplayClient(endpoint, apiKey)
@@ -111,6 +113,15 @@ class ReplayClientTest {
         assertEquals(17, body.getInt("event_count"))
         assertTrue(body.getBoolean("has_error"))
         assertFalse(body.getBoolean("has_rage_click"))
+        assertFalse(body.getBoolean("has_dead_click"))
+    }
+
+    @Test
+    fun ackBody_carriesHasRageClick() {
+        client().upload(upload(hasRageClick = true))
+
+        val body = backend.requestsTo(FakeReplayBackend.ACK).single().json()
+        assertTrue(body.getBoolean("has_rage_click"))
         assertFalse(body.getBoolean("has_dead_click"))
     }
 

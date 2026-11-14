@@ -171,7 +171,7 @@ internal class ReplayClient(
         body["duration_ms"] = upload.durationMs
         body["event_count"] = upload.eventCount
         body["has_error"] = upload.hasError
-        body["has_rage_click"] = false
+        body["has_rage_click"] = upload.hasRageClick
         body["has_dead_click"] = false
 
         val response = send(ReplayStep.ACK, target, "POST", jsonBody(body), authenticated = true, readBody = false)
