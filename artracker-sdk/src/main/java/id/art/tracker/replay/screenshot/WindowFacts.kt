@@ -12,6 +12,17 @@ internal object WindowFacts {
     /** `FLAG_SECURE`: the app asked that nothing of this window is captured. */
     fun isSecure(root: View): Boolean = params(root)?.let { it.flags and WindowManager.LayoutParams.FLAG_SECURE != 0 } ?: false
 
+    /**
+     * A sub-window (`FIRST_SUB_WINDOW..LAST_SUB_WINDOW`): `PopupWindow`, `ListPopupWindow`, the dropdown of an
+     * `AutoCompleteTextView` or `Spinner` (1000), Compose `Popup` / `DropdownMenu` (1002). They hang off a view of
+     * another window, which they do not expose. False for a root without window parameters; never throws.
+     */
+    fun isPopup(root: View): Boolean = try {
+        params(root)?.type in WindowManager.LayoutParams.FIRST_SUB_WINDOW..WindowManager.LayoutParams.LAST_SUB_WINDOW
+    } catch (_: Throwable) {
+        false
+    }
+
     /** How dark the window dims what is behind it (0..1); 0 when it does not dim. */
     fun dimAmount(root: View): Float = params(root)
         ?.takeIf { it.flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND != 0 }

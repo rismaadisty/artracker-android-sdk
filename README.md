@@ -443,8 +443,12 @@ Read these before shipping to production.
   redaction like any other item, so `beforeSend` can modify or drop a recovered crash and a breadcrumb under a key such
   as `token` is replaced. A crash that was not saved yet when the process died is lost, and `beforeSend` never sees the
   crash at the moment it happens. Do not put secrets in exception messages.
-- Popup and dropdown windows (spinners, `PopupWindow`, menus) are separate window roots and do **not** inherit the
-  masking of the view they are anchored to.
+- A popup inherits masking from the masked area it is attached to: a popup or dropdown window (`PopupWindow`, the
+  suggestions of an `AutoCompleteTextView`, a spinner, Compose `Popup` / `DropdownMenu`) whose top or bottom edge lies
+  within 8 dp of a masked area of the window below it is masked whole, and so is a popup over a `FLAG_SECURE` window.
+  The anchor itself cannot be read, so this is inferred from position: an ordinary popup that happens to touch a masked
+  field is masked too, and a popup placed farther from its anchor (large custom offsets) is **not** covered: mask its
+  content with `artrackerMask()`. A popup that covers the whole height of the window (a bottom sheet) never inherits.
 - WebView content is never captured (the block is drawn, the DOM is invisible to the View hierarchy). In screenshot
   mode the WebView area is painted over, and `SurfaceView` / `TextureView` / video / map areas too.
 - **Session replay sends real pixels** (photos, colors, layouts) of everything that is not masked. It is off unless

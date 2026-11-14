@@ -4,6 +4,8 @@ import android.os.Build
 import android.text.InputType
 import android.view.ViewGroup
 import android.webkit.WebView
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -155,12 +157,13 @@ private fun CaseWidget(id: String) {
         "imageview_placeholder" -> AndroidView(factory = { ctx ->
             ImageView(ctx).apply { setImageResource(R.drawable.ic_launcher_foreground) }
         }, modifier = Modifier.height(72.dp))
-        "popup_window" -> {
+        // The anchor is masked (Modifier.artrackerMask()); the popup below it is masked whole with it.
+        "popup_window" -> Column(Modifier.artrackerMask()) {
             var open by remember { mutableStateOf(false) }
             Button(onClick = { open = !open }) { Text("Buka popup") }
             if (open) Popup { Card { Text("Isi popup: fake.user@example.invalid", Modifier.padding(12.dp)) } }
         }
-        "dropdown_menu" -> {
+        "dropdown_menu" -> Column(Modifier.artrackerMask()) {
             var open by remember { mutableStateOf(false) }
             Box {
                 Button(onClick = { open = true }) { Text("Buka menu") }
@@ -169,6 +172,18 @@ private fun CaseWidget(id: String) {
                 }
             }
         }
+        "view_autocomplete_masked" -> AndroidView(factory = { ctx ->
+            AutoCompleteTextView(ctx).apply {
+                hint = "Ketik f untuk saran email"
+                threshold = 1
+                setAdapter(
+                    ArrayAdapter(
+                        ctx, android.R.layout.simple_dropdown_item_1line,
+                        listOf("fake.one@example.invalid", "fake.two@example.invalid", "fake.three@example.invalid"),
+                    ),
+                )
+            }
+        }, modifier = Modifier.fillMaxWidth())
         "max_all_text_toggle" -> Text("Teks biasa ini terlihat kecuali maskAllText aktif.")
     }
 }

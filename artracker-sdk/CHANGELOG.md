@@ -19,6 +19,11 @@ versions follow semantic versioning.
 
 ### Fixed
 
+- **Popup and dropdown windows anchored to a masked view or node were drawn unmasked** (`PopupWindow`,
+  `AutoCompleteTextView` suggestions, spinners, Compose `Popup` / `DropdownMenu`). A popup whose top or bottom edge lies
+  within 8 dp of a masked area of a window below it is now masked whole; popups over a `FLAG_SECURE` window are masked
+  too. The anchor cannot be read, so this is inferred from position: a popup placed farther from its anchor is not
+  covered, and a popup that covers the whole window height (a sheet) is never masked by this rule.
 - **Recording did not come back after the `401` kill-switch expired while the app stayed in the foreground.** A trip
   now stops replay at once and schedules the way back: when the deadline passes (also one persisted by an earlier run, or
   moved out by the background `FlushWorker`), replay, the flush timer and performance sampling start again on their own,

@@ -20,6 +20,8 @@ import kotlin.math.roundToInt
  *   popups are always drawn with `View.draw`, on top, after the copy finished, with the dim their window applies.
  * - A `FLAG_SECURE` window is never copied or drawn (no fallback either, it would bypass the app's protection): its
  *   area is listed as a mask. The keyboard (another process) cannot be captured: its band is returned as [RawFrame.keyboard].
+ * - A popup (sub-window: `PopupWindow`, dropdowns, Compose `Popup`) whose top or bottom edge touches a masked area of a
+ *   window below it is masked whole, and so is a popup over a `FLAG_SECURE` window ([PopupAnchors]).
  * - A mask collection that fails drops the frame; so does a busy pool (both buffers in use).
  *
  * Not thread-safe: main thread only; [onResult] runs on the main thread, or on the `PixelCopy` callback thread when
@@ -35,6 +37,8 @@ internal class ScreenshotCapturer(
     private val decorOf: (Window) -> View = { it.decorView },
     private val isSecure: (View) -> Boolean = WindowFacts::isSecure,
     private val dimAmount: (View) -> Float = WindowFacts::dimAmount,
+    private val isPopup: (View) -> Boolean = WindowFacts::isPopup,
+    private val anchorTolerancePx: (View) -> Int = { (PopupAnchors.ANCHOR_TOLERANCE_DP * it.resources.displayMetrics.density).roundToInt() },
 ) {
     private var capturing = false
     private val loc = IntArray(2)
@@ -51,7 +55,7 @@ internal class ScreenshotCapturer(
         var width = 0
         var height = 0
         try {
-            for (root in roots) {
+            for ((index, root) in roots.withIndex()) {
                 root.getLocationOnScreen(loc)
                 val rect = MaskRect(loc[0], loc[1], loc[0] + root.width, loc[1] + root.height)
                 rects.add(rect)
@@ -60,6 +64,12 @@ internal class ScreenshotCapturer(
                 if (isSecure(root)) {
                     masks.add(rect)
                     secure++
+                } else if (index > 0 && isPopup(root) &&
+                    PopupAnchors.inheritsMask(rect, masks, rects[0], anchorTolerancePx(root))
+                ) {
+                    // `masks` holds only what the windows below collected so far. A popup hanging off one of those
+                    // areas (its anchor is not readable, see PopupAnchors) is covered whole, so nothing in it is read.
+                    masks.add(rect)
                 } else if (!maskCollector.collect(root, masks)) {
                     onResult(null) // an unmasked frame is never sent
                     return

@@ -8,6 +8,8 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.Window
+import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import id.art.tracker.PrivacyConfig
 import id.art.tracker.privacy.MaskingPolicy
@@ -37,6 +39,7 @@ class ScreenshotCapturerTest {
 
     // WindowManager.LayoutParams cannot sit on a child of a FrameLayout, so window facts are injected by view.
     private val secureViews = HashSet<View>()
+    private val popupViews = HashSet<View>()
     private val dims = HashMap<View, Float>()
 
     private fun setUpScreen() {
@@ -68,6 +71,7 @@ class ScreenshotCapturerTest {
     ) = ScreenshotCapturer(
         pool, MaskCollector(MaskingPolicy(config)), handler, sdkInt, pixelCopy, imeHeight, decorOf,
         isSecure = { it in secureViews }, dimAmount = { dims[it] ?: 0f },
+        isPopup = { it in popupViews }, anchorTolerancePx = { 8 },
     )
 
     private fun run(c: ScreenshotCapturer, roots: List<View>, base: Window? = null): RawFrame? {
@@ -289,4 +293,137 @@ class ScreenshotCapturerTest {
         assertNotNull(pool.acquire(10, 10))
         assertNotNull(pool.acquire(10, 10))
     }
+
+    // region popups: a popup hangs off a view of a window below it, which it does not say
+
+    /** A child of [parent] at ([x],[y]) inside it, [w]x[h], laid out by hand (the parent keeps its own place). */
+    private fun <T : View> place(parent: FrameLayout, child: T, x: Int, y: Int, w: Int, h: Int): T {
+        parent.addView(child, FrameLayout.LayoutParams(w, h).apply { leftMargin = x; topMargin = y })
+        parent.measure(View.MeasureSpec.makeMeasureSpec(parent.width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(parent.height, View.MeasureSpec.EXACTLY))
+        parent.layout(parent.left, parent.top, parent.right, parent.bottom)
+        return child
+    }
+
+    private fun rectOf(v: View) = origin(v).let { MaskRect(it[0], it[1], it[0] + v.width, it[1] + v.height) }
+
+    // The rect of a fake window is read BEFORE the capture: run() idles the looper, which lays the host out again.
+    private fun assertMasked(raw: RawFrame, popup: MaskRect) =
+        assertTrue("the popup $popup should be masked whole, masks = ${raw.masks}", raw.masks.contains(popup))
+
+    private fun popupRoot(x: Int, y: Int, w: Int, h: Int): View = root(Color.WHITE, x, y, w, h).also { popupViews += it }
+
+    @Test
+    fun autoCompleteDropdownBelowAMaskedField_isMaskedWhole() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(base, EditText(activity), 0, 100, 200, 40) // masked by maskAllInputs, the default
+        val popup = popupRoot(0, 140, 200, 160)
+
+        val target = rectOf(popup)
+        val raw = run(capturer(), listOf(base, popup))!!
+
+        assertMasked(raw, target)
+    }
+
+    @Test
+    fun popupAnchoredInsideAMaskedContainer_isMasked() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        val container = place(base, FrameLayout(activity).apply { tag = "artracker-mask" }, 0, 100, 400, 400)
+        val button = place(container, Button(activity), 10, 100, 100, 40)
+        val popup = popupRoot(10, 240, 200, 160)
+
+        val target = rectOf(popup)
+        val buttonRect = rectOf(button)
+        val raw = run(capturer(), listOf(base, popup))!!
+
+        assertMasked(raw, target)
+        assertTrue("the container is one rect, the anchor adds none", raw.masks.none { it == buttonRect })
+    }
+
+    @Test
+    fun anOrdinaryPopupAwayFromMaskedAreas_isNotMasked() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(base, EditText(activity), 0, 300, 200, 40)
+        val popup = popupRoot(200, 0, 200, 200) // a toolbar overflow menu, nowhere near the field
+
+        val target = rectOf(popup)
+        val raw = run(capturer(), listOf(base, popup))!!
+
+        assertFalse(raw.masks.contains(target))
+        assertTrue(raw.masks.none { target.contains(it) })
+    }
+
+    @Test
+    fun aFullHeightSheetOverAMaskedComposer_isNotMaskedWhole() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(base, EditText(activity), 0, 760, 400, 40) // the chat composer at the bottom
+        val sheet = popupRoot(0, 0, 400, 800)
+
+        val target = rectOf(sheet)
+        val raw = run(capturer(), listOf(base, sheet))!!
+
+        assertFalse(raw.masks.contains(target))
+    }
+
+    @Test
+    fun aDialogNextToAMaskedField_isNotTreatedAsAPopup() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(base, EditText(activity), 0, 100, 200, 40)
+        val dialog = root(Color.WHITE, 0, 140, 200, 160) // same place as the dropdown, but its window is not a sub-window
+
+        val target = rectOf(dialog)
+        val raw = run(capturer(), listOf(base, dialog))!!
+
+        assertFalse(raw.masks.contains(target))
+    }
+
+    @Test
+    fun aPopupOverAFlagSecureWindow_isMasked() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800)
+        secureViews += base
+        val popup = popupRoot(50, 50, 100, 100)
+
+        val target = rectOf(popup)
+        val raw = run(capturer(), listOf(base, popup))!!
+
+        assertMasked(raw, target)
+    }
+
+    @Test
+    fun aPopupOverADialog_inheritsFromTheDialogsField() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800)
+        val dialog = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(dialog, EditText(activity), 0, 400, 200, 40)
+        val popup = popupRoot(0, 440, 200, 160)
+
+        val target = rectOf(popup)
+        val raw = run(capturer(), listOf(base, dialog, popup))!!
+
+        assertMasked(raw, target)
+    }
+
+    @Test
+    fun newerDevices_thePopupOfAMaskedAnchorIsMaskedToo() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(base, EditText(activity), 0, 100, 200, 40)
+        val popup = popupRoot(0, 140, 200, 160)
+        val c = capturer(sdkInt = 34, pixelCopy = { _, dest, done ->
+            dest.eraseColor(Color.MAGENTA)
+            done(PixelCopyApi.SUCCESS)
+        }, decorOf = { base })
+
+        val target = rectOf(popup)
+        val raw = run(c, listOf(base, popup), base = activity.window)!!
+
+        assertMasked(raw, target)
+    }
+
+    // endregion
 }

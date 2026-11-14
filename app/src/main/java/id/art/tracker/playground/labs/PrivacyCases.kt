@@ -16,7 +16,6 @@ data class PrivacyCase(
 )
 
 object PrivacyCases {
-    private const val POPUP_REF = "separate window roots"
     private const val UNMASK_REF = "resets masking for that node's whole"
     private const val PLAIN_TEXT_REF = "appears verbatim in the replay"
 
@@ -34,8 +33,9 @@ object PrivacyCases {
         PrivacyCase("view_autofill_hint_card", "View: hint autofill kartu", "autofillHints creditCardNumber dianggap sensitif.", Expectation.MASKED),
         PrivacyCase("webview_blocked", "WebView", "Selalu digambar sebagai blok berlabel; isinya tidak pernah ditangkap.", Expectation.BLOCKED),
         PrivacyCase("imageview_placeholder", "ImageView", "Digambar sebagai placeholder netral; bitmap tidak pernah direkam.", Expectation.BLOCKED),
-        PrivacyCase("popup_window", "Popup (window terpisah)", "Popup adalah window root sendiri dan tidak mewarisi mask dari view tempat ia ditambatkan.", Expectation.LEAKS_KNOWN_LIMITATION, POPUP_REF),
-        PrivacyCase("dropdown_menu", "Dropdown menu (window terpisah)", "Menu dropdown juga window root sendiri: tidak mewarisi mask.", Expectation.LEAKS_KNOWN_LIMITATION, POPUP_REF),
+        PrivacyCase("popup_window", "Popup (window terpisah)", "Popup adalah window root sendiri, tapi tepi atasnya menempel pada area yang di-mask (Column dengan artrackerMask()): seluruh popup di-mask.", Expectation.MASKED),
+        PrivacyCase("dropdown_menu", "Dropdown menu (window terpisah)", "Menu dropdown di bawah anchor yang di-mask: seluruh menu di-mask.", Expectation.MASKED),
+        PrivacyCase("view_autocomplete_masked", "View: saran AutoCompleteTextView", "Daftar saran email muncul di window terpisah di bawah field yang di-mask (maskAllInputs): seluruh daftar di-mask. Ketik `f` untuk memunculkannya.", Expectation.MASKED),
         PrivacyCase("max_all_text_toggle", "maskAllText", "Teks biasa terlihat kecuali maskAllText diaktifkan di Pengaturan (butuh restart).", Expectation.VISIBLE),
     )
 }
