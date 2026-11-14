@@ -70,6 +70,9 @@ internal class ScreenChunker(
     private var rageSession: String? = null
     private var hasRageClick = false
     private var ragePending = false
+
+    /** Told (on the processing thread) when a rage burst completes with no chunk open to carry its flag. */
+    var onRagePending: (() -> Unit)? = null
     private var seqSession: String? = null
     private var nextSeq = 0
 
@@ -107,7 +110,14 @@ internal class ScreenChunker(
             rageSession = sessionId
         }
         if (!rage.onDown(touch.ts, touch.xDp, touch.yDp)) return
-        if (this.sessionId == sessionId && frames.isNotEmpty()) hasRageClick = true else ragePending = true
+        if (this.sessionId == sessionId && frames.isNotEmpty()) {
+            hasRageClick = true
+        } else {
+            ragePending = true
+            // No chunk to carry the flag (the touch itself is dropped): let the owner open one now, so the flag does
+            // not wait for whenever the next frame happens to be sent.
+            runCatching { onRagePending?.invoke() }
+        }
     }
 
     fun markError() {

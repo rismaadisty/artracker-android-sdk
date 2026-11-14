@@ -573,6 +573,31 @@ class ReplayControllerTest {
     }
 
     @Test
+    fun aRageOnAStaticScreenWithNoOpenChunk_opensAChunkAtOnce_soTheFlagIsNotLost() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        // The 10 s timer closes the chunk (unlike flushChunks(), it keeps the duplicate filter): the screen is static,
+        // so no later frame is sent and no chunk is open any more.
+        clock.advance(10_000)
+        idle(5_000)
+        settle()
+        assertEquals(1, batches().size)
+
+        repeat(3) { // the burst completes on the third tap, with nothing open to carry the flag
+            touch(activity, MotionEvent.ACTION_DOWN, 10, 100f, 200f)
+            clock.advance(100)
+        }
+        dispatcher.runAll()
+        applyPosted() // what the controller asked for: a frame of the unchanged screen, which opens a chunk
+        flushChunks()
+
+        assertEquals(2, batches().size)
+        assertFalse(batches()[0].hasRageClick)
+        assertTrue(batches()[1].hasRageClick)
+    }
+
+    @Test
     fun tapsFarApartInPixels_areComparedInDp() {
         startCore()
         val (activity, _) = textActivity()

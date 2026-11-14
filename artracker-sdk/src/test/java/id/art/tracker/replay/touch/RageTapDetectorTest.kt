@@ -35,10 +35,27 @@ class RageTapDetectorTest {
     fun thirdDownOneMsLate_isNotRage() {
         d.onDown(0, 100, 100)
         d.onDown(500, 100, 100)
-        assertFalse(d.onDown(1001, 100, 100))
-        // The late tap started a burst of its own: two more taps make three.
-        assertFalse(d.onDown(1002, 100, 100))
-        assertTrue(d.onDown(1003, 100, 100))
+        assertFalse("the first tap is 1001 ms old: it no longer counts", d.onDown(1001, 100, 100))
+        // 500, 1001 and 1002 are three taps within 502 ms: a rage tap of its own.
+        assertTrue(d.onDown(1002, 100, 100))
+    }
+
+    @Test
+    fun aStrayTapBeforeATripleTap_doesNotHideIt() {
+        // Tap, wait a moment, then tap-tap-tap: 900, 1100 and 1300 are three taps within 400 ms.
+        assertFalse(d.onDown(0, 100, 100))
+        assertFalse(d.onDown(900, 100, 100))
+        assertFalse(d.onDown(1100, 100, 100))
+        assertTrue(d.onDown(1300, 100, 100))
+    }
+
+    @Test
+    fun aTapTooFarBeforeATripleTap_doesNotHideIt() {
+        // 100 is 40 dp from 140, but 120, 140 and 140 are three taps within 20 dp of each other.
+        assertFalse(d.onDown(0, 100, 100))
+        assertFalse(d.onDown(100, 120, 100))
+        assertFalse(d.onDown(200, 140, 100))
+        assertTrue(d.onDown(300, 140, 100))
     }
 
     @Test

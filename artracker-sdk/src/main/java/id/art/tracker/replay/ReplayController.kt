@@ -124,6 +124,19 @@ internal class ReplayController(
     private var lastGovernorCap: Double? = null
     // endregion
 
+    init {
+        // A rage burst that completes while no chunk is open (a static screen sends no frames) asks for a frame now,
+        // forced so it is sent although it equals the previous one: it opens the chunk that carries the flag.
+        screenshot.chunker.onRagePending = {
+            post {
+                if (running) {
+                    forceFullNext = true
+                    scheduler.requestSoon()
+                }
+            }
+        }
+    }
+
     /** Main-thread view of whether recording is active (tests and diagnostics). */
     @VisibleForTesting
     internal val isRunning: Boolean get() = running

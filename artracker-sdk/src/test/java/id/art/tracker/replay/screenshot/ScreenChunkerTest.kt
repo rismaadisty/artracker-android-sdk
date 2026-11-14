@@ -232,6 +232,39 @@ class ScreenChunkerTest {
     }
 
     @Test
+    fun aRageWithNoOpenChunk_tellsTheOwnerSoAFrameCanBeForced() {
+        var notified = 0
+        val c = chunker().also { it.onRagePending = { notified++ } }
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300), down(600)) // the chunk is open: nothing to ask for
+        c.close()
+        assertEquals(0, notified)
+
+        c.touches("s1", down(700)) // still rage, but no chunk is open now
+        assertEquals(1, notified)
+    }
+
+    @Test
+    fun noRageMeansNoNotification() {
+        var notified = 0
+        val c = chunker().also { it.onRagePending = { notified++ } }
+        c.addTouch("s1", down(0)) // no chunk, but also no burst
+        c.addTouch("s1", down(5_000))
+        assertEquals(0, notified)
+    }
+
+    @Test
+    fun aThrowingOwner_doesNotBreakTheChunker() {
+        val c = chunker().also { it.onRagePending = { error("boom") } }
+        c.addTouch("s1", down(0))
+        c.addTouch("s1", down(100))
+        c.addTouch("s1", down(200)) // must not throw
+        c.addFrame("s1", frame())
+        c.close()
+        assertTrue(batches.single().hasRageClick)
+    }
+
+    @Test
     fun pendingRageDoesNotLeakIntoAnotherSession() {
         val c = chunker()
         c.addFrame("s1", frame())
