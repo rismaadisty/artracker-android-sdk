@@ -3,6 +3,8 @@ package id.art.tracker.transport
 import id.art.tracker.BeforeSend
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
+import id.art.tracker.core.GlobalProperties
+import id.art.tracker.core.GlobalSnapshot
 import id.art.tracker.core.ItemFactory
 import id.art.tracker.core.KillSwitch
 import id.art.tracker.testutil.FakeClock
@@ -141,6 +143,98 @@ class EventPipelineTest {
 
         assertEquals(listOf(b.id), faulty.delegate.claimBatch()!!.items.map { it.id })
     }
+
+    // region global properties
+
+    private fun snap(vararg pairs: Pair<String, Any?>) = GlobalSnapshot(linkedMapOf(*pairs))
+
+    private fun attributesOf(id: String): JSONObject = JSONObject(payloadOf(id)).getJSONObject("attributes")
+
+    @Test
+    fun globals_areMergedBeforeBeforeSend() = runTest {
+        val seen = ArrayList<TelemetryItem>()
+        val p = pipeline(beforeSend = BeforeSend { seen += it; it })
+        val item = factory.event("e")
+        p.enqueue(item, snap("tenant" to "acme"))
+        p.awaitIdle()
+
+        assertEquals("acme", seen.single().attributes["tenant"])
+        assertEquals("acme", attributesOf(item.id).getString("tenant"))
+    }
+
+    @Test
+    fun beforeSendCanRemoveAGlobal() = runTest {
+        val p = pipeline(beforeSend = BeforeSend { it.copy(attributes = it.attributes - "tenant") })
+        val item = factory.event("e", mapOf("a" to 1))
+        p.enqueue(item, snap("tenant" to "acme"))
+        p.awaitIdle()
+
+        assertFalse(attributesOf(item.id).has("tenant"))
+        assertEquals(1, attributesOf(item.id).getInt("a"))
+    }
+
+    @Test
+    fun beforeSendThrows_keepsTheItemWithItsGlobals() = runTest {
+        val p = pipeline(beforeSend = BeforeSend { error("boom") })
+        val item = factory.event("e")
+        p.enqueue(item, snap("tenant" to "acme"))
+        p.awaitIdle()
+
+        assertEquals("acme", attributesOf(item.id).getString("tenant"))
+    }
+
+    @Test
+    fun snapshotIsTakenAtEnqueue_notAtPrepare() = runTest {
+        val props = GlobalProperties()
+        val p = pipeline()
+        val e1 = factory.event("e1")
+        val e2 = factory.event("e2")
+        p.enqueue(e1, props.current()) // nothing set yet
+        props.set(mapOf("v" to 2))
+        p.enqueue(e2, props.current())
+        p.awaitIdle()
+
+        assertFalse(attributesOf(e1.id).has("v"))
+        assertEquals(2, attributesOf(e2.id).getInt("v"))
+    }
+
+    @Test
+    fun hugeGlobals_neverCrowdOutItemAttributes() = runTest {
+        val p = pipeline()
+        val own = "y".repeat(20 * 1024)
+        val huge = LinkedHashMap<String, Any?>()
+        for (i in 0 until 10_000) huge["g$i"] = "x".repeat(1024)
+        val item = factory.event("e", mapOf("blob" to own))
+        p.enqueue(item, GlobalSnapshot(huge))
+        p.awaitIdle()
+
+        val attrs = attributesOf(item.id)
+        assertEquals("the item's own attribute is whole", own, attrs.getString("blob"))
+        assertTrue(attrs.getBoolean("_truncated"))
+        assertTrue(attrs.toString().toByteArray(Charsets.UTF_8).size <= 24 * 1024)
+    }
+
+    @Test
+    fun prepareRecovered_neverAddsGlobals() = runTest {
+        val p = pipeline()
+        val item = factory.log(id.art.tracker.LogLevel.FATAL, "crash", "boom", mapOf("a" to 1))
+
+        val stored = p.prepareRecovered(item)!!
+
+        assertEquals(listOf("a"), JSONObject(stored.payloadJson).getJSONObject("attributes").keys().asSequence().toList())
+    }
+
+    @Test
+    fun defaultEnqueue_hasNoGlobals() = runTest {
+        val p = pipeline()
+        val item = factory.event("e", mapOf("a" to 1))
+        p.enqueue(item)
+        p.awaitIdle()
+
+        assertEquals(listOf("a"), attributesOf(item.id).keys().asSequence().toList())
+    }
+
+    // endregion
 
     @Test
     fun beforeSendNull_drops() = runTest {

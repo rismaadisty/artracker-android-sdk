@@ -5,6 +5,7 @@ import id.art.tracker.BeforeSend
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.Clock
+import id.art.tracker.core.GlobalSnapshot
 import id.art.tracker.core.MAX_MESSAGE
 import id.art.tracker.core.MAX_NAME
 import id.art.tracker.core.SdkLog
@@ -37,7 +38,8 @@ import kotlinx.coroutines.withContext
  *
  * - [enqueue] only does a `trySend` into a bounded channel (capacity 1000, oldest dropped on overflow), so the
  *   caller is never blocked and nothing here throws.
- * - One consumer coroutine runs `beforeSend`, the attribute redactor and builds the
+ * - One consumer coroutine merges the global properties that were set when the item was enqueued, then runs
+ *   `beforeSend`, the attribute redactor and builds the
  *   [StoredItem]s, which it persists in groups of up to [GROUP_SIZE] or [GROUP_WINDOW_MS] (whichever is first),
  *   as a single `queue.insert(list)`. A group holding a priority-0 item (crash/fatal) is persisted at once.
  * - A second coroutine performs flushes. A flush is requested right after persisting a priority-0 item or when
@@ -69,8 +71,11 @@ internal class EventPipeline(
         val discardsHandled: Long = 0,
     )
 
-    /** An item plus its acceptance sequence number, which [discardAll] compares against. */
-    private class Queued(val item: TelemetryItem, val seq: Long)
+    /**
+     * An item plus its acceptance sequence number, which [discardAll] compares against, and the global properties that
+     * were in force when it was enqueued (not when it is prepared: the pipeline may lag behind the caller).
+     */
+    private class Queued(val item: TelemetryItem, val seq: Long, val globals: GlobalSnapshot)
 
     private val progress = MutableStateFlow(Progress())
     private val accepted = AtomicLong(0)
@@ -109,10 +114,10 @@ internal class EventPipeline(
      * Hands [item] to the consumer. Never blocks and never throws. Returns false only if the item could not be
      * accepted at all (channel closed); when the buffer is full the oldest queued item is dropped instead.
      */
-    fun enqueue(item: TelemetryItem): Boolean {
+    fun enqueue(item: TelemetryItem, globals: GlobalSnapshot = GlobalSnapshot.EMPTY): Boolean {
         val seq = accepted.incrementAndGet()
         return try {
-            if (channel.trySend(Queued(item, seq)).isSuccess) {
+            if (channel.trySend(Queued(item, seq, globals)).isSuccess) {
                 notifyAccepted(item)
                 true
             } else {
@@ -270,7 +275,7 @@ internal class EventPipeline(
                 }
             }
             groupMessages++
-            val stored = prepare(item)
+            val stored = prepare(item, queued.globals)
             if (stored != null) buffer += stored
             if (groupMessages >= GROUP_SIZE || stored?.priority == 0) persistGroup()
         }
@@ -324,11 +329,20 @@ internal class EventPipeline(
      * process (a crash file). Called on the SDK scope during startup, the same thread that persists; the result goes
      * straight to the queue. Null when the item is dropped.
      */
-    fun prepareRecovered(item: TelemetryItem): StoredItem? = prepare(item)
+    // A crash of an earlier process must not carry the global properties of this one.
+    fun prepareRecovered(item: TelemetryItem): StoredItem? = prepare(item, GlobalSnapshot.EMPTY)
 
-    /** beforeSend -> redaction -> serialisation. Null when the item is dropped (by beforeSend, or unserialisable). */
-    private fun prepare(original: TelemetryItem): StoredItem? {
+    /**
+     * globals -> beforeSend -> redaction -> serialisation. Null when the item is dropped (by beforeSend, or
+     * unserialisable). The merged item is what beforeSend sees, and what is kept when the hook throws.
+     */
+    private fun prepare(unmerged: TelemetryItem, globals: GlobalSnapshot): StoredItem? {
         return try {
+            val original = try {
+                globals.applyTo(unmerged)
+            } catch (e: Exception) {
+                unmerged
+            }
             val hook = beforeSend
             val item = if (hook == null) {
                 original
