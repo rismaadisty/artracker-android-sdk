@@ -361,13 +361,13 @@ Database terpisah, dibuka **malas**: tidak dibuat bila replay tidak pernah dipak
 CREATE TABLE replay_batches (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, created_at INTEGER NOT NULL,
   first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, event_count INTEGER NOT NULL, has_error INTEGER NOT NULL,
-  user_id TEXT, environment TEXT NOT NULL, file TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'artracker-screen-v1',
+  has_rage_click INTEGER NOT NULL DEFAULT 0, user_id TEXT, environment TEXT NOT NULL, file TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'artracker-screen-v1',
   size_bytes INTEGER NOT NULL, claimed INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL, start_ms INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 ```
 
-- **Badan batch adalah file** di `noBackupFilesDir/artracker/replay/<id>.gz` (DB versi 3); kolom `file` menyimpan namanya dan `format` selalu `artracker-screen-v1`. Alasan: `CursorWindow` Android ±2 MB membuat BLOB besar bisa ditulis tapi tidak bisa dibaca. File ditulis sebelum barisnya dan dihapus bersama barisnya (selesai, evict, `clear`, purge); `resetOrphaned()` menyapu file tanpa baris. Upgrade dari versi lama membuang batch wireframe (rrweb) yang masih antre (SDK tidak lagi mengirim format itu); counter `seq` per sesi tetap.
+- **Badan batch adalah file** di `noBackupFilesDir/artracker/replay/<id>.gz` (DB versi 4); kolom `file` menyimpan namanya dan `format` selalu `artracker-screen-v1`. Alasan: `CursorWindow` Android ±2 MB membuat BLOB besar bisa ditulis tapi tidak bisa dibaca. File ditulis sebelum barisnya dan dihapus bersama barisnya (selesai, evict, `clear`, purge); `resetOrphaned()` menyapu file tanpa baris. Upgrade dari versi lama membuang batch wireframe (rrweb) yang masih antre (SDK tidak lagi mengirim format itu); counter `seq` per sesi tetap. Upgrade v3 → v4 menambah `has_rage_click` lewat `ALTER TABLE` (batch yang antre tetap, bernilai 0); dari versi < 2 tabel dibuat ulang dan sudah memuat kolom itu.
 - Batas: **50 MB / 200 batch**; eviction membuang batch pending tertua (yang sedang diunggah tidak pernah). Maksimal **8 attempt** per batch, lalu dibuang. Retensi **7 hari** (batch dan counter `seq`).
 - `replay_seq` bertahan setelah batch selesai, di-`clear()` (opt-out), atau dievict, supaya `seq` tidak pernah dipakai ulang: PUT menimpa objek lama sedangkan ack ditolak server.
 - `ReplayFlusher` mengunggah satu batch pada satu waktu (maks 2 batch per detik saat drain). `401/403` pada `chunk-url`/`chunk-ack` menyalakan kill-switch; `401/403` pada PUT berarti tanda tangan kedaluwarsa dan hanya mengulang dari langkah 1. Opt-out mengosongkan antrean dan membuang batch yang terbuka. `FlushWorker` ikut mengirim antrean ini di background.

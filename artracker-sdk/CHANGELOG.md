@@ -17,7 +17,9 @@ versions follow semantic versioning.
 - View fields with the androidx autofill hints `phoneNumber`, `phoneNumberDevice` and `phoneNational` are now masked
   too (until now only the View constant `phone` was).
 - **Rage tap detection in session replay.** Three or more taps within 1 s, each within 24 dp of the first, flag the replay
-  chunk they land in. Only the first finger's `DOWN` counts, so a pinch is never a rage tap.
+  chunk they land in, and the chunk is acknowledged with `has_rage_click = true` (it was always `false` before). Only
+  the first finger's `DOWN` counts, so a pinch is never a rage tap. The replay queue database moves to version 4;
+  chunks already queued keep uploading.
 
 ### Fixed
 

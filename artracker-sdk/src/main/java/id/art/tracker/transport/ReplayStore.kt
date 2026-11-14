@@ -44,14 +44,21 @@ internal class ReplayStore(
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            // Every older layout only ever held wireframe (rrweb) batches, which the SDK can no longer produce or send.
+            // Every layout before 3 only ever held wireframe (rrweb) batches, which the SDK can no longer produce or send.
             // The row (and, on the next [resetOrphaned], its body file) goes; the per-session `seq` counters stay.
             if (oldVersion < 2) {
+                // Rebuilt from scratch, so it already has every later column (has_rage_click): no ALTER for these.
                 db.execSQL("DROP TABLE replay_batches")
                 db.execSQL("DROP INDEX IF EXISTS idx_replay_pending")
                 createBatchesTable(db)
-            } else if (oldVersion < 3) {
-                db.execSQL("DELETE FROM replay_batches WHERE format <> ?", arrayOf<Any?>(ReplayFormat.SCREEN_V1))
+            } else {
+                if (oldVersion < 3) {
+                    db.execSQL("DELETE FROM replay_batches WHERE format <> ?", arrayOf<Any?>(ReplayFormat.SCREEN_V1))
+                }
+                if (oldVersion < 4) {
+                    // Chunks already queued keep uploading, with has_rage_click false.
+                    db.execSQL("ALTER TABLE replay_batches ADD COLUMN has_rage_click INTEGER NOT NULL DEFAULT 0")
+                }
             }
         }
     }
@@ -67,6 +74,7 @@ internal class ReplayStore(
                 "last_ts INTEGER NOT NULL, " +
                 "event_count INTEGER NOT NULL, " +
                 "has_error INTEGER NOT NULL, " +
+                "has_rage_click INTEGER NOT NULL DEFAULT 0, " +
                 "user_id TEXT, " +
                 "environment TEXT NOT NULL, " +
                 "file TEXT NOT NULL, " +
@@ -87,7 +95,7 @@ internal class ReplayStore(
             try {
                 db.inTransaction {
                 val seq = nextSeq(db, batch, now)
-                val values = ContentValues(15).apply {
+                val values = ContentValues(16).apply {
                     put("id", id)
                     put("session_id", batch.sessionId)
                     put("seq", seq)
@@ -96,6 +104,7 @@ internal class ReplayStore(
                     put("last_ts", batch.lastTsMs)
                     put("event_count", batch.eventCount)
                     put("has_error", if (batch.hasError) 1 else 0)
+                    put("has_rage_click", if (batch.hasRageClick) 1 else 0)
                     put("user_id", batch.userId)
                     put("environment", batch.environment)
                     put("file", name)
@@ -138,13 +147,13 @@ internal class ReplayStore(
     private class Pending(val upload: ReplayUpload, val file: String)
 
     private fun ReplayUpload.withBody(body: ByteArray) = ReplayUpload(
-        id, sessionId, seq, body, eventCount, startMs, durationMs, hasError, userId, environment, format,
+        id, sessionId, seq, body, eventCount, startMs, durationMs, hasError, userId, environment, format, hasRageClick,
     )
 
     private fun nextPending(db: SQLiteDatabase): Pending? =
         db.rawQuery(
             "SELECT b.id, b.session_id, b.seq, b.file, b.event_count, b.first_ts, b.last_ts, b.has_error, " +
-                "b.user_id, b.environment, b.format, s.start_ms " +
+                "b.user_id, b.environment, b.format, s.start_ms, b.has_rage_click " +
                 "FROM replay_batches b LEFT JOIN replay_seq s ON s.session_id = b.session_id " +
                 "WHERE b.claimed = 0 ORDER BY b.created_at, b.seq, b.rowid LIMIT 1",
             null,
@@ -165,6 +174,7 @@ internal class ReplayStore(
                     userId = if (c.isNull(8)) null else c.getString(8),
                     environment = c.getString(9),
                     format = c.getString(10),
+                    hasRageClick = c.getInt(12) != 0,
                 ),
                 c.getString(3),
             )
@@ -336,7 +346,7 @@ internal class ReplayStore(
 
     companion object {
         const val DB_NAME = "artracker_replay.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
         const val DEFAULT_MAX_BYTES: Long = 50L * 1024 * 1024
         private const val BODIES_PATH = "artracker/replay"
         private val EMPTY = ByteArray(0)

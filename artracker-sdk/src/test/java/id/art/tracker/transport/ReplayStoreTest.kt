@@ -57,6 +57,7 @@ class ReplayStoreTest {
         body: ByteArray = byteArrayOf(1, 2, 3),
         hasError: Boolean = false,
         userId: String? = "u1",
+        hasRageClick: Boolean = false,
     ) = NewReplayBatch(
         sessionId = session,
         gzipBody = body,
@@ -67,6 +68,7 @@ class ReplayStoreTest {
         userId = userId,
         environment = "test",
         format = format,
+        hasRageClick = hasRageClick,
     )
 
     @Test
@@ -401,5 +403,56 @@ class ReplayStoreTest {
         assertEquals(ReplayFormat.SCREEN_V1, u.format)
         assertArrayEquals(byteArrayOf(4, 5, 6), u.gzipBody)
         assertEquals(listOf("old-shot.gz"), bodyFiles().map { it.name })
+    }
+
+    @Test
+    fun enqueue_roundTripsHasRageClick() {
+        val s = store()
+        assertTrue(s.enqueue(batch("A", hasRageClick = true)))
+        assertTrue(s.enqueue(batch("B")))
+
+        val first = s.claim()!!
+        val second = s.claim()!!
+
+        assertEquals("A", first.sessionId)
+        assertTrue(first.hasRageClick)
+        assertEquals("B", second.sessionId)
+        assertFalse(second.hasRageClick)
+    }
+
+    @Test
+    fun upgradeFromV3_keepsQueuedChunks_withRageClickFalse() {
+        bodiesDir.mkdirs()
+        File(bodiesDir, "old-3.gz").writeBytes(byteArrayOf(7, 8, 9))
+        createOldStore(3) { db ->
+            db.insertOrThrow("replay_batches", null, oldRow("old-3", "file" to "old-3.gz", "format" to ReplayFormat.SCREEN_V1))
+        }
+
+        val s = store()
+        s.resetOrphaned()
+        assertEquals(1, s.pendingCount())
+        val old = s.claim()!!
+        assertEquals("old-3", old.id)
+        assertFalse(old.hasRageClick)
+        assertTrue("has_error of the queued chunk is kept", old.hasError)
+        assertArrayEquals(byteArrayOf(7, 8, 9), old.gzipBody)
+
+        // The session counter survived and a new chunk can carry the flag.
+        assertTrue(s.enqueue(batch("OLD", hasRageClick = true)))
+        val fresh = s.claim()!!
+        assertEquals(1, fresh.seq)
+        assertTrue(fresh.hasRageClick)
+    }
+
+    @Test
+    fun upgradeFromV1_newChunksStoreRageClick() {
+        createOldStore(1) { db -> db.insertOrThrow("replay_batches", null, oldRow("old-1", "body" to byteArrayOf(1, 2, 3))) }
+
+        val s = store() // the table is rebuilt with the column: no second ALTER
+        assertTrue(s.enqueue(batch("OLD", hasRageClick = true)))
+
+        val u = s.claim()!!
+        assertEquals(1, u.seq)
+        assertTrue(u.hasRageClick)
     }
 }
