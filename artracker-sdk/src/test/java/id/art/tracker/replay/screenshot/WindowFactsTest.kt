@@ -55,4 +55,29 @@ class WindowFactsTest {
     fun imeHeight_isZeroForAViewWithoutInsets() {
         assertEquals(0, WindowFacts.imeHeightPx(FrameLayout(context)))
     }
+
+    private fun rootOfType(type: Int): View = FrameLayout(context).also { it.layoutParams = WindowManager.LayoutParams(type) }
+
+    @Test
+    fun subWindowTypes_arePopups() {
+        for (type in listOf(
+            WindowManager.LayoutParams.TYPE_APPLICATION_PANEL, // PopupWindow, ListPopupWindow, ACTV / Spinner dropdowns
+            WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL, // Compose Popup / DropdownMenu
+            WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG,
+        )) {
+            assertTrue("type $type", WindowFacts.isPopup(rootOfType(type)))
+        }
+    }
+
+    @Test
+    fun applicationWindows_areNotPopups() {
+        assertFalse(WindowFacts.isPopup(rootOfType(WindowManager.LayoutParams.TYPE_BASE_APPLICATION)))
+        assertFalse(WindowFacts.isPopup(rootOfType(WindowManager.LayoutParams.TYPE_APPLICATION)))
+    }
+
+    @Test
+    fun aRootWithoutWindowParams_isNotAPopup() {
+        assertFalse(WindowFacts.isPopup(FrameLayout(context)))
+        assertFalse(WindowFacts.isPopup(FrameLayout(context).also { it.layoutParams = android.view.ViewGroup.LayoutParams(10, 10) }))
+    }
 }

@@ -5,8 +5,26 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Compose fields whose autofill `ContentType` is sensitive are masked in session replay**, like the View autofill
+  rules: password, new password, credit card number / security code / expiration, phone number, e-mail address, postal
+  address and SMS one-time code. Needs Compose UI 1.8+ at runtime; on 1.7 the previous rules apply unchanged (the SDK
+  checks with a direct call, not by name). `artrackerUnmask()` cannot unmask `ContentType.Password` / `NewPassword`;
+  a combined or custom `ContentType` is masked because its hints cannot be read. The SDK itself is now compiled against
+  Compose UI 1.8.3 (`compileOnly`, unchanged for hosts). The keyboard type is not in Compose semantics, so a plain
+  numeric field without a `ContentType` is still masked only by `maskAllInputs`.
+- View fields with the androidx autofill hints `phoneNumber`, `phoneNumberDevice` and `phoneNational` are now masked
+  too (until now only the View constant `phone` was).
+
 ### Fixed
 
+- **Popup and dropdown windows anchored to a masked view or node were drawn unmasked** (`PopupWindow`,
+  `AutoCompleteTextView` suggestions, spinners, Compose `Popup` / `DropdownMenu`). A popup whose top or bottom edge lies
+  within 8 dp of a masked area of a window below it, or that spans such an area from above to below, is now masked
+  whole; popups over a `FLAG_SECURE` window are masked too. The anchor cannot be read, so this is inferred from
+  position: a popup placed farther from its anchor is not covered, ordinary popups that touch a masked field are masked
+  as well, and a popup that covers at least 85 % of the window height (a sheet) is never masked by this rule.
 - **Recording did not come back after the `401` kill-switch expired while the app stayed in the foreground.** A trip
   now stops replay at once and schedules the way back: when the deadline passes (also one persisted by an earlier run, or
   moved out by the background `FlushWorker`), replay, the flush timer and performance sampling start again on their own,

@@ -1,6 +1,7 @@
 package id.art.tracker.core
 
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -46,6 +47,33 @@ class ClassAvailabilityTest {
         ClassAvailabilityProbe.initialized = false
         assertTrue(ClassAvailability.has(ClassAvailabilityProbe::class.java.name))
         assertFalse(ClassAvailabilityProbe.initialized)
+    }
+
+    // The cache is global and survives resetOverrides(): every probe test uses a key of its own.
+
+    @Test
+    fun probe_linkageErrorIsFalse() {
+        assertFalse(ClassAvailability.probe("test#linkage") { throw NoSuchMethodError("getContentType") })
+    }
+
+    @Test
+    fun probe_trueWhenTheCheckSucceeds() {
+        assertTrue(ClassAvailability.probe("test#ok") { true })
+    }
+
+    @Test
+    fun probe_cachesTheFirstAnswer() {
+        var calls = 0
+        repeat(2) { ClassAvailability.probe("test#cache") { calls++; true } }
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun probe_honoursOverrides() {
+        ClassAvailability.overrides["test#override"] = false
+        var called = false
+        assertFalse(ClassAvailability.probe("test#override") { called = true; true })
+        assertFalse(called)
     }
 }
 

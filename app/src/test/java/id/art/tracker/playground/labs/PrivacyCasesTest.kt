@@ -11,7 +11,7 @@ class PrivacyCasesTest {
         "compose_password", "compose_email_default", "compose_numeric_default", "compose_mask_modifier",
         "compose_unmask_modifier", "compose_unmask_inside_masked", "compose_plain_text_email",
         "view_password", "view_numeric", "view_tag_mask", "view_autofill_hint_card",
-        "webview_blocked", "imageview_placeholder", "popup_window", "dropdown_menu", "max_all_text_toggle",
+        "webview_blocked", "imageview_placeholder", "popup_window", "dropdown_menu", "view_autocomplete_masked", "max_all_text_toggle",
     )
 
     private fun case(id: String) = PrivacyCases.all.first { it.id == id }
@@ -45,7 +45,7 @@ class PrivacyCasesTest {
 
     @Test
     fun theKnownLeaksAreMarkedAsSuch() {
-        listOf("popup_window", "compose_unmask_inside_masked", "compose_plain_text_email").forEach {
+        listOf("compose_unmask_inside_masked", "compose_plain_text_email").forEach {
             assertEquals(it, Expectation.LEAKS_KNOWN_LIMITATION, case(it).expectation)
         }
     }
@@ -55,5 +55,10 @@ class PrivacyCasesTest {
         assertEquals(Expectation.BLOCKED, case("webview_blocked").expectation)
         assertEquals(Expectation.MASKED, case("compose_password").expectation)
         assertEquals(Expectation.MASKED, case("view_password").expectation)
+        // Popups hang off a masked anchor and are masked whole (the popup rule of the replay capture).
+        for (id in listOf("popup_window", "dropdown_menu", "view_autocomplete_masked")) {
+            assertEquals(id, Expectation.MASKED, case(id).expectation)
+            assertEquals(id, null, case(id).limitationRef)
+        }
     }
 }

@@ -16,14 +16,13 @@ data class PrivacyCase(
 )
 
 object PrivacyCases {
-    private const val POPUP_REF = "separate window roots"
     private const val UNMASK_REF = "resets masking for that node's whole"
     private const val PLAIN_TEXT_REF = "appears verbatim in the replay"
 
     val all: List<PrivacyCase> = listOf(
         PrivacyCase("compose_password", "Compose: password", "Field dengan PasswordVisualTransformation dan semantics password: selalu di-mask.", Expectation.MASKED),
         PrivacyCase("compose_email_default", "Compose: email (default)", "OutlinedTextField biasa: di-mask karena maskAllInputs = true.", Expectation.MASKED),
-        PrivacyCase("compose_numeric_default", "Compose: angka (default)", "Field dengan keyboard angka: di-mask oleh maskAllInputs. Dengan maskAllInputs = false angka Compose tetap terbaca.", Expectation.MASKED),
+        PrivacyCase("compose_numeric_default", "Compose: angka (default)", "Field dengan keyboard angka: di-mask oleh maskAllInputs. Dengan maskAllInputs = false angka Compose tetap terbaca kecuali field punya ContentType sensitif (Compose UI 1.8+).", Expectation.MASKED),
         PrivacyCase("compose_mask_modifier", "Compose: Modifier.artrackerMask()", "Teks total di-mask walaupun bukan input.", Expectation.MASKED),
         PrivacyCase("compose_unmask_modifier", "Compose: Modifier.artrackerUnmask()", "Field biasa yang sengaja dibuka (bukan password).", Expectation.VISIBLE),
         PrivacyCase("compose_unmask_inside_masked", "Compose: unmask di dalam area mask", "Unmask di dalam kontainer ter-mask membuka kembali seluruh subtree-nya.", Expectation.LEAKS_KNOWN_LIMITATION, UNMASK_REF),
@@ -34,8 +33,9 @@ object PrivacyCases {
         PrivacyCase("view_autofill_hint_card", "View: hint autofill kartu", "autofillHints creditCardNumber dianggap sensitif.", Expectation.MASKED),
         PrivacyCase("webview_blocked", "WebView", "Selalu digambar sebagai blok berlabel; isinya tidak pernah ditangkap.", Expectation.BLOCKED),
         PrivacyCase("imageview_placeholder", "ImageView", "Digambar sebagai placeholder netral; bitmap tidak pernah direkam.", Expectation.BLOCKED),
-        PrivacyCase("popup_window", "Popup (window terpisah)", "Popup adalah window root sendiri dan tidak mewarisi mask dari view tempat ia ditambatkan.", Expectation.LEAKS_KNOWN_LIMITATION, POPUP_REF),
-        PrivacyCase("dropdown_menu", "Dropdown menu (window terpisah)", "Menu dropdown juga window root sendiri: tidak mewarisi mask.", Expectation.LEAKS_KNOWN_LIMITATION, POPUP_REF),
+        PrivacyCase("popup_window", "Popup (window terpisah)", "Popup adalah window root sendiri, tapi tepi atasnya menempel pada area yang di-mask (Column dengan artrackerMask()): seluruh popup di-mask.", Expectation.MASKED),
+        PrivacyCase("dropdown_menu", "Dropdown menu (window terpisah)", "Menu dropdown di bawah anchor yang di-mask: seluruh menu di-mask.", Expectation.MASKED),
+        PrivacyCase("view_autocomplete_masked", "View: saran AutoCompleteTextView", "Daftar saran email muncul di window terpisah di bawah field yang di-mask (maskAllInputs): seluruh daftar di-mask. Ketik `f` untuk memunculkannya.", Expectation.MASKED),
         PrivacyCase("max_all_text_toggle", "maskAllText", "Teks biasa terlihat kecuali maskAllText diaktifkan di Pengaturan (butuh restart).", Expectation.VISIBLE),
     )
 }

@@ -31,6 +31,8 @@
 -keep,allowshrinking,allowobfuscation class id.art.tracker.replay.screenshot.ComposeMaskCollectorFactory { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.privacy.ComposeMaskRules { *; }
 -keep,allowshrinking,allowobfuscation class id.art.tracker.privacy.ComposeMaskRulesKt { *; }
+# Reads SemanticsProperties.ContentType (Compose UI 1.8+) behind a probe call; referenced only from ComposeMaskRules.
+-keep,allowshrinking,allowobfuscation class id.art.tracker.privacy.ComposeContentTypeRules { *; }
 
 # Hosts add the interceptor with `ARTrackerOkHttpInterceptor()`; only its public no-arg constructor is part of the
 # contract. allowshrinking: the class is retained only if the host uses it, so apps without OkHttp do not keep it.
