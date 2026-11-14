@@ -369,6 +369,32 @@ class ScreenshotCapturerTest {
     }
 
     @Test
+    fun aSheetStartingBelowTheStatusBar_overAMaskedComposer_isNotMaskedWhole() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(base, EditText(activity), 0, 760, 400, 40)
+        val sheet = popupRoot(0, 48, 400, 752) // like Compose's Popup: measured against the visible frame
+
+        val target = rectOf(sheet)
+        val raw = run(capturer(), listOf(base, sheet))!!
+
+        assertFalse(raw.masks.contains(target))
+    }
+
+    @Test
+    fun aMenuShiftedOverItsMaskedAnchor_isMasked() {
+        setUpScreen()
+        val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout
+        place(base, EditText(activity), 0, 300, 200, 40)
+        val menu = popupRoot(0, 200, 200, 300) // top above the field, bottom below it
+
+        val target = rectOf(menu)
+        val raw = run(capturer(), listOf(base, menu))!!
+
+        assertMasked(raw, target)
+    }
+
+    @Test
     fun aDialogNextToAMaskedField_isNotTreatedAsAPopup() {
         setUpScreen()
         val base = root(Color.WHITE, 0, 0, 400, 800) as FrameLayout

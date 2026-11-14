@@ -49,6 +49,23 @@ class PopupAnchorsTest {
     }
 
     @Test
+    fun popupStraddlingTheAnchor_inherits() {
+        // A menu that fits neither below nor above its anchor is shifted over it: top above, bottom below.
+        assertTrue(inherits(MaskRect(0, 60, 200, 400), field))
+    }
+
+    @Test
+    fun sheetBelowTheStatusBar_neverInherits() {
+        // A full-size Compose Popup is measured against the visible frame: it starts under the status bar.
+        assertFalse(inherits(MaskRect(0, 48, 400, 800), MaskRect(0, 760, 400, 800)))
+    }
+
+    @Test
+    fun aTallDropdownThatIsNotASheet_stillInherits() {
+        assertTrue(inherits(MaskRect(0, 140, 200, 600), field)) // 460 of 800: well under the sheet threshold
+    }
+
+    @Test
     fun noLowerMasks_doesNotInherit() {
         assertFalse(PopupAnchors.inheritsMask(MaskRect(0, 140, 200, 300), emptyList(), base, tol))
     }
