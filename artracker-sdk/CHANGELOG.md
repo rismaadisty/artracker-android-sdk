@@ -16,6 +16,8 @@ versions follow semantic versioning.
   numeric field without a `ContentType` is still masked only by `maskAllInputs`.
 - View fields with the androidx autofill hints `phoneNumber`, `phoneNumberDevice` and `phoneNational` are now masked
   too (until now only the View constant `phone` was).
+- **Rage tap detection in session replay.** Three or more taps within 1 s, each within 24 dp of the first, flag the replay
+  chunk they land in. Only the first finger's `DOWN` counts, so a pinch is never a rage tap.
 
 ### Fixed
 

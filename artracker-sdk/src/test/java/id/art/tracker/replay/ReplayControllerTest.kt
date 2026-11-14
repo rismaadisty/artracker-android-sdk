@@ -557,6 +557,41 @@ class ReplayControllerTest {
     }
 
     @Test
+    fun rapidTapsOnOneSpot_flagTheChunkHasRageClick() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        repeat(3) {
+            touch(activity, MotionEvent.ACTION_DOWN, 10, 100f, 200f)
+            touch(activity, MotionEvent.ACTION_UP, 20, 100f, 200f)
+            clock.advance(200)
+        }
+        dispatcher.runAll()
+        flushChunks()
+
+        assertTrue(batches().single().hasRageClick)
+    }
+
+    @Test
+    fun tapsFarApartInPixels_areComparedInDp() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        val density = activity.resources.displayMetrics.density
+        touch(activity, MotionEvent.ACTION_DOWN, 10, 100f, 200f)
+        clock.advance(100)
+        // 25 dp from the first tap (in pixels: 25 * density): outside the 24 dp radius, so no burst of three.
+        repeat(2) {
+            touch(activity, MotionEvent.ACTION_DOWN, 10, 100f + 25 * density, 200f)
+            clock.advance(100)
+        }
+        dispatcher.runAll()
+        flushChunks()
+
+        assertFalse(batches().single().hasRageClick)
+    }
+
+    @Test
     fun screenshotDisabled_stopsRecordingForTheProcess_andDropsTheOpenChunk() {
         startCore()
         val (activity, _) = textActivity()

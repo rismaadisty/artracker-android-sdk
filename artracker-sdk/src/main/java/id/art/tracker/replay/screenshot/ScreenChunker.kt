@@ -5,6 +5,7 @@ import id.art.tracker.core.Clock
 import id.art.tracker.core.Json
 import id.art.tracker.core.SdkLog
 import id.art.tracker.replay.ReplaySink
+import id.art.tracker.replay.touch.RageTapDetector
 import id.art.tracker.replay.touch.TouchKind
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayFormat
@@ -34,6 +35,12 @@ internal class ScreenTouch(val ts: Long, val xDp: Int, val yDp: Int, val kind: T
  * A chunk closes [windowMs] after its first entry, on a session change, when the next frame would not fit, or on
  * [close]. `seq` counts the chunks of a session from 0.
  *
+ * Rage taps: every `DOWN` goes through a [RageTapDetector]; the chunk holding the tap that completes a burst is flagged
+ * (`hasRageClick`). A burst survives the closing of a chunk within a session (two taps in chunk A, the third in chunk B
+ * flags B). A completing tap that arrives while no chunk with frames is open (its own touch is dropped) flags the next
+ * chunk of the same session. The burst is forgotten when the session changes or the recording is discarded. Nothing
+ * about it is written into the chunk document.
+ *
  * The size check before a close is an estimate (JPEG bytes survive base64 + gzip almost unchanged, so the estimate is
  * the JPEG size plus a margin and the per-frame metadata); the closed body is measured and, in the rare case it is
  * still too big, dropped.
@@ -59,6 +66,10 @@ internal class ScreenChunker(
     private var lastTs = Long.MIN_VALUE
     private var hasError = false
     private var errorPending = false
+    private val rage = RageTapDetector()
+    private var rageSession: String? = null
+    private var hasRageClick = false
+    private var ragePending = false
     private var seqSession: String? = null
     private var nextSeq = 0
 
@@ -77,6 +88,8 @@ internal class ScreenChunker(
 
     /** Touches only ride on a chunk that already holds frames of the same session. */
     fun addTouch(sessionId: String, touch: ScreenTouch) {
+        // Before the early returns below: a tap that finds no open chunk still counts towards a burst.
+        if (touch.kind == TouchKind.DOWN) noteDown(sessionId, touch)
         if (this.sessionId != sessionId || frames.isEmpty()) return
         if (estimated + TOUCH_ESTIMATE > maxGzipBytes) {
             close()
@@ -85,6 +98,16 @@ internal class ScreenChunker(
         touches.add(touch)
         estimated += TOUCH_ESTIMATE
         track(touch.ts)
+    }
+
+    private fun noteDown(sessionId: String, touch: ScreenTouch) {
+        if (rageSession != sessionId) {
+            rage.reset()
+            ragePending = false
+            rageSession = sessionId
+        }
+        if (!rage.onDown(touch.ts, touch.xDp, touch.yDp)) return
+        if (this.sessionId == sessionId && frames.isNotEmpty()) hasRageClick = true else ragePending = true
     }
 
     fun markError() {
@@ -104,6 +127,7 @@ internal class ScreenChunker(
         val first = firstTs
         val last = lastTs
         val flagged = hasError
+        val rageFlagged = hasRageClick
         reset()
 
         if (seqSession != session) {
@@ -131,6 +155,7 @@ internal class ScreenChunker(
             userId = userId(),
             environment = environment,
             format = ReplayFormat.SCREEN_V1,
+            hasRageClick = rageFlagged,
         )
         try {
             sink.accept(batch)
@@ -139,10 +164,13 @@ internal class ScreenChunker(
         }
     }
 
-    /** Drops the open chunk (and a pending error flag) without handing anything to the sink. */
+    /** Drops the open chunk (and a pending error flag and the rage burst) without handing anything to the sink. */
     fun discard() {
         reset()
         errorPending = false
+        ragePending = false
+        rage.reset()
+        rageSession = null
     }
 
     private fun open(sessionId: String) {
@@ -151,6 +179,8 @@ internal class ScreenChunker(
             openedAtMs = clock.nowMs()
             hasError = errorPending
             errorPending = false
+            hasRageClick = ragePending && rageSession == sessionId
+            ragePending = false
             estimated = BASE_ESTIMATE
         }
     }
@@ -163,6 +193,7 @@ internal class ScreenChunker(
         firstTs = Long.MAX_VALUE
         lastTs = Long.MIN_VALUE
         hasError = false
+        hasRageClick = false // the detector keeps its burst: it outlives a chunk within a session
     }
 
     private fun track(ts: Long) {
