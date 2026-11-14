@@ -26,9 +26,11 @@ internal object ViewMaskRules {
     )
 
     // View.AUTOFILL_HINT_* values (API 26, e.g. AUTOFILL_HINT_NEW_PASSWORD; SMS OTP is API 28). Literals keep minSdk 24 safe.
+    // "phoneNumber", "phoneNumberDevice" and "phoneNational" are the androidx.autofill HintConstants that Compose's
+    // ContentType.PhoneNumber* and modern Views use; View's own constant is only "phone".
     private val SENSITIVE_AUTOFILL_HINTS = setOf(
         "password", "newPassword", "creditCardNumber", "creditCardSecurityCode",
-        "phone", "emailAddress", "postalAddress", "smsOTPCode",
+        "phone", "phoneNumber", "phoneNumberDevice", "phoneNational", "emailAddress", "postalAddress", "smsOTPCode",
     )
     private const val CREDIT_CARD_EXPIRATION_PREFIX = "creditCardExpiration"
 

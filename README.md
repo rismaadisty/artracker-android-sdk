@@ -433,9 +433,11 @@ Read these before shipping to production.
   writing events to your project; never embed an `art_sec_...` key (the SDK rejects it).
 - `artrackerUnmask()` (View or Compose) on a node **inside** a masked container resets masking for that node's whole
   subtree and re-exposes it. Do not unmask inside a masked area unless you mean it.
-- With `maskAllInputs = false`, Compose fields that hold numbers or PINs stay **clear** in replay: Compose has no input
-  type, so the numeric/phone/autofill rules of the View engine do not exist there. Use
-  `PasswordVisualTransformation` or `Modifier.artrackerMask()` for them. (Views keep masking numeric/phone inputs.)
+- With `maskAllInputs = false`, Compose fields that hold numbers or PINs stay **clear** in replay unless they carry a
+  sensitive autofill `ContentType` (Compose UI 1.8+ at runtime: password, card, phone, e-mail, postal address, one-time
+  code). The keyboard type is not part of Compose semantics, so a plain numeric field without a `ContentType` is not
+  recognised: set `contentType`, or use `PasswordVisualTransformation` or `Modifier.artrackerMask()`. On Compose 1.7 the
+  `ContentType` rules are skipped. (Views keep masking numeric/phone inputs.)
 - **Crash items are redacted in two steps.** The crash handler writes them synchronously and can only redact value
   patterns (email, card, JWT, Bearer). On the next launch they are recovered and pass `beforeSend` and the key-based
   redaction like any other item, so `beforeSend` can modify or drop a recovered crash and a breadcrumb under a key such

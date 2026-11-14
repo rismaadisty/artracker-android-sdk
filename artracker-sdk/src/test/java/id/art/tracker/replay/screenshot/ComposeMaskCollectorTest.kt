@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.text
@@ -21,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.EditText
 import id.art.tracker.PrivacyConfig
+import id.art.tracker.core.ClassAvailability
+import id.art.tracker.privacy.ComposeContentTypeRules
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.privacy.artrackerMask
 import id.art.tracker.privacy.artrackerUnmask
@@ -54,6 +58,43 @@ class ComposeMaskCollectorTest {
         val out = ArrayList<MaskRect>()
         ComposeMaskCollector(MaskingPolicy(config)).collect(host(), false, out)
         return out
+    }
+
+    @Test
+    fun contentTypeCreditCardField_isMasked_withMaskAllInputsOff() {
+        val r = collect(PrivacyConfig(maskAllInputs = false)) {
+            BasicTextField(
+                value = "4111",
+                onValueChange = {},
+                modifier = Modifier.size(120.dp, 40.dp).semantics { contentType = ContentType.CreditCardNumber },
+            )
+        }
+        assertEquals(1, r.size)
+        with(rule.density) {
+            assertEquals(120.dp.roundToPx(), r.single().right - r.single().left)
+            assertEquals(40.dp.roundToPx(), r.single().bottom - r.single().top)
+        }
+    }
+
+    @Test
+    fun onCompose17Runtime_aPlainPageIsNotMaskedWhole() {
+        // Compose 1.7 has no public ContentType getter: the probe says so, and the page is read as it always was.
+        ClassAvailability.overrides[ComposeContentTypeRules.PROBE_KEY] = false
+        try {
+            val r = collect(PrivacyConfig(maskAllInputs = false)) {
+                Column {
+                    BasicTextField(
+                        value = "4111",
+                        onValueChange = {},
+                        modifier = Modifier.size(120.dp, 40.dp).semantics { contentType = ContentType.CreditCardNumber },
+                    )
+                    Text("Halo")
+                }
+            }
+            assertTrue("nothing is masked, and certainly not the host as a whole", r.isEmpty())
+        } finally {
+            ClassAvailability.resetOverrides()
+        }
     }
 
     @Test

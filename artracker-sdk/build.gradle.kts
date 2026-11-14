@@ -70,7 +70,8 @@ dependencies {
     compileOnly(libs.okhttp)
     compileOnly(libs.androidx.fragment.ktx)
     compileOnly(libs.androidx.navigation.runtime.ktx)
-    compileOnly(platform(libs.androidx.compose.bom))
+    // 1.8.3: first UI with public SemanticsProperties.ContentType; app/ stays on 2024.09.00 (UI 1.7.2) as the 1.7 runtime harness.
+    compileOnly(platform(libs.androidx.compose.bom.sdk))
     compileOnly(libs.androidx.compose.ui)
 
     testImplementation(libs.junit)
@@ -83,7 +84,7 @@ dependencies {
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.androidx.fragment.ktx)
     testImplementation(libs.androidx.navigation.runtime.ktx)
-    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(platform(libs.androidx.compose.bom.sdk))
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.compose.ui.test.manifest)
     // 1.10.1: activity 1.11 requires compileSdk 36.

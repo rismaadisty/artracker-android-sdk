@@ -221,6 +221,14 @@ class ViewMaskRulesTest {
     }
 
     @Test
+    fun androidxPhoneHints_areSensitive() {
+        // HintConstants (androidx.autofill) and Compose's ContentType.PhoneNumber* use these, not View's "phone".
+        for (hint in listOf("phoneNumber", "phoneNumberDevice", "phoneNational")) {
+            assertTrue(hint, ViewMaskRules.isSensitiveInput(edit().apply { setAutofillHints(hint) }))
+        }
+    }
+
+    @Test
     fun newPasswordAutofillHint_masked() {
         val v = edit().apply { setAutofillHints("newPassword") }
         assertTrue(ViewMaskRules.isSensitiveInput(v))

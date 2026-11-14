@@ -27,18 +27,27 @@ internal val ARTrackerMaskKey: SemanticsPropertyKey<Boolean> =
  * password, explicit unmask, explicit mask / masked ancestor, `maskAllInputs` for editable text,
  * `maskAllText` for text.
  *
- * Compose has no input-type semantic, so the numeric/phone/autofill rules of the view engine have no equivalent
- * here: a PIN or phone field is only masked through `maskAllInputs`, [Password][SemanticsProperties.Password]
- * semantics or `Modifier.artrackerMask()`.
+ * The autofill rules of the view engine have a Compose equivalent from UI 1.8 on: a node whose `ContentType` is a
+ * password is always masked (not even an unmask opts out), and one whose `ContentType` is sensitive (card, phone,
+ * e-mail, address, one-time code, or one whose hints cannot be read) is masked unless explicitly unmasked. Compose
+ * has no input-type semantic (the keyboard type is not in the semantics tree), so a PIN or number field without a
+ * `ContentType` is only masked through `maskAllInputs`, [Password][SemanticsProperties.Password] semantics or
+ * `Modifier.artrackerMask()`. On Compose 1.7 at runtime the `ContentType` rules are skipped and the rest applies as before.
  *
  * Fails closed: any exception yields [MaskDecision.MASK]. Loaded only together with the Compose mask collector.
  */
 internal object ComposeMaskRules {
     fun decide(config: PrivacyConfig, node: SemanticsConfiguration, parentMasked: Boolean): MaskDecision = try {
+        // Only when the runtime Compose has the public property: on 1.7 the call would throw, and the catch below
+        // would then mask every node of the page.
+        val contentType =
+            if (ComposeContentTypeRules.available) ComposeContentTypeRules.classify(node) else ContentTypeClass.NONE
         when {
             SemanticsProperties.Password in node -> MaskDecision.MASK
+            contentType == ContentTypeClass.PASSWORD -> MaskDecision.MASK
             node.getOrNull(ARTrackerMaskKey) == false -> MaskDecision.NONE
             node.getOrNull(ARTrackerMaskKey) == true || parentMasked -> MaskDecision.MASK
+            contentType == ContentTypeClass.SENSITIVE -> MaskDecision.MASK
             config.maskAllInputs && SemanticsProperties.EditableText in node -> MaskDecision.MASK
             config.maskAllText && SemanticsProperties.Text in node -> MaskDecision.MASK
             else -> MaskDecision.NONE

@@ -10,6 +10,7 @@ activityCompose = "1.11.0"
 activityComposeSdkTest = "1.10.1"
 kotlin = "2.0.21"
 composeBom = "2024.09.00"
+composeBomSdk = "2025.07.00"
 coroutines = "1.9.0"
 work = "2.10.0"
 okhttp = "4.12.0"
@@ -31,6 +32,7 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-activity-compose-sdk-test = { group = "androidx.activity", name = "activity-compose", version.ref = "activityComposeSdkTest" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-bom-sdk = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBomSdk" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }

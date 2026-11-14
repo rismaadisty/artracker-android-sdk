@@ -28,15 +28,26 @@ internal object ClassAvailability {
     val compose: Boolean get() = has(COMPOSE)
     val navigation: Boolean get() = has(NAVIGATION)
 
-    internal fun has(className: String): Boolean {
-        overrides[className]?.let { return it }
-        cache[className]?.let { return it }
-        val found = runCatching {
-            Class.forName(className, false, ClassAvailability::class.java.classLoader)
-            true
-        }.getOrDefault(false)
-        cache[className] = found
-        return found
+    internal fun has(className: String): Boolean = probe(className) {
+        Class.forName(className, false, ClassAvailability::class.java.classLoader)
+        true
+    }
+
+    /**
+     * Whether [check] succeeds, answered once per [key] (then cached) and overridable like [has]. For features whose
+     * presence is a *member* of an optional library, not a class: the check calls it directly, and anything it throws,
+     * `NoSuchMethodError` included, means "not there". Never looked up by name: a host's R8 renames library members.
+     */
+    internal fun probe(key: String, check: () -> Boolean): Boolean {
+        overrides[key]?.let { return it }
+        cache[key]?.let { return it }
+        val result = try {
+            check()
+        } catch (_: Throwable) {
+            false
+        }
+        cache[key] = result
+        return result
     }
 
     @VisibleForTesting

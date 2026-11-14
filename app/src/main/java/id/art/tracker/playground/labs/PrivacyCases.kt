@@ -23,7 +23,7 @@ object PrivacyCases {
     val all: List<PrivacyCase> = listOf(
         PrivacyCase("compose_password", "Compose: password", "Field dengan PasswordVisualTransformation dan semantics password: selalu di-mask.", Expectation.MASKED),
         PrivacyCase("compose_email_default", "Compose: email (default)", "OutlinedTextField biasa: di-mask karena maskAllInputs = true.", Expectation.MASKED),
-        PrivacyCase("compose_numeric_default", "Compose: angka (default)", "Field dengan keyboard angka: di-mask oleh maskAllInputs. Dengan maskAllInputs = false angka Compose tetap terbaca.", Expectation.MASKED),
+        PrivacyCase("compose_numeric_default", "Compose: angka (default)", "Field dengan keyboard angka: di-mask oleh maskAllInputs. Dengan maskAllInputs = false angka Compose tetap terbaca kecuali field punya ContentType sensitif (Compose UI 1.8+).", Expectation.MASKED),
         PrivacyCase("compose_mask_modifier", "Compose: Modifier.artrackerMask()", "Teks total di-mask walaupun bukan input.", Expectation.MASKED),
         PrivacyCase("compose_unmask_modifier", "Compose: Modifier.artrackerUnmask()", "Field biasa yang sengaja dibuka (bukan password).", Expectation.VISIBLE),
         PrivacyCase("compose_unmask_inside_masked", "Compose: unmask di dalam area mask", "Unmask di dalam kontainer ter-mask membuka kembali seluruh subtree-nya.", Expectation.LEAKS_KNOWN_LIMITATION, UNMASK_REF),
