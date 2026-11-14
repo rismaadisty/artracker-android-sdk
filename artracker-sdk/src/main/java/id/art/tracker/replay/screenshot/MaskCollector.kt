@@ -4,6 +4,7 @@ import android.view.View
 import android.view.ViewGroup
 import id.art.tracker.privacy.MaskDecision
 import id.art.tracker.privacy.MaskingPolicy
+import id.art.tracker.privacy.ViewMaskRules
 
 /** Finds the Compose regions below a Compose host view (implemented by [ComposeMaskCollector]). */
 internal fun interface ComposeMaskApi {
@@ -27,7 +28,6 @@ internal class MaskCollector(
 ) {
     private val location = IntArray(2)
     private var visited = 0
-    private val composeHostCache = HashMap<Class<*>, Boolean>()
 
     /** True when [out] is complete for [root]'s tree. */
     fun collect(root: View, out: MutableList<MaskRect>): Boolean = try {
@@ -52,7 +52,7 @@ internal class MaskCollector(
                 descend(view, true, rect, out)
             }
             MaskDecision.NONE -> {
-                if (isComposeHost(view)) {
+                if (ViewMaskRules.isComposeHost(view)) {
                     // Without the Compose reader the tree cannot be inspected: mask the whole host.
                     val api = compose
                     if (api == null) {
@@ -81,23 +81,5 @@ internal class MaskCollector(
     private fun rectOf(view: View): MaskRect {
         view.getLocationOnScreen(location)
         return MaskRect(location[0], location[1], location[0] + view.width, location[1] + view.height)
-    }
-
-    /** By class name, so Compose types are never referenced here. */
-    private fun isComposeHost(view: View): Boolean = composeHostCache.getOrPut(view.javaClass) {
-        var c: Class<*>? = view.javaClass
-        var found = false
-        while (c != null && c != View::class.java) {
-            if (c.name == COMPOSE_HOST_CLASS) {
-                found = true
-                break
-            }
-            c = c.superclass
-        }
-        found
-    }
-
-    private companion object {
-        const val COMPOSE_HOST_CLASS = "androidx.compose.ui.platform.AndroidComposeView"
     }
 }

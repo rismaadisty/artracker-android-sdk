@@ -5,6 +5,14 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Session replay masked the whole screen of a Compose page while a text field had focus.** A focused Compose text field
+  makes its host view report `onCheckIsTextEditor() == true`, so the view rules took the host for an input and, with
+  `maskAllInputs = true`, painted over all of it without reading the semantics tree. The host is no longer treated as an
+  input by the view rules: its fields are masked one by one through `ComposeMaskRules`, and a host whose tree cannot be
+  read is still masked as a whole.
+
 ## [1.0.1] - 2026-11-12
 
 ### Added

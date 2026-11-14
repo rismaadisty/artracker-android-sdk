@@ -66,6 +66,7 @@ Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artr
 3. Confirm `replay_sessions` and `replay_chunks` rows exist for the session (replay no longer travels as `replay_chunk` ingest items).
 4. Fetch the events JSON and grep it for the typed secrets, for example `curl -H "Authorization: Bearer $TOKEN" ... | grep -c 'hunter2-secret'`. Expected: `0`. Card digits and the payment total must not appear either (the total is masked by `Modifier.artrackerMask()`).
 5. Open the Legacy XML screen and type into the password and number fields; the tagged containers (`artracker-mask`) must be masked in the uploaded replay too.
+6. A focused Compose text field must not mask its whole screen. Open a Compose screen with a text field (Login), tap the email field so it has focus and the keyboard is open, type a few characters and wait several seconds. In the replay frames recorded while the field had focus, only the text field (and other sensitive nodes) shows the grey cross-stripe pattern; labels, buttons and the rest of the page stay visible. Before the fix, every frame taken while a Compose field had focus was one grey block over the whole Compose host.
 
 ### 6b. Screenshot replay
 
