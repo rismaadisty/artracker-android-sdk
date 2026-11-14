@@ -68,7 +68,7 @@ class PerfCoreIntegrationTest {
         app.deleteDatabase(ReplayStore.DB_NAME)
     }
 
-    private fun startCore(performance: PerformanceConfig): ARTrackerCore {
+    private fun startCore(performance: PerformanceConfig, probe: FakeDeviceProbe = FakeDeviceProbe(cores = 4)): ARTrackerCore {
         val config = ARTrackerConfig(
             endpoint = "https://ingest.example.com",
             apiKey = "art_live_" + "a".repeat(43),
@@ -81,7 +81,6 @@ class PerfCoreIntegrationTest {
         val c = ARTrackerCore(
             app, config, clock,
             perfFactory = { owner ->
-                val probe = FakeDeviceProbe(cores = 4)
                 val net = FakeNetworkProbe()
                 val sampler = PerfSampler(FakeProcessReader(null, "100 256 0 0 0 0 0"), null, probe, net, clock) { clock.nowMs() }
                 owner.newPerfMonitor(sampler, probe, net)
@@ -236,6 +235,29 @@ class PerfCoreIntegrationTest {
         app.onTrimMemory(15)
         settle()
         assertEquals(1, seen.count { it.name == "perf.memory_warning" })
+    }
+
+    @Test
+    fun `trim warning says it comes from the trim callback`() {
+        val c = startCore(enabled())
+        c.onForeground()
+        app.onTrimMemory(15)
+        settle()
+        val warning = seen.single { it.name == "perf.memory_warning" }
+        assertEquals(15, warning.attributes["level"])
+        assertEquals("trim", warning.attributes["source"])
+    }
+
+    @Test
+    fun `a low memory reading reaches the pipeline on Android 14 and later`() {
+        val probe = FakeDeviceProbe(cores = 4).apply { memory = MemoryReading(50, true) }
+        val c = startCore(enabled(), probe)
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(1)
+        settle()
+        val warning = seen.single { it.name == "perf.memory_warning" }
+        assertEquals(mapOf("source" to "memory_info", "ram_free_mb" to 50), warning.attributes)
     }
 
     @Test

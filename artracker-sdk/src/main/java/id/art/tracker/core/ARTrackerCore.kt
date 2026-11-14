@@ -2,6 +2,7 @@ package id.art.tracker.core
 
 import android.app.Activity
 import android.app.Application
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -11,6 +12,7 @@ import id.art.tracker.ARTrackerConfig
 import id.art.tracker.Diagnostics
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
+import id.art.tracker.telemetryItemFromJson
 import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.lifecycle.AppLifecycleObserver
 import id.art.tracker.lifecycle.NavTracker
@@ -238,6 +240,33 @@ internal class ARTrackerCore(
     private val processObserver = AppLifecycleObserver(onForeground = ::onForeground, onBackground = ::onBackground)
     private val mainHandler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Handler(Looper.getMainLooper()) }
 
+    /**
+     * Runs on the main thread once the kill-switch deadline has passed: recording that [isDisabled] stopped is started
+     * again while the app is still in the foreground (replay, the flush timer, profiling). If another instance over the
+     * same prefs (a fresh-process `FlushWorker`) moved the deadline further out meanwhile, it waits for the new one.
+     */
+    private val resumeAfterTrip = Runnable {
+        runCatching {
+            val until = killSwitch.disabledUntilMs()
+            if (until > 0L) {
+                scheduleResume(until)
+            } else if (foreground && !isDisabled()) {
+                replay?.onDisabledChanged()
+                pipeline.startTimer()
+                startPerfLoop()
+            }
+        }.onFailure { SdkLog.w("resuming after the kill-switch failed", it) }
+    }
+
+    /** Replaces any pending resume by one at [untilMs] (plus a little slack). Posts to the main thread. */
+    private fun scheduleResume(untilMs: Long) {
+        onMain {
+            mainHandler.removeCallbacks(resumeAfterTrip)
+            val wait = (untilMs - clock.nowMs()).coerceAtLeast(0L) + RESUME_SLACK_MS
+            mainHandler.postDelayed(resumeAfterTrip, wait)
+        }
+    }
+
     /** Cheap to construct: the database is only opened on first use, in the background. */
     private val queue = EventStore(app, clock)
 
@@ -309,6 +338,11 @@ internal class ARTrackerCore(
     init {
         // Must be launched BEFORE the pipeline: the scope runs one task at a time in launch order, so the
         // queue maintenance below completes before the consumer or any flush can touch the database.
+        // A 401 stops replay at once (it would otherwise notice at its next flush tick) and schedules the way back.
+        killSwitch.onTrip = { until ->
+            runCatching { replay?.onDisabledChanged() }
+            scheduleResume(until)
+        }
         scope.launch { leftoverItems = maintainQueueAndSaveTransportConfig() }
         pipeline = EventPipeline(
             scope = scope,
@@ -344,6 +378,7 @@ internal class ARTrackerCore(
         if (config.replay.enabled) ensureReplay()?.start(manual = false)
         if (config.performance.enabled) startPerformance()
         registerProcessObserver()
+        killSwitch.disabledUntilMs().takeIf { it > 0L }?.let(::scheduleResume)
     }
 
     /** Creates the monitor and registers the memory callbacks; nothing else (no thread, no loop) until foreground. */
@@ -351,7 +386,7 @@ internal class ARTrackerCore(
         runCatching {
             perf = (perfFactory ?: ::createPerfMonitor)(this)
             val callbacks = MemoryWarningCallbacks({ foreground }) { level ->
-                if (!isDisabled()) emit(items.event("perf.memory_warning", mapOf("level" to level)))
+                if (!isDisabled()) emit(items.event("perf.memory_warning", mapOf("level" to level, "source" to "trim")))
             }
             app.applicationContext.registerComponentCallbacks(callbacks)
             memoryCallbacks = callbacks
@@ -371,6 +406,7 @@ internal class ARTrackerCore(
         device = device,
         network = network,
         intervalMs = config.performance.sampleIntervalMs,
+        memoryInfoWarnings = PerfMonitor.memoryInfoWarningsFor(Build.VERSION.SDK_INT),
         sessionId = { session.peekId() },
         emit = { sessionId, build ->
             if (!isDisabled()) emit(build(itemsFor(sessionId, endedSessionUserId ?: identity.userId)))
@@ -461,7 +497,11 @@ internal class ARTrackerCore(
             collectExitInfo()
             return
         }
-        if (CrashRecovery.recover(crashStore, queue) > 0) leftoverItems = true
+        // The crash JSON goes through beforeSend and the same redaction as every other item before it is queued.
+        val recovered = CrashRecovery.recover(crashStore, queue) { json ->
+            telemetryItemFromJson(json)?.let(pipeline::prepareRecovered)
+        }
+        if (recovered > 0) leftoverItems = true
         collectExitInfo()
     }
 
@@ -689,6 +729,9 @@ internal class ARTrackerCore(
         // May rotate the session after a long background: that emits session_end/session_start via the listener.
         session.onForeground()
         runCatching { replay?.onAppForeground() } // checks the kill-switch itself
+        // A posted delay counts uptime, which stops while the device sleeps, but the deadline is wall-clock time:
+        // recompute the wait from the wall clock whenever the app comes back while a trip is still pending.
+        runCatching { killSwitch.disabledUntilMs().takeIf { it > 0L }?.let(::scheduleResume) }
         if (isDisabled()) return
         pipeline.startTimer()
         emit(items.event("app_foreground"))
@@ -740,6 +783,8 @@ internal class ARTrackerCore(
     /** Cancels everything this instance started. Used by `ARTracker.resetForTest()`. */
     fun shutdown() {
         lifecycleStopped = true
+        killSwitch.onTrip = null
+        onMain { mainHandler.removeCallbacks(resumeAfterTrip) }
         runCatching { app.unregisterActivityLifecycleCallbacks(activityTracker) }
         runCatching { activityTracker.detachAll() }
         runCatching { navTracker.clear() }
@@ -769,6 +814,7 @@ internal class ARTrackerCore(
         private const val SESSION_PREFS = "artracker_session"
         private const val IDENTITY_PREFS = "artracker_identity"
         private const val RETENTION_MS = 7L * 24 * 60 * 60 * 1000
+        private const val RESUME_SLACK_MS = 1_000L
         private const val CRASH_DIR = "artracker/crash"
 
         @Volatile

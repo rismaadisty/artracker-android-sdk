@@ -536,7 +536,7 @@ Hal-hal berikut berbeda dari teks di atas (atau melengkapinya) setelah implement
 - **Kill-switch** `401` menyimpan keadaan di prefs `artracker_transport` yang sama dengan kunci API publik untuk `FlushWorker`.
 
 **Telemetry**
-- **Item crash melewati pipeline** (§8.1): ditulis sinkron lalu dipulihkan saat launch berikutnya; karena itu `beforeSend` dan redaksi berbasis key tidak berlaku (hanya redaksi pola nilai), dan data breadcrumb tidak di-scrub per key.
+- **Item crash** (§8.1): ditulis sinkron (hanya redaksi pola nilai, karena proses sedang mati), lalu saat launch berikutnya `CrashRecovery` mengurainya kembali menjadi `TelemetryItem` dan memprosesnya lewat `EventPipeline.prepareRecovered` (`beforeSend` + redaksi pola dan key yang sama dengan item lain) sebelum masuk antrean. `beforeSend` yang mengembalikan `null` membuang crash (file dihapus); file yang tidak bisa diurai dibuang (fail closed); `beforeSend` yang melempar exception menyisakan item asli.
 - **`ExitInfoCollector`** melaporkan semua exit yang disimpan OS (sampai ~16) pada `init` pertama setelah instal, termasuk yang terjadi sebelum SDK dipasang; trace native-crash API 31+ adalah tombstone protobuf.
 - **Interceptor**: `req_bytes`/`res_bytes` dari `Content-Length` saja; `captureHeaders` dicadangkan dan diabaikan; pengabaian host endpoint SDK membandingkan host dan port efektif.
 
@@ -552,7 +552,6 @@ Hal-hal berikut berbeda dari teks di atas (atau melengkapinya) setelah implement
 - **`ComposeMaskCollector`**: `ReflectiveSemanticsAccess` tidak memakai refleksi sama sekali; ia menautkan langsung ke `ViewRootForTest` (API internal Compose) dan dibungkus try/catch dengan fallback: seluruh host Compose di-mask. Di-instansiasi hanya di balik `ClassAvailability.compose`.
 - **`stopReplay()`** mematikan perekaman juga untuk sesi berikutnya sampai `startReplay()` dipanggil.
 - `seq` chunk mulai dari 0 lagi pada tiap proses.
-- **Setelah kill-switch `401` kedaluwarsa**, perekaman tidak otomatis dilanjutkan selama aplikasi tetap di foreground (belum diperbaiki).
 
 **Pengujian**
 - Fuzz API publik (`PublicApiFuzzTest`, 1000 iterasi) menemukan dan memperbaiki 3 bug (pipeline mati oleh `Error`, `Number` non-JSON, surrogate tunggal yang tertulis sebagai JSON tidak valid; sekarang U+FFFD).

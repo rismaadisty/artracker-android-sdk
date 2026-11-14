@@ -10,6 +10,9 @@ import android.os.StatFs
 import android.system.Os
 import android.system.OsConstants
 
+/** One `ActivityManager.getMemoryInfo` reading: free RAM in MB and whether the system itself calls memory low. */
+internal data class MemoryReading(val freeMb: Int, val low: Boolean)
+
 /** Platform facts for the profiler; a fake in tests. Every call is safe to make on the sampling thread. */
 internal interface DeviceProbe {
     fun ramMb(): Int?
@@ -27,8 +30,8 @@ internal interface DeviceProbe {
     /** Android release, e.g. "14". */
     fun osVersion(): String?
 
-    /** Free RAM (`MemoryInfo.availMem`) in MB, read on every call. */
-    fun ramFreeMb(): Int?
+    /** Free RAM (`MemoryInfo.availMem`) and `MemoryInfo.lowMemory` from one read, taken on every call. */
+    fun memory(): MemoryReading?
 
     /** Size and free space of the data partition in MB. */
     fun storageTotalMb(): Int?
@@ -99,10 +102,10 @@ internal class AndroidDeviceProbe(
 
     override fun osVersion(): String? = runCatching { Build.VERSION.RELEASE?.takeIf { it.isNotBlank() } }.getOrNull()
 
-    override fun ramFreeMb(): Int? = runCatching {
+    override fun memory(): MemoryReading? = runCatching {
         val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val info = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-        bytesToMb(info.availMem).takeIf { it >= 0 }
+        bytesToMb(info.availMem).takeIf { it >= 0 }?.let { MemoryReading(it, info.lowMemory) }
     }.getOrNull()
 
     /** The partition size does not change, so a successful read is kept; a failed one is retried on the next call. */

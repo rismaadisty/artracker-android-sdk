@@ -45,8 +45,20 @@ internal class KillSwitch(private val store: KeyValueStore, private val clock: C
         return remaining > 0
     }
 
+    /**
+     * The persisted deadline while a trip is still active ([isActive] would say so for it), otherwise 0. Lets the
+     * owner schedule the moment recording may resume, including a trip written by an earlier run.
+     */
+    fun disabledUntilMs(): Long = if (trippedNow()) store.getLong(KEY_DISABLED_UNTIL, 0L) else 0L
+
+    /** Called with the deadline after every [trip]; a throwing listener never breaks the trip. */
+    @Volatile
+    var onTrip: ((untilMs: Long) -> Unit)? = null
+
     fun trip(durationMs: Long = DEFAULT_TRIP_MS) {
-        store.putLong(KEY_DISABLED_UNTIL, clock.nowMs() + durationMs)
+        val until = clock.nowMs() + durationMs
+        store.putLong(KEY_DISABLED_UNTIL, until)
+        runCatching { onTrip?.invoke(until) }
     }
 
     companion object {

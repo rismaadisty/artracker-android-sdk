@@ -57,6 +57,8 @@ internal class PerfSampler(
             refreshHz = window.refreshHz
         }
 
+        val memory = runCatching { device.memory() }.getOrNull()
+
         return PerfSample(
             t = t,
             cpu = cpu,
@@ -67,9 +69,10 @@ internal class PerfSampler(
             threads = stat?.threads,
             battery = runCatching { device.batteryFraction() }.getOrNull(),
             thermal = runCatching { device.thermal() }.getOrNull(),
-            ramFreeMb = runCatching { device.ramFreeMb() }.getOrNull(),
+            ramFreeMb = memory?.freeMb,
             storageFreeMb = runCatching { device.storageFreeMb() }.getOrNull(),
             net = runCatching { network.current() }.getOrNull(),
+            lowMemory = memory?.low,
         )
     }
 

@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import id.art.tracker.ARTracker
 import id.art.tracker.ARTrackerConfig
+import id.art.tracker.BeforeSend
+import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.Clock
 import id.art.tracker.core.KillSwitch
@@ -65,6 +67,9 @@ class CrashRecoveryTest {
         """{"id":"$id","type":"log","name":"crash","level":"fatal","message":"$message",""" +
             """"timestamp":"2025-11-05T08:33:18.050Z","session_id":"s","attributes":{"fingerprint":"f"}}"""
 
+    /** What `recover` hands to the queue when nothing in between touches the item: the stored JSON as it is. */
+    private fun raw(json: String) = StoredItem(JSONObject(json).getString("id"), 0, 1L, json)
+
     private fun claimAll(queue: FakeQueue): List<StoredItem> = queue.claimBatch(maxItems = 100)?.items ?: emptyList()
 
     @Test
@@ -74,7 +79,7 @@ class CrashRecoveryTest {
         val json = crashJson("0195-crash-1")
         store.writeSync("0195-crash-1", json)
 
-        val recovered = CrashRecovery.recover(store, queue)
+        val recovered = CrashRecovery.recover(store, queue, ::raw)
 
         assertEquals(1, recovered)
         val item = claimAll(queue).single()
@@ -99,7 +104,7 @@ class CrashRecoveryTest {
         File(crashDir, "0006.json").writeText("[1,2]") // not an object
         store.writeSync("0007", crashJson("0007"))
 
-        val recovered = CrashRecovery.recover(store, queue)
+        val recovered = CrashRecovery.recover(store, queue, ::raw)
 
         assertEquals(1, recovered)
         assertEquals(listOf("0007"), claimAll(queue).map { it.id })
@@ -120,14 +125,14 @@ class CrashRecoveryTest {
             }
         }
 
-        val recovered = CrashRecovery.recover(store, flaky)
+        val recovered = CrashRecovery.recover(store, flaky, ::raw)
 
         assertEquals(1, recovered)
         assertEquals(listOf("0001.json"), store.pending().map { it.name })
         assertEquals(listOf("0002"), claimAll(good).map { it.id })
 
         // Next start: the left-over file is recovered.
-        assertEquals(1, CrashRecovery.recover(store, good))
+        assertEquals(1, CrashRecovery.recover(store, good, ::raw))
         assertTrue(store.pending().isEmpty())
     }
 
@@ -143,13 +148,13 @@ class CrashRecoveryTest {
             override fun insert(items: List<StoredItem>): Boolean = if (calls++ == 0) false else good.insert(items)
         }
 
-        val recovered = CrashRecovery.recover(store, failing)
+        val recovered = CrashRecovery.recover(store, failing, ::raw)
 
         assertEquals(1, recovered)
         assertEquals("the unstored item's file is kept", listOf("0001.json"), store.pending().map { it.name })
         assertEquals(listOf("0002"), claimAll(good).map { it.id })
 
-        assertEquals(1, CrashRecovery.recover(store, good))
+        assertEquals(1, CrashRecovery.recover(store, good, ::raw))
         assertTrue(store.pending().isEmpty())
     }
 
@@ -160,7 +165,7 @@ class CrashRecoveryTest {
         queue.insert(listOf(StoredItem("0001", 0, 1, crashJson("0001"))))
         store.writeSync("0001", crashJson("0001"))
 
-        assertEquals(1, CrashRecovery.recover(store, queue))
+        assertEquals(1, CrashRecovery.recover(store, queue, ::raw))
         assertTrue(store.pending().isEmpty())
         assertEquals(1, queue.pendingCount())
     }
@@ -170,18 +175,48 @@ class CrashRecoveryTest {
         val store = CrashStore(crashDir)
         val queue = FakeQueue()
         store.writeSync("0001", crashJson("0001"))
-        assertEquals(1, CrashRecovery.recover(store, queue))
-        assertEquals(0, CrashRecovery.recover(store, queue))
+        assertEquals(1, CrashRecovery.recover(store, queue, ::raw))
+        assertEquals(0, CrashRecovery.recover(store, queue, ::raw))
         assertEquals(1, queue.pendingCount())
+    }
+
+    @Test
+    fun processReturningNull_deletesTheFile_andInsertsNothing() {
+        val store = CrashStore(crashDir)
+        val queue = FakeQueue()
+        store.writeSync("0001", crashJson("0001"))
+
+        val recovered = CrashRecovery.recover(store, queue) { null }
+
+        assertEquals(0, recovered)
+        assertEquals(0, queue.pendingCount())
+        assertTrue(store.pending().isEmpty())
+    }
+
+    @Test
+    fun processThrowing_keepsTheFile_andGoesOnWithTheNext() {
+        val store = CrashStore(crashDir)
+        val queue = FakeQueue()
+        store.writeSync("0001", crashJson("0001"))
+        store.writeSync("0002", crashJson("0002"))
+
+        val recovered = CrashRecovery.recover(store, queue) { json ->
+            if (json.contains("\"0001\"")) throw IllegalStateException("hook bug") else raw(json)
+        }
+
+        assertEquals(1, recovered)
+        assertEquals(listOf("0001.json"), store.pending().map { it.name })
+        assertEquals(listOf("0002"), claimAll(queue).map { it.id })
     }
 
     // region end to end (Robolectric + MockWebServer)
 
-    private fun config(endpoint: String) = ARTrackerConfig(
+    private fun config(endpoint: String, beforeSend: BeforeSend? = null) = ARTrackerConfig(
         endpoint = endpoint,
         apiKey = key,
         environment = "test",
         appVersion = "1.2.3",
+        beforeSend = beforeSend,
     )
 
     private fun awaitIdle() {
@@ -271,6 +306,106 @@ class CrashRecoveryTest {
         assertEquals(0, crashDir.list()?.size ?: 0)
         assertEquals(0, server.requestCount)
         assertEquals(0, ARTracker.diagnostics().pendingItems)
+    }
+
+    /** A crash file of the real shape, left by an earlier process, with one http breadcrumb carrying a token. */
+    private fun leaveARealCrashFile(): String {
+        // Production warms the redactor at startup; cold, its regex compilation eats the builder's breadcrumb budget.
+        AttributeRedactor.redactString("warm-up 1 a@b.co")
+        val crumbs = Breadcrumbs()
+        crumbs.add("http", "GET /me", mapOf("token" to "abc123", "status" to 200))
+        val (id, json) = CrashItemBuilder.build(
+            thread = Thread.currentThread(),
+            t = RuntimeException("boom"),
+            nowMs = System.currentTimeMillis(),
+            sessionId = "sess-earlier",
+            userId = "u-1",
+            appVersion = "1.2.3",
+            screen = "Checkout",
+            breadcrumbs = crumbs,
+        )
+        CrashStore(crashDir).writeSync(id, json)
+        return id
+    }
+
+    /** Starts the SDK over a live server and returns what reached it, after one marker event proves the flush ran. */
+    private fun recoverAndCollect(beforeSend: BeforeSend?): List<JSONObject> {
+        startServer()
+        ARTracker.init(context, config(server.url("/").toString().trimEnd('/'), beforeSend))
+        awaitIdle()
+        ARTracker.track("marker")
+        ARTracker.flush()
+        awaitIdle()
+        val sent = sentItems()
+        assertTrue("the marker event reached the server", sent.any { it.getString("name") == "marker" })
+        return sent
+    }
+
+    @Test
+    fun beforeSendCanDropARecoveredCrash() {
+        leaveARealCrashFile()
+
+        val sent = recoverAndCollect(BeforeSend { if (it.name == "crash") null else it })
+
+        assertTrue(sent.none { it.getString("name") == "crash" })
+        assertEquals(0, crashDir.list()?.size ?: 0)
+    }
+
+    @Test
+    fun beforeSendCanModifyARecoveredCrash() {
+        leaveARealCrashFile()
+
+        val sent = recoverAndCollect(
+            BeforeSend { if (it.name == "crash") it.copy(attributes = it.attributes + ("tag" to "x")) else it },
+        )
+
+        val crash = sent.single { it.getString("name") == "crash" }
+        assertEquals("fatal", crash.getString("level"))
+        assertEquals("x", crash.getJSONObject("attributes").getString("tag"))
+    }
+
+    @Test
+    fun sensitiveKeysInCrashBreadcrumbsAreRedacted() {
+        leaveARealCrashFile()
+
+        val sent = recoverAndCollect(null)
+
+        val crumbs = sent.single { it.getString("name") == "crash" }.getJSONObject("attributes").getJSONArray("breadcrumbs")
+        val data = crumbs.getJSONObject(0).getJSONObject("data")
+        assertEquals("[redacted]", data.getString("token"))
+        assertEquals(200, data.getInt("status"))
+    }
+
+    @Test
+    fun throwingBeforeSendKeepsTheOriginalCrash() {
+        leaveARealCrashFile()
+
+        val sent = recoverAndCollect(BeforeSend { if (it.name == "crash") throw IllegalStateException("hook bug") else it })
+
+        assertEquals("fatal", sent.single { it.getString("name") == "crash" }.getString("level"))
+        assertEquals(0, crashDir.list()?.size ?: 0)
+    }
+
+    @Test
+    fun recoveredCrashKeepsPriorityZero() {
+        leaveARealCrashFile()
+
+        // Nothing listens on port 9: the item stays in the queue, where its priority can be read.
+        ARTracker.init(context, config("http://127.0.0.1:9"))
+        awaitIdle()
+
+        val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+            context.getDatabasePath("artracker.db").path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        )
+        try {
+            val priorities = ArrayList<Int>()
+            db.rawQuery("SELECT priority, payload FROM items", null).use { c ->
+                while (c.moveToNext()) if (c.getString(1).contains("\"name\":\"crash\"")) priorities += c.getInt(0)
+            }
+            assertEquals(listOf(0), priorities)
+        } finally {
+            db.close()
+        }
     }
 
     // endregion

@@ -10,17 +10,15 @@ import org.json.JSONObject
  * scope at startup, before the initial flush decision.
  */
 internal object CrashRecovery {
-    /** Crash and fatal items: first to be sent, never evicted. */
-    private const val CRASH_PRIORITY = 0
-
     /**
-     * For each pending file: validate, insert into [queue] as a priority-0 item (the file content already is the
-     * final item JSON), and delete the file only when `insert` returned true (stored, or already stored under that
-     * id). On false or an exception, or a kill in between, the file stays for the next start.
+     * For each pending file: validate, hand its JSON to [process] (the event pipeline's `beforeSend` + redaction step,
+     * which returns the item to store or null to drop it), insert the result into [queue], and delete the file only
+     * when `insert` returned true (stored, or already stored under that id) or [process] dropped it on purpose. On
+     * false or an exception (also from [process]), or a kill in between, the file stays for the next start.
      * A file that is unreadable or not a valid crash item is deleted without being inserted, so one poison
      * file can neither be retried forever nor spoil the others. Returns the number of items that are now in the queue.
      */
-    fun recover(store: CrashStore, queue: ItemQueue): Int {
+    fun recover(store: CrashStore, queue: ItemQueue, process: (String) -> StoredItem?): Int {
         var recovered = 0
         for (file in store.pending()) {
             try {
@@ -31,8 +29,13 @@ internal object CrashRecovery {
                     store.delete(file)
                     continue
                 }
-                val createdAt = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()
-                if (queue.insert(listOf(StoredItem(id, CRASH_PRIORITY, createdAt, json)))) {
+                val stored = process(json)
+                if (stored == null) {
+                    // Dropped by beforeSend (or unserialisable): the user's hook decided, nothing is kept.
+                    store.delete(file)
+                    continue
+                }
+                if (queue.insert(listOf(stored))) {
                     store.delete(file)
                     recovered++
                 } else {

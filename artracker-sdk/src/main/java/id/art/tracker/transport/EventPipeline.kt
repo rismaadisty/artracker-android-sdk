@@ -319,6 +319,13 @@ internal class EventPipeline(
         }
     }
 
+    /**
+     * The same beforeSend -> redaction -> serialisation an enqueued item gets, for an item recovered from an earlier
+     * process (a crash file). Called on the SDK scope during startup, the same thread that persists; the result goes
+     * straight to the queue. Null when the item is dropped.
+     */
+    fun prepareRecovered(item: TelemetryItem): StoredItem? = prepare(item)
+
     /** beforeSend -> redaction -> serialisation. Null when the item is dropped (by beforeSend, or unserialisable). */
     private fun prepare(original: TelemetryItem): StoredItem? {
         return try {

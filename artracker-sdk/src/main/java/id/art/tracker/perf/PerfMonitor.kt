@@ -21,10 +21,18 @@ internal class PerfMonitor(
     /** Hands an item to the pipeline; the core pins an [ItemFactory] to the given session id. */
     private val emit: (sessionId: String, item: (ItemFactory) -> TelemetryItem) -> Unit,
     private val flushEvery: Int = FLUSH_EVERY,
+    /**
+     * Also warn when the system reports low memory in a sample (`ActivityManager.MemoryInfo.lowMemory`). Meant for
+     * Android 14+, where `onTrimMemory` no longer delivers the running-low levels; below that the trim callback is
+     * the only source, so there is never a second warning for the same pressure.
+     */
+    private val memoryInfoWarnings: Boolean = false,
 ) {
     private val buffer = ArrayList<PerfSample>()
     private var bufferSession: String? = null
     private var lastThermal: String? = null
+    private var lastLow = false
+    private var lastMemoryWarningAtMs: Long? = null
 
     /** False between [onBackground] / [discard] and the next [onForeground]: a tick already in flight then does nothing. */
     private var running = true
@@ -45,6 +53,20 @@ internal class PerfMonitor(
                 emit(sid) { it.event("perf.thermal_change", mapOf("from" to previous, "to" to thermal)) }
             }
             lastThermal = thermal
+        }
+        if (memoryInfoWarnings) {
+            val low = sample.lowMemory == true
+            // The system flag flips as it kills cached processes: at most one warning per cooldown, so a device that
+            // hovers at the threshold does not turn every sample into an event.
+            val last = lastMemoryWarningAtMs
+            if (low && !lastLow && (last == null || sample.t - last >= MEMORY_WARNING_COOLDOWN_MS)) {
+                lastMemoryWarningAtMs = sample.t
+                val freeMb = sample.ramFreeMb
+                emit(sid) {
+                    it.event("perf.memory_warning", mapOf("source" to "memory_info", "ram_free_mb" to freeMb))
+                }
+            }
+            lastLow = low
         }
         if (buffer.size >= flushEvery) flush()
     }
@@ -77,6 +99,8 @@ internal class PerfMonitor(
     @Synchronized
     fun onForeground() {
         running = true
+        lastLow = false
+        lastMemoryWarningAtMs = null
         runCatching { network.start() }.onFailure { SdkLog.w("starting the network probe failed", it) }
         sampler.start()
         sampler.resetBaseline()
@@ -109,6 +133,15 @@ internal class PerfMonitor(
     }
 
     companion object {
+        /**
+         * Whether samples should also warn on `MemoryInfo.lowMemory`: from Android 14 (API 34), where `onTrimMemory` no
+         * longer delivers the running-low levels. Below it the trim callback stays the only source.
+         */
+        fun memoryInfoWarningsFor(sdkInt: Int): Boolean = sdkInt >= 34
+
+        /** Minimum time between two `perf.memory_warning` events from `MemoryInfo.lowMemory`. */
+        const val MEMORY_WARNING_COOLDOWN_MS = 60_000L
+
         const val FLUSH_EVERY = 10
         const val MAX_SAMPLES = 60
         private const val MAX_OS_VERSION = 32

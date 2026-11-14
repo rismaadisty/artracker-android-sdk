@@ -2,6 +2,8 @@ package id.art.tracker
 
 import id.art.tracker.core.Iso8601
 import id.art.tracker.core.Json
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** Kind of telemetry item sent to the ingest API. */
 public enum class ItemType(internal val wire: String) {
@@ -50,4 +52,56 @@ internal fun TelemetryItem.priority(): Int = when {
     level == LogLevel.FATAL -> 0
     level == LogLevel.ERROR -> 1
     else -> 2
+}
+
+/**
+ * Reads back the JSON written by [toJson] (and by `CrashItemBuilder`, which writes the same shape by hand). Null when a
+ * required field (`id`, `type`, `name`, `timestamp`, `session_id`) is missing or malformed, or `type` / `level` is not
+ * one this SDK knows. Numbers keep the type `org.json` gives them (`Int`, `Long` or `Double`), so a large `Long`
+ * attribute stays a `Long`.
+ */
+internal fun telemetryItemFromJson(json: String): TelemetryItem? = try {
+    val o = JSONObject(json)
+    val type = ItemType.values().firstOrNull { it.wire == o.optString("type") }
+    val levelWire = o.optString("level", "")
+    val level = if (levelWire.isEmpty()) null else LogLevel.values().firstOrNull { it.wire == levelWire } ?: return null
+    val id = o.optString("id", "")
+    val name = o.optString("name", "")
+    val sessionId = o.optString("session_id", "")
+    val timestamp = Iso8601.parse(o.optString("timestamp", ""))
+    if (type == null || id.isEmpty() || name.isEmpty() || sessionId.isEmpty() || timestamp == null) {
+        null
+    } else {
+        @Suppress("UNCHECKED_CAST")
+        TelemetryItem(
+            id = id,
+            type = type,
+            name = name,
+            level = level,
+            message = if (o.has("message") && !o.isNull("message")) o.getString("message") else null,
+            timestampMs = timestamp,
+            sessionId = sessionId,
+            userId = if (o.has("user_id") && !o.isNull("user_id")) o.getString("user_id") else null,
+            attributes = (o.optJSONObject("attributes")?.let(::jsonToMap) ?: emptyMap()),
+        )
+    }
+} catch (_: Throwable) {
+    null
+}
+
+private fun jsonToMap(o: JSONObject): Map<String, Any?> {
+    val out = LinkedHashMap<String, Any?>(o.length())
+    val keys = o.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        out[key] = jsonToValue(o.get(key))
+    }
+    return out
+}
+
+private fun jsonToValue(v: Any?): Any? = when (v) {
+    null, JSONObject.NULL -> null
+    is JSONObject -> jsonToMap(v)
+    is JSONArray -> List(v.length()) { jsonToValue(v.get(it)) }
+    else -> v
 }
