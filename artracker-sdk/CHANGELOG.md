@@ -16,6 +16,9 @@ versions follow semantic versioning.
   numeric field without a `ContentType` is still masked only by `maskAllInputs`.
 - View fields with the androidx autofill hints `phoneNumber`, `phoneNumberDevice` and `phoneNational` are now masked
   too (until now only the View constant `phone` was).
+- **Cold start time (`app_start`).** Measured from process start (`Process.getStartUptimeMillis()`) to the first drawn
+  frame of the first Activity; a process whose first Activity is created more than 1 s after it started, or that was
+  not in the foreground at `init`, reports nothing.
 - **Global properties.** Attributes set once are merged into every event, log and session item (not `perf.samples`)
   before `beforeSend`; an item's own attribute wins on a key conflict. They are redacted like any attribute, one entry
   at a time, so a hostile value costs only its own entry, and they can never push an item's own attributes out of the

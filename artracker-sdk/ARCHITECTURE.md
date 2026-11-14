@@ -79,6 +79,7 @@ artracker-sdk/src/main/java/id/art/tracker/
 │   ├─ AppLifecycleObserver.kt  ProcessLifecycleOwner → foreground/background
 │   ├─ ActivityTracker.kt       ActivityLifecycleCallbacks → screen_view, window attach
 │   ├─ FragmentTracker.kt       FragmentLifecycleCallbacks (opsional, compileOnly)
+│   ├─ AppStartTracker.kt       Cold start → app_start (sekali per proses; DecorViewFirstFrame = frame pertama)
 │   └─ ComposeNavTracker.kt     helper NavController → screen_view (opsional)
 ├─ replay/
 │   ├─ ReplayController.kt      Start/stop, sampling, mengatur jadwal capture
