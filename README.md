@@ -377,7 +377,8 @@ while it kills cached processes).
 
 - **Crash**: an uncaught-exception handler is installed at `init` and always calls the previous handler (Crashlytics
   and similar). It writes the crash to a file synchronously (atomic rename, no SQLite, no network); the next launch
-  turns it into a `log` item (`fatal`, name `crash`) with the highest priority, and it is never evicted.
+  turns it into a `log` item (`fatal`, name `crash`) with the highest priority, and it is never evicted. It carries
+  `build_id` when the manifest sets one and it was read before the crash (the handler never waits for it).
 - **ANR / native crash / low-memory kill**: API 30+, read from `ApplicationExitInfo` and sent as `fatal` `anr` /
   `native_crash`, and `warn` `low_memory_kill`.
 - **ANR (API 24–29)**: while the app is in the foreground a watchdog thread checks the main thread every second; a
@@ -414,7 +415,7 @@ while it kills cached processes).
 | Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; once per process, only when the process was started to show an Activity |
 | Session | `session` | `session_start` / `session_end` | device metadata (+ `build_id` when the manifest sets one) |
 | Replay | *(not an ingest item)* | `artracker-screen-v1` screenshot chunk, via the Session Replay API | at most 5 MiB gzipped per upload (chunks 2 MB) |
-| JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
+| JVM crash | `log` | `fatal`, name `crash` | sent on the next launch (+ `build_id` when known) |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |
 | ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, reported while the app is still running |
 | Low-memory kill (API 30+) | `log` | `warn`, name `low_memory_kill` | from `ApplicationExitInfo` |

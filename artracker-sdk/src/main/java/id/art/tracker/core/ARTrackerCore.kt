@@ -648,7 +648,12 @@ internal class ARTrackerCore(
             appVersion = crashAppVersion,
             screen = screens.currentScreen,
             breadcrumbs = breadcrumbs,
+            buildId = crashBuildId, // a volatile read only: never `device`, which would touch the PackageManager
         )
+
+    /** The crash item JSON exactly as the crash handler would build it (tests). */
+    @androidx.annotation.VisibleForTesting
+    internal fun crashItemJsonForTest(thread: Thread, t: Throwable): String = buildCrashItem(thread, t).second
 
     /** Returns true when items from an earlier run are waiting. Runs before the pipeline consumer ever starts. */
     private fun maintainQueueAndSaveTransportConfig(): Boolean {
