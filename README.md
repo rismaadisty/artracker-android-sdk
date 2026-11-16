@@ -384,6 +384,19 @@ while it kills cached processes).
   main thread that has not responded for 5 s is reported once as `error` `anr` with `source: "watchdog"`, the
   main-thread stack (16 KB), the screen and the breadcrumbs. Not while a debugger is attached; stopped in the
   background; API 30+ keeps using `ApplicationExitInfo` only. Always on, no setting.
+- **Build id (for deobfuscation)**: set `<meta-data android:name="id.art.tracker.BUILD_ID" android:value="${artrackerBuildId}" />`
+  inside `<application>`; the SDK reads it once, in the background, and adds `build_id` to `session_start` (and to crash and
+  exit items, see below), so the backend can pick the R8 mapping of that build. In `app/build.gradle.kts`:
+  ```kotlin
+  val artrackerBuildId = providers.gradleProperty("artrackerBuildId")
+      .orElse(providers.exec { commandLine("git", "rev-parse", "--short=12", "HEAD") }
+          .standardOutput.asText.map { "git-" + it.trim() })
+  android { defaultConfig { manifestPlaceholders["artrackerBuildId"] = artrackerBuildId.get() } }
+  ```
+  (CI can pass `-PartrackerBuildId=<value>`.) Use a value that contains a non-hexadecimal letter (a prefix such as `git-`)
+  or a UUID: Android stores an all-digit value as an integer (leading zeros are lost) and one like `12e45` as a float,
+  which the SDK ignores. Use `android:value`, not `android:resource`. Absent or blank means no `build_id` field. Up to
+  128 characters. The same value must be used when the mapping is uploaded (backend side, not available yet).
 - **Offline**: items are persisted in SQLite (`artracker.db`) up to 5 MB or 5000 rows (replay chunks are evicted first,
   crash items never) and dropped after 7 days. Batches are at most 50 items or 128 KB, gzip-compressed. Foreground flush
   every 10 s; when the app goes to background one WorkManager job (`CONNECTED` constraint) drains the queue.
@@ -399,7 +412,7 @@ while it kills cached processes).
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; once per process, only when the process was started to show an Activity |
-| Session | `session` | `session_start` / `session_end` | device metadata |
+| Session | `session` | `session_start` / `session_end` | device metadata (+ `build_id` when the manifest sets one) |
 | Replay | *(not an ingest item)* | `artracker-screen-v1` screenshot chunk, via the Session Replay API | at most 5 MiB gzipped per upload (chunks 2 MB) |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |

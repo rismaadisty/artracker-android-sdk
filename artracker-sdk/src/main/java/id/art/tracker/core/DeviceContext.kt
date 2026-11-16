@@ -12,8 +12,18 @@ import java.util.TimeZone
  * Static device/app facts used for the `session_start` attributes and the envelope `context`.
  * Safe to call from any thread; no method throws (each probe falls back to a neutral value).
  */
-internal class DeviceContext(context: Context, configuredAppVersion: String?) {
+internal class DeviceContext(
+    context: Context,
+    configuredAppVersion: String?,
+    /** Reads the manifest build id; called at most once, off the main thread. */
+    private val buildIdReader: (Context) -> String? = BuildId::read,
+) {
     private val appContext: Context = context.applicationContext ?: context
+
+    /** The `id.art.tracker.BUILD_ID` of the manifest, or null (absent, blank, unreadable). Read once, never throws. */
+    val buildId: String? by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        runCatching { buildIdReader(appContext) }.getOrNull()
+    }
 
     private val packageVersionName: String? by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching { packageInfo()?.versionName }.getOrNull()
@@ -34,21 +44,24 @@ internal class DeviceContext(context: Context, configuredAppVersion: String?) {
     val appVersion: String =
         configuredAppVersion?.takeIf { it.isNotBlank() } ?: packageVersionName ?: "unknown"
 
-    fun sessionStartAttributes(): Map<String, Any?> = linkedMapOf(
-        "platform" to "android",
-        "os_version" to safe("unknown") { Build.VERSION.RELEASE ?: "unknown" },
-        "api_level" to Build.VERSION.SDK_INT,
-        "manufacturer" to safe("unknown") { Build.MANUFACTURER ?: "unknown" },
-        "model" to safe("unknown") { Build.MODEL ?: "unknown" },
-        "app_version" to appVersion,
-        "app_build" to appBuild,
-        "screen" to screen(),
-        "locale" to safe("unknown") { Locale.getDefault().toLanguageTag() },
-        "tz" to safe("unknown") { TimeZone.getDefault().id },
-        "network" to network(),
-        "is_emulator" to isEmulator(),
-        "sdk_version" to SdkInfo.VERSION,
-    )
+    fun sessionStartAttributes(): Map<String, Any?> {
+        val attrs = LinkedHashMap<String, Any?>(16)
+        attrs["platform"] = "android"
+        attrs["os_version"] = safe("unknown") { Build.VERSION.RELEASE ?: "unknown" }
+        attrs["api_level"] = Build.VERSION.SDK_INT
+        attrs["manufacturer"] = safe("unknown") { Build.MANUFACTURER ?: "unknown" }
+        attrs["model"] = safe("unknown") { Build.MODEL ?: "unknown" }
+        attrs["app_version"] = appVersion
+        attrs["app_build"] = appBuild
+        buildId?.let { attrs["build_id"] = it } // right after app_build; no key at all when there is none
+        attrs["screen"] = screen()
+        attrs["locale"] = safe("unknown") { Locale.getDefault().toLanguageTag() }
+        attrs["tz"] = safe("unknown") { TimeZone.getDefault().id }
+        attrs["network"] = network()
+        attrs["is_emulator"] = isEmulator()
+        attrs["sdk_version"] = SdkInfo.VERSION
+        return attrs
+    }
 
     fun envelopeContext(environment: String): Map<String, Any?> = linkedMapOf(
         "environment" to environment,

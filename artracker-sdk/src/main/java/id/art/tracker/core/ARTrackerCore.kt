@@ -107,6 +107,8 @@ internal class ARTrackerCore(
      * thread); null = the real one, which exists only on API 24-29 (from API 30 `ApplicationExitInfo` reports ANRs).
      */
     private val anrWatchdogFactory: ((onAnr: (Long, Array<StackTraceElement>) -> Unit) -> AnrWatchdog?)? = null,
+    /** Reads the manifest build id (tests inject one); runs once, on the SDK thread. */
+    private val buildIdReader: (android.content.Context) -> String? = BuildId::read,
 ) {
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
@@ -137,10 +139,17 @@ internal class ARTrackerCore(
     @Volatile
     private var crashAppVersion: String? = config.appVersion?.takeIf { it.isNotBlank() }
 
+    /**
+     * The manifest build id, copied here by the first background task. The crash handler reads only this volatile: it
+     * runs on a dying thread and must never wait for the PackageManager. A crash before it is set has no `build_id`.
+     */
+    @Volatile
+    private var crashBuildId: String? = null
+
     private var crashHandler: CrashHandler? = null
 
     /** Lazy: building it may query the PackageManager, which init must not do on the main thread. */
-    val device: DeviceContext by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { DeviceContext(app, config.appVersion) }
+    val device: DeviceContext by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { DeviceContext(app, config.appVersion, buildIdReader) }
 
     /** User id to stamp on the `session_end` of a session that `reset()` is just closing (user already cleared). */
     @Volatile
@@ -658,6 +667,7 @@ internal class ARTrackerCore(
             )
             crashAppVersion = device.appVersion
         }.onFailure { SdkLog.w("saving transport config failed", it) }
+        runCatching { crashBuildId = device.buildId }.onFailure { SdkLog.w("reading the build id failed", it) }
         return runCatching { queue.pendingCount() > 0 }.getOrDefault(false)
     }
 

@@ -80,6 +80,12 @@ class ARTrackerCoreTest {
         core.start()
     }
 
+    private fun startCoreWithBuildId(reader: (android.content.Context) -> String?) {
+        val core = ARTrackerCore(app, configWith(), FakeClock(1_700_000_000_000L), buildIdReader = reader)
+        ARTrackerCore.install(core)
+        core.start()
+    }
+
     @Before
     fun setUp() {
         ARTracker.resetForTest()
@@ -121,6 +127,27 @@ class ARTrackerCoreTest {
 
     private fun replayBatch(session: String = "session-xyz-1") =
         NewReplayBatch(session, byteArrayOf(1, 2, 3), 1, 1_000, 2_000, false, null, "test")
+
+    @Test
+    fun sessionStartOfTheRunCarriesTheBuildId() {
+        startCoreWithBuildId { "git-abc" }
+        ProcessLifecycleTestUtil.start()
+
+        val start = settle().named("session_start").first()
+
+        assertEquals("git-abc", start.attributes["build_id"])
+    }
+
+    @Test
+    fun initDoesNotReadTheBuildIdOnTheMainThread() {
+        val loopers = CopyOnWriteArrayList<Looper?>()
+        startCoreWithBuildId { loopers += Looper.myLooper(); "git-abc" }
+        ProcessLifecycleTestUtil.start()
+        settle()
+
+        assertTrue("the reader ran", loopers.isNotEmpty())
+        assertTrue("never on the main looper", loopers.none { it === Looper.getMainLooper() })
+    }
 
     @Test
     fun optOut_clearsStoredReplayBatches() {
