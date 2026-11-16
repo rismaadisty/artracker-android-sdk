@@ -1057,5 +1057,53 @@ class ReplayControllerTest {
         assertEquals(1, frameCount())
     }
 
+    @Test
+    fun dialogShownInDormant_capturesOnce() {
+        val activity = startDormant()
+        val frames = frameCount()
+
+        android.app.AlertDialog.Builder(activity).setMessage("Session expiring").show()
+        // A device tells the activity window it lost focus to the dialog; that is the cue to look again.
+        activity.window.callback.onWindowFocusChanged(false)
+        idle(200)
+        dispatcher.runAll()
+        flushChunks()
+        assertEquals(frames, frameCount()) // inside the 300 ms debounce
+        idle(200)
+        dispatcher.runAll()
+        flushChunks()
+        assertEquals(frames + 1, frameCount())
+
+        advanceBoth(5_000) // the capture found the dialog's window itself: no second capture for the same dialog
+        flushChunks()
+        assertEquals(frames + 1, frameCount())
+        assertEquals(true, schedulerField("statePaused"))
+    }
+
+    @Test
+    fun manualCapture_inDormant_immediate() {
+        startDormant()
+        val frames = frameCount()
+
+        ARTracker.captureReplayFrame("checkout summary shown")
+        idle(0)
+        dispatcher.runAll()
+        flushChunks()
+
+        assertEquals(frames + 1, frameCount())
+        assertEquals(true, schedulerField("statePaused")) // a manual capture never wakes the lifecycle
+    }
+
+    @Test
+    fun customIdleThresholds_areUsed() {
+        startCore(ReplayConfig(enabled = true, sampleRate = 1.0, idleAfterMs = 5_000, dormantAfterMs = 8_000))
+        textActivity()
+        capture()
+        advanceBoth(6_000)
+        assertEquals(0.2, schedulerField("stateRate") as Double, 0.0)
+        advanceBoth(3_000)
+        assertEquals(true, schedulerField("statePaused"))
+    }
+
     // endregion
 }

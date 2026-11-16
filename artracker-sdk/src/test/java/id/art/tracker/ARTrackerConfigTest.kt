@@ -181,4 +181,19 @@ class ARTrackerConfigTest {
         assertTrue(errors(500).none { it.contains("sampleIntervalMs") })
         assertTrue(errors(10_000).none { it.contains("sampleIntervalMs") })
     }
+
+    @Test
+    fun replayIdleThresholdValidation() {
+        assertEquals(30_000L, ReplayConfig().idleAfterMs)
+        assertEquals(180_000L, ReplayConfig().dormantAfterMs)
+        assertTrue(config(replay = ReplayConfig(idleAfterMs = 5_000, dormantAfterMs = 5_001)).validate().isEmpty())
+
+        val tooShort = config(replay = ReplayConfig(idleAfterMs = 4_999)).validate()
+        assertTrue(tooShort.toString(), "replay.idleAfterMs must be >= 5000" in tooShort)
+
+        val notAfterIdle = config(replay = ReplayConfig(idleAfterMs = 30_000, dormantAfterMs = 30_000)).validate()
+        assertTrue(notAfterIdle.toString(), "replay.dormantAfterMs must be > replay.idleAfterMs" in notAfterIdle)
+        val before = config(replay = ReplayConfig(idleAfterMs = 30_000, dormantAfterMs = 10_000)).validate()
+        assertTrue(before.toString(), "replay.dormantAfterMs must be > replay.idleAfterMs" in before)
+    }
 }

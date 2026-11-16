@@ -151,6 +151,16 @@ public object ARTracker {
         withCore("stopReplay") { it.stopReplay() }
     }
 
+    /**
+     * Tells session replay that something important just changed on screen (a custom overlay, a state the SDK cannot
+     * see): a frame is captured now, whatever the capture state (also while the user is idle). Does nothing when
+     * replay is not recording. [reason] is only logged at debug level and is never sent. Safe from any thread.
+     */
+    @JvmStatic
+    public fun captureReplayFrame(reason: String) {
+        withCore("captureReplayFrame") { it.captureReplayFrame(reason) }
+    }
+
     /** True after a successful [init]. */
     @JvmStatic
     public fun isInitialized(): Boolean = ARTrackerCore.instanceOrNull() != null

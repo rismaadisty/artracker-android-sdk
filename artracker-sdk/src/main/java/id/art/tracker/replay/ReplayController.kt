@@ -15,6 +15,7 @@ import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.replay.capture.CaptureActivityGovernor
 import id.art.tracker.replay.capture.CaptureState
 import id.art.tracker.replay.capture.FrameScheduler
+import id.art.tracker.replay.capture.ImeVisibilityWatcher
 import id.art.tracker.replay.capture.RootViewLocator
 import id.art.tracker.replay.capture.TriggerKind
 import id.art.tracker.replay.screenshot.ByteBudgetGovernor
@@ -96,7 +97,9 @@ internal class ReplayController(
     private val dormantFlushRunnable = Runnable { onDormantFlush() }
 
     /** Active / Idle / Dormant lifecycle driven by real user input (named apart from the byte-budget [governor]). */
-    private val captureGovernor = CaptureActivityGovernor(baseFps)
+    private val captureGovernor =
+        CaptureActivityGovernor(baseFps, replayConfig.idleAfterMs, replayConfig.dormantAfterMs)
+    private val imeWatcher = ImeVisibilityWatcher { handleTrigger(TriggerKind.KEYBOARD) }
     private var appliedState = CaptureState.ACTIVE
 
     // Last screen name -> its sanitized href: the redactor regexes must not run on the main thread every frame.
@@ -409,11 +412,13 @@ internal class ReplayController(
         for (root in RootViewLocator.roots(currentActivity?.get())) attachRoot(root)
     }
 
-    private fun attachRoot(root: View) {
+    /** True if [root] was not attached yet. */
+    private fun attachRoot(root: View): Boolean {
         attachedRoots.removeAll { it.get() == null }
-        if (attachedRoots.any { it.get() === root }) return
+        if (attachedRoots.any { it.get() === root }) return false
         scheduler.attach(root)
         attachedRoots.add(WeakReference(root))
+        return true
     }
 
     private fun detachRoot(root: View) {
@@ -424,18 +429,25 @@ internal class ReplayController(
     private fun wrapTouch(activity: Activity) {
         val window = runCatching { activity.window }.getOrNull() ?: return
         val density = runCatching { activity.resources.displayMetrics.density }.getOrDefault(1f).takeIf { it > 0f } ?: 1f
-        TouchRecorder.bindReplay(window, { kind, x, y -> onTouch(kind, x, y, density) }, null) ?: return
+        TouchRecorder.bindReplay(
+            window,
+            { kind, x, y -> onTouch(kind, x, y, density) },
+            { handleTrigger(TriggerKind.WINDOW) }, // focus moved to / came back from a dialog or another window
+        ) ?: return
+        runCatching { imeWatcher.attach(window.decorView) }
         if (wrappedWindows.none { it.get() === window }) wrappedWindows.add(WeakReference(window))
     }
 
     private fun unwrapTouch(window: Window) {
         TouchRecorder.unbindReplay(window)
+        runCatching { imeWatcher.detach(window.decorView) }
         wrappedWindows.removeAll { it.get() == null || it.get() === window }
     }
 
     private fun unwrapAllTouch() {
         for (ref in wrappedWindows) ref.get()?.let(TouchRecorder::unbindReplay)
         wrappedWindows.clear()
+        imeWatcher.detachAll()
     }
 
     // endregion
@@ -453,11 +465,15 @@ internal class ReplayController(
         val activity = currentActivity?.get()
         val roots = RootViewLocator.roots(activity)
         if (roots.isEmpty()) return
-        for (root in roots) attachRoot(root) // new dialog / popup windows
+        var newWindow = false
+        for (root in roots) if (attachRoot(root)) newWindow = true // new dialog / popup windows
         val screen = core.screens.currentScreen
         val href = hrefFor(screen)
         val force = forceFullNext
         forceFullNext = false
+        // A window we did not know about: look again once it has rendered. Not after a forced (trigger) capture,
+        // which already shows it: a dialog must not cost two frames.
+        if (newWindow && !force) handleTrigger(TriggerKind.WINDOW)
         val density = roots[0].resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
         screenshot.capturer.capture(roots, activity?.window, core.clock.nowMs()) { raw ->
             if (raw == null) {

@@ -31,6 +31,7 @@ internal class CoreHttpReporter(
             val host = record.host.lowercase(Locale.ROOT)
             if (network.ignoreHosts.any { it.lowercase(Locale.ROOT) == host }) return
             if (isSdkEndpoint(record, core.config.endpoint)) return
+            core.onHttpCompleted() // replay: the response is probably on screen soon (before sampling: it is not a log)
 
             val message = "${record.method} ${pathOf(record.url)} -> ${record.status ?: "error"}"
             val breadcrumbData = LinkedHashMap<String, Any?>(3)
