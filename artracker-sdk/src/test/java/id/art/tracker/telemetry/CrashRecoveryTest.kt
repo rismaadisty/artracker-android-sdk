@@ -377,6 +377,22 @@ class CrashRecoveryTest {
     }
 
     @Test
+    fun recoveredCrash_getsNoGlobals() {
+        leaveARealCrashFile()
+        startServer()
+        ARTracker.init(context, config(server.url("/").toString().trimEnd('/')))
+        ARTracker.setGlobalProperties(mapOf("tenant" to "acme")) // this process's globals, not the crashed one's
+        ARTracker.track("after")
+        ARTracker.flush()
+        awaitIdle()
+
+        val sent = sentItems()
+
+        assertFalse(sent.single { it.getString("name") == "crash" }.getJSONObject("attributes").has("tenant"))
+        assertEquals("acme", sent.single { it.getString("name") == "after" }.getJSONObject("attributes").getString("tenant"))
+    }
+
+    @Test
     fun throwingBeforeSendKeepsTheOriginalCrash() {
         leaveARealCrashFile()
 

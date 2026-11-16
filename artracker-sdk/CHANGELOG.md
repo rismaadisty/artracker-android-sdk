@@ -16,6 +16,12 @@ versions follow semantic versioning.
   numeric field without a `ContentType` is still masked only by `maskAllInputs`.
 - View fields with the androidx autofill hints `phoneNumber`, `phoneNumberDevice` and `phoneNational` are now masked
   too (until now only the View constant `phone` was).
+- **Global properties.** Attributes set once are merged into every event, log and session item (not `perf.samples`)
+  before `beforeSend`; an item's own attribute wins on a key conflict. They are redacted like any attribute, one entry
+  at a time, so a hostile value costs only its own entry, and they can never push an item's own attributes out of the
+  24 KB budget. Crash, ANR and native crash items never carry them (they are sent by a later process).
+  `ARTracker.setGlobalProperties(map)` replaces the whole set and `clearGlobalProperties()` removes it; both are in memory
+  only (set them again after every `init`) and `reset()` does not clear them.
 - **Rage tap detection in session replay.** Three or more taps within 1 s, each within 24 dp of the first, flag the replay
   chunk they land in, and the chunk is acknowledged with `has_rage_click = true` (it was always `false` before). Only
   the first finger's `DOWN` counts, so a pinch is never a rage tap. The replay queue database moves to version 4;

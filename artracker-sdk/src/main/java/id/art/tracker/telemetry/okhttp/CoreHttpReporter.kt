@@ -52,7 +52,7 @@ internal class CoreHttpReporter(
             record.responseBytes?.let { attrs["res_bytes"] = it }
             record.protocol?.let { attrs["protocol"] = it }
             record.error?.let { attrs["error"] = sanitizeError(it) }
-            core.pipeline.enqueue(core.items.log(record.level(), "http_request", message, attrs))
+            core.emit(core.items.log(record.level(), "http_request", message, attrs)) // through emit: it adds the globals
         } catch (t: Throwable) {
             SdkLog.w("reporting an http request failed", t)
         }

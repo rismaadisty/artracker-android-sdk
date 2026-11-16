@@ -190,6 +190,8 @@ ARTracker.captureException(throwable, handled = true)
 ARTracker.flush()
 ARTracker.reset()                                          // logout: user_id hilang, sesi baru
 ARTracker.optOut(true) / ARTracker.startReplay() / ARTracker.stopReplay()
+ARTracker.setGlobalProperties(mapOf("tenant" to "acme"))   // ikut di setiap event/log/session berikutnya, hanya di memori
+ARTracker.clearGlobalProperties()                            // reset() tidak menghapusnya
 
 // OkHttp
 OkHttpClient.Builder().addInterceptor(ARTrackerOkHttpInterceptor()).build()
@@ -203,6 +205,7 @@ Modifier.artrackerMask() / Modifier.artrackerUnmask()
 - Semua fungsi sebelum `init()` menjadi no-op dengan warning, bukan exception.
 - `props`: `Map<String, Any?>` dengan nilai primitif, `List`, `Map`, atau `Date`. Nilai lain di-`toString()`. Kedalaman maks 6, maks 1000 node, hasil ≤24 KB.
 - `beforeSend: ((Item) -> Item?)?` disediakan sebagai hook terakhir untuk redaksi kustom atau drop.
+- Global properties: snapshot diambil saat enqueue, digabung di thread pipeline sebelum `beforeSend` (key item menang dan didahulukan untuk anggaran 24 KB). Tidak berlaku untuk item PERF, exit ANR/native proses sebelumnya, dan crash yang dipulihkan (jadi tidak ada item crash/ANR/native crash yang membawanya).
 
 ---
 
@@ -287,6 +290,7 @@ Port aturan web SDK agar konsisten:
 - Key sensitif (`password|passwd|secret|token|authorization|cookie|api_key|card|cvv|pin|otp|ssn`) → `"[redacted]"` (sama persis dengan web SDK).
 - Nilai: email, nomor kartu (lolos Luhn), JWT, dan `Bearer …` → di-redaksi.
 - URL (http_request, href replay): query param sensitif → `[redacted]`, fragment dibuang.
+- Global properties divet per entri sekali per snapshot: entri yang gagal di-redaksi (nilai dengan `toString()` jahat) dibuang tanpa menjatuhkan item lain, total dibatasi `MAX_BYTES`, dan nilainya sampai ke `beforeSend` dalam bentuk ter-redaksi.
 - Berlaku untuk `track/identify/log/captureException`, breadcrumbs, dan atribut http. Chunk replay **tidak** melewati redaksi ini (pikselnya sudah di-mask di lapis 1), hanya nama layar tiap frame yang disanitasi (`ReplayHref`: redaksi, id path, URL-safe).
 
 ---

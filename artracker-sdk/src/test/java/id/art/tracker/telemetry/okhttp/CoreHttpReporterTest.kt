@@ -120,6 +120,16 @@ class CoreHttpReporterTest {
         HttpRecord("GET", "http://127.0.0.1/x", "127.0.0.1", status, 12, null, null, "http/1.1", null)
 
     @Test
+    fun httpRequestItems_carryTheGlobalProperties() {
+        init()
+        ARTracker.setGlobalProperties(mapOf("tenant" to "acme"))
+
+        call(appUrl("/hello"))
+
+        assertEquals("acme", settle().single().attributes["tenant"])
+    }
+
+    @Test
     fun realCall_createsHttpItemAndBreadcrumb() {
         init()
 
