@@ -100,6 +100,7 @@ artracker-sdk/src/main/java/id/art/tracker/
 │   ├─ CrashHandler.kt          Thread.UncaughtExceptionHandler (chain ke handler lama)
 │   ├─ CrashStore.kt            Tulis/baca file crash secara atomik
 │   ├─ ExitInfoCollector.kt     ApplicationExitInfo (API 30+): ANR & native crash sesi lalu
+│   ├─ AnrWatchdog.kt           Watchdog main thread (API 24–29, foreground saja)
 │   ├─ Breadcrumbs.kt           Ring buffer (screen, tap, http, log)
 │   └─ okhttp/ARTrackerOkHttpInterceptor.kt
 └─ transport/
@@ -306,6 +307,7 @@ Port aturan web SDK agar konsisten:
 3. Guard re-entrancy: bila handler sendiri melempar, langsung delegasikan ke handler lama.
 4. Pada `init()` berikutnya: file crash diubah menjadi item `type:"log"`, `level:"fatal"`, `name:"crash"`, `message:"<Class>: <msg>"`, dimasukkan ke SQLite, lalu file dihapus. Item crash diberi **prioritas tertinggi** di batcher dan tidak pernah di-evict.
 5. `ExitInfoCollector` (API 30+): `ActivityManager.getHistoricalProcessExitReasons` untuk `REASON_ANR`, `REASON_CRASH_NATIVE`, dan `REASON_LOW_MEMORY` sejak timestamp terakhir yang diproses → `log/fatal` `name:"anr"` / `"native_crash"` (trace ANR dipotong 16 KB).
+5b. API 24–29: `AnrWatchdog` mem-post tick ke main thread tiap 1 s; tick yang belum diproses setelah 5 s dilaporkan sekali per episode (tidak saat debugger terpasang; watchdog yang bangun terlambat >2 s me-rebase episode). Hanya berjalan di foreground.
 6. `fingerprint = sha1(exception_class + 5 frame teratas)` untuk dedup di sisi SDK (maks 10 error identik per sesi).
 7. Stack yang sudah di-R8 dikirim apa adanya + `attributes.build_id` (diinjeksi via plugin di masa depan). Symbolication di luar scope.
 
@@ -428,6 +430,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | Sesi | `session` | `session_start` / `session_end` | metadata perangkat |
 | Replay | *(bukan item ingest)* | chunk `artracker-screen-v1` lewat Session Replay API | ≤5 MiB gzip per upload (chunk 2 MB) |
 | Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya |
+| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, dilaporkan selagi app masih berjalan |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | dari `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
 | HTTP | `log` | `info`/`warn`/`error`, name `http_request` | |

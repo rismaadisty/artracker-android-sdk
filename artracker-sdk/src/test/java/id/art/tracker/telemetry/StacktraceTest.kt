@@ -123,4 +123,70 @@ class StacktraceTest {
         assertEquals("java.lang.RuntimeException: boom", Stacktrace.summary(RuntimeException("boom")))
         assertEquals("java.lang.RuntimeException", Stacktrace.summary(RuntimeException()))
     }
+
+    // region raw frames (the watchdog has the main thread's frames, not a Throwable)
+
+    private fun frame(cls: String, method: String = "run", line: Int = 1) = StackTraceElement(cls, method, "$cls.kt", line)
+
+    @Test
+    fun formatFramesStartsWithTheHeaderAndListsFrames() {
+        val text = Stacktrace.formatFrames(
+            "ANR: main thread blocked for 5000 ms",
+            arrayOf(StackTraceElement("com.host.Feed", "load", "Feed.kt", 42)),
+        )
+
+        assertEquals("ANR: main thread blocked for 5000 ms\n\tat com.host.Feed.load(Feed.kt:42)", text)
+    }
+
+    @Test
+    fun formatFramesStaysWithinTheBudget() {
+        val frames = Array(5_000) { frame("com.example.Deep$it", "method$it", it) }
+
+        val text = Stacktrace.formatFrames("ANR: main thread blocked for 9000 ms", frames)
+
+        assertTrue(Stacktrace.utf8Size(text) <= Stacktrace.MAX_BYTES)
+        assertTrue(text.endsWith("\t... [truncated]"))
+    }
+
+    @Test
+    fun formatFramesWithNoFramesIsJustTheHeader() {
+        assertEquals("ANR", Stacktrace.formatFrames("ANR", emptyArray()))
+    }
+
+    @Test
+    fun fingerprintFramesIgnoresLineNumbers() {
+        val a = arrayOf(frame("com.host.Feed", "load", 10), frame("com.host.Repo", "get", 20))
+        val b = arrayOf(frame("com.host.Feed", "load", 99), frame("com.host.Repo", "get", 1))
+
+        assertEquals(Stacktrace.fingerprintFrames("anr", a), Stacktrace.fingerprintFrames("anr", b))
+    }
+
+    @Test
+    fun fingerprintFramesUsesOnlyTheTopFiveFrames() {
+        val base = Array(6) { frame("com.host.C$it", "m$it") }
+        val sixthDiffers = base.copyOf().also { it[5] = frame("com.host.Other", "m5") }
+        val firstDiffers = base.copyOf().also { it[0] = frame("com.host.Other", "m0") }
+
+        assertEquals(Stacktrace.fingerprintFrames("anr", base), Stacktrace.fingerprintFrames("anr", sixthDiffers))
+        assertNotEquals(Stacktrace.fingerprintFrames("anr", base), Stacktrace.fingerprintFrames("anr", firstDiffers))
+        assertNotEquals("the kind is part of it", Stacktrace.fingerprintFrames("anr", base), Stacktrace.fingerprintFrames("crash", base))
+    }
+
+    @Test
+    fun fingerprintOfAThrowableIsUnchanged() {
+        val t = deepTrace(8)
+
+        assertEquals(Stacktrace.fingerprintFrames(t.javaClass.name, t.stackTrace), Stacktrace.fingerprint(t))
+        // Pinned against the algorithm written out by hand, so a refactor cannot move every fingerprint at once.
+        val md = java.security.MessageDigest.getInstance("SHA-1")
+        md.update(t.javaClass.name.toByteArray(Charsets.UTF_8))
+        for (i in 0 until 5) {
+            md.update('\n'.code.toByte())
+            md.update((t.stackTrace[i].className + "." + t.stackTrace[i].methodName).toByteArray(Charsets.UTF_8))
+        }
+        val expected = md.digest().joinToString("") { "%02x".format(it) }
+        assertEquals(expected, Stacktrace.fingerprint(t))
+    }
+
+    // endregion
 }
