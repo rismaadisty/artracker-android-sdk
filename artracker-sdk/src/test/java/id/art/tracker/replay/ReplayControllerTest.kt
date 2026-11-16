@@ -103,7 +103,10 @@ class ReplayControllerTest {
         beforeSend = BeforeSend { it.also(seen::add) },
     )
 
-    /** A started core whose replay controller runs its background work on [dispatcher]. */
+    /**
+     * A started core whose replay controller runs its background work on [dispatcher]. The cold start tracker is off:
+     * its real first-frame hook adds a draw listener of its own, and these tests count the controller's listeners.
+     */
     private fun startCore(
         replay: ReplayConfig = ReplayConfig(enabled = true, sampleRate = 1.0),
         useDefaultFactory: Boolean = false,
@@ -111,13 +114,13 @@ class ReplayControllerTest {
     ): ARTrackerCore {
         val cfg = config(replay)
         core = if (useDefaultFactory) {
-            ARTrackerCore(app, cfg, clock, replaySink = sink)
+            ARTrackerCore(app, cfg, clock, replaySink = sink, appStartFactory = { _, _ -> null })
         } else {
             ARTrackerCore(app, cfg, clock, replayFactory = { c, handler ->
                 testReplayController(
                     c, handler, dispatcher, testScreenshotKit(c, handler, sink), { id, rate -> sampler(id, rate) },
                 )
-            }, replaySink = sink)
+            }, replaySink = sink, appStartFactory = { _, _ -> null })
         }
         ARTrackerCore.install(core)
         core.start()

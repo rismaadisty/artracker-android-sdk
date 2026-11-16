@@ -1,10 +1,12 @@
 package id.art.tracker.core
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.annotation.VisibleForTesting
@@ -15,6 +17,9 @@ import id.art.tracker.TelemetryItem
 import id.art.tracker.telemetryItemFromJson
 import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.lifecycle.AppLifecycleObserver
+import id.art.tracker.lifecycle.AppStart
+import id.art.tracker.lifecycle.AppStartTracker
+import id.art.tracker.lifecycle.DecorViewFirstFrame
 import id.art.tracker.lifecycle.NavTracker
 import id.art.tracker.lifecycle.ScreenTracker
 import id.art.tracker.perf.AndroidDeviceProbe
@@ -91,6 +96,11 @@ internal class ARTrackerCore(
     private val perfFactory: ((ARTrackerCore) -> PerfMonitor)? = null,
     /** The wait between two samples; tests inject one they control instead of real time. */
     private val perfDelay: suspend (Long) -> Unit = { delay(it) },
+    /**
+     * Builds the cold start tracker from the two callbacks the core gives it (tests inject one with a fake first-frame
+     * hook and clock); null = the real one, measured from the process start to the first drawn frame.
+     */
+    private val appStartFactory: ((onAppStart: (AppStart) -> Unit, onDone: () -> Unit) -> AppStartTracker?)? = null,
 ) {
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
@@ -376,12 +386,55 @@ internal class ARTrackerCore(
             // Items left by a previous run (including a crash) are sent right away; a fresh queue is not flushed.
             if (leftoverItems) pipeline.flushNow()
         }
+        startAppStartTracker() // before the Activity tracker: it must hear the very first onActivityCreated
         app.registerActivityLifecycleCallbacks(activityTracker)
         // Before the process observer: the foreground it replays then finds the controller in place.
         if (config.replay.enabled) ensureReplay()?.start(manual = false)
         if (config.performance.enabled) startPerformance()
         registerProcessObserver()
         killSwitch.disabledUntilMs().takeIf { it > 0L }?.let(::scheduleResume)
+    }
+
+    /** One-shot cold start measurement; not created at all while the SDK is disabled. */
+    @Volatile
+    private var appStart: AppStartTracker? = null
+
+    @androidx.annotation.VisibleForTesting
+    internal val appStartTracker: AppStartTracker? get() = appStart
+
+    private fun startAppStartTracker() {
+        if (isDisabled()) return
+        runCatching {
+            val onDone = { appStart?.let { runCatching { app.unregisterActivityLifecycleCallbacks(it) } }; Unit }
+            val tracker = (appStartFactory ?: ::createAppStartTracker)(::reportAppStart, onDone) ?: return@runCatching
+            appStart = tracker
+            app.registerActivityLifecycleCallbacks(tracker)
+        }.onFailure { SdkLog.w("app start measurement unavailable", it) }
+    }
+
+    /**
+     * The real tracker. "In the foreground at init" is read once from the process importance (a binder call, no disk
+     * I/O): a process started by a broadcast, a service or WorkManager is not, and reports no `app_start`.
+     */
+    private fun createAppStartTracker(onAppStart: (AppStart) -> Unit, onDone: () -> Unit): AppStartTracker {
+        val foregroundAtInit = runCatching {
+            val info = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(info)
+            info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        }.getOrDefault(false)
+        return AppStartTracker(
+            processStartUptimeMs = Process.getStartUptimeMillis(),
+            startedInForeground = foregroundAtInit,
+            uptime = SystemClock::uptimeMillis,
+            firstFrame = DecorViewFirstFrame,
+            onAppStart = onAppStart,
+            onDone = onDone,
+        )
+    }
+
+    private fun reportAppStart(start: AppStart) {
+        if (isDisabled()) return
+        emit(items.event("app_start", linkedMapOf("type" to "cold", "duration_ms" to start.durationMs, "first_screen" to start.firstScreen)))
     }
 
     /** Creates the monitor and registers the memory callbacks; nothing else (no thread, no loop) until foreground. */
@@ -760,6 +813,7 @@ internal class ARTrackerCore(
 
     internal fun onBackground() {
         foreground = false
+        runCatching { appStart?.onAppBackground() } // no app_start for a start that never reached its first frame
         // Stops capture, unwraps windows and flushes the open replay chunk: nothing replay-related runs in background.
         runCatching { replay?.onAppBackground() }
         val active = !isDisabled()
@@ -806,6 +860,7 @@ internal class ARTrackerCore(
         lifecycleStopped = true
         killSwitch.onTrip = null
         onMain { mainHandler.removeCallbacks(resumeAfterTrip) }
+        runCatching { appStart?.let(app::unregisterActivityLifecycleCallbacks) }
         runCatching { app.unregisterActivityLifecycleCallbacks(activityTracker) }
         runCatching { activityTracker.detachAll() }
         runCatching { navTracker.clear() }
