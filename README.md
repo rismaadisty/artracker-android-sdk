@@ -394,6 +394,7 @@ while it kills cached processes).
 | `identify()` | `event` | `$identify` | traits become attributes |
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
+| Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; once per process, only when the process was started to show an Activity |
 | Session | `session` | `session_start` / `session_end` | device metadata |
 | Replay | *(not an ingest item)* | `artracker-screen-v1` screenshot chunk, via the Session Replay API | at most 5 MiB gzipped per upload (chunks 2 MB) |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
@@ -434,6 +435,14 @@ Read these before shipping to production.
 
 **Behaviour**
 
+- `app_start` measures the **cold start** only: from the process start to the first drawn frame of the first Activity.
+  Warm and hot starts are not measured. A process that was started in the background (a broadcast, WorkManager, a
+  push) and opened by the user later reports nothing (a first Activity created more than 1 s after `init` is not a
+  start; the gap is taken from `init`, so a slow `Application.onCreate` does not hide a genuine slow start). Nothing is
+  reported either when `init` runs after the first Activity was created, when the first Activity finished or paused
+  before drawing and the next one is created more than 2 s later, when the process was not in the foreground at
+  `init` (this also covers a launch with the screen off or under the keyguard), and when the duration is above 60 s.
+  It is always on and has no setting.
 - Global properties apply to items enqueued **after** the call, and a call before `init` is ignored. **Crash, ANR and
   native crash items never carry them**: a JVM crash is written when the process dies and sent by the next process, and
   ANR / native crash exits are reported by a later process, whose properties do not describe them. If you need the

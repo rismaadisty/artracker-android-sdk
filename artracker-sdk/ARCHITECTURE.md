@@ -79,6 +79,7 @@ artracker-sdk/src/main/java/id/art/tracker/
 │   ├─ AppLifecycleObserver.kt  ProcessLifecycleOwner → foreground/background
 │   ├─ ActivityTracker.kt       ActivityLifecycleCallbacks → screen_view, window attach
 │   ├─ FragmentTracker.kt       FragmentLifecycleCallbacks (opsional, compileOnly)
+│   ├─ AppStartTracker.kt       Cold start → app_start (sekali per proses; DecorViewFirstFrame = frame pertama)
 │   └─ ComposeNavTracker.kt     helper NavController → screen_view (opsional)
 ├─ replay/
 │   ├─ ReplayController.kt      Start/stop, sampling, mengatur jadwal capture
@@ -145,6 +146,7 @@ artracker-sdk/src/main/java/id/art/tracker/
 | Proses foreground/background | `ProcessLifecycleOwner` (`lifecycle-process`) | `session`/`app_foreground`, `app_background`; memicu flush + jadwal WorkManager saat background; jeda replay |
 | Activity | `Application.ActivityLifecycleCallbacks` | `event`/`screen_view` `{screen, previous, type:"activity"}`; memberi tahu `ReplayController` bahwa root window berganti (→ frame berikutnya dipaksa terkirim) |
 | Fragment | `FragmentManager.FragmentLifecycleCallbacks` (recursive), didaftarkan di `onActivityCreated` bila activity adalah `FragmentActivity`. Dependensi `compileOnly` + cek kelas saat runtime | `screen_view` `{type:"fragment"}` |
+| Cold start | `AppStartTracker` (`Process.getStartUptimeMillis` → `OnDrawListener` frame pertama, lalu `postAtFrontOfQueue`) | `event` `app_start` `{type:"cold", duration_ms, first_screen}` |
 | Compose | Compose tidak punya lifecycle per layar. Disediakan `ARTracker.trackNavController(navController)` (listener `OnDestinationChangedListener`) **dan** `ARTracker.screen("Checkout")` manual | `screen_view` `{type:"compose"}` |
 
 Nama layar default: `activity.javaClass.simpleName`, bisa ditimpa lewat `@ARTrackerScreenName("…")` atau `config.screenNameResolver`.
@@ -422,6 +424,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | `identify()` | `event` | `$identify` | traits → attributes |
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
+| Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; sekali per proses, hanya bila proses dimulai untuk menampilkan Activity |
 | Sesi | `session` | `session_start` / `session_end` | metadata perangkat |
 | Replay | *(bukan item ingest)* | chunk `artracker-screen-v1` lewat Session Replay API | ≤5 MiB gzip per upload (chunk 2 MB) |
 | Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya |
