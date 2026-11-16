@@ -37,7 +37,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -150,6 +149,16 @@ class ReplayControllerTest {
             Triple("tick", schedulerHandler, field(scheduler, "tickRunnable")),
             Triple("soon", schedulerHandler, field(scheduler, "soonRunnable")),
         ).filter { (_, h, r) -> h.hasCallbacks(r as Runnable) }.map { it.first }
+    }
+
+    /** The core owns the input wrapper while an Activity is resumed; replay must leave no listener on it. */
+    private fun assertReplayNotBound(activity: Activity) {
+        val callback = activity.window.callback
+        if (callback !== activity) {
+            assertTrue("unexpected callback $callback", callback is TouchRecorder)
+            assertNull((callback as TouchRecorder).onTouch)
+            assertNull(callback.onFocusChanged)
+        }
     }
 
     private fun idle(ms: Long = 0) {
@@ -352,7 +361,7 @@ class ReplayControllerTest {
 
         assertTrue(batches().isEmpty())
         assertNull(core.replayController) // not even constructed
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
         assertEquals(0, drawListenerCount(activity.window.decorView))
     }
 
@@ -366,7 +375,7 @@ class ReplayControllerTest {
 
         assertTrue(batches().isEmpty())
         assertFalse(controller().isRunning)
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
     }
 
     @Test
@@ -404,7 +413,7 @@ class ReplayControllerTest {
 
         assertEquals(1, batches().size) // the open chunk was flushed
         assertFalse(controller().isRunning)
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
         assertEquals(0, drawListenerCount(activity.window.decorView))
         idle(10_000)
         settle()
@@ -419,7 +428,7 @@ class ReplayControllerTest {
         idle(6_000)
         settle()
         assertTrue(batches().isEmpty())
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
     }
 
     @Test
@@ -432,7 +441,7 @@ class ReplayControllerTest {
         settle()
         assertTrue(batches().isEmpty())
         assertFalse(controller().isRunning)
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
     }
 
     @Test
@@ -447,7 +456,7 @@ class ReplayControllerTest {
         settle()
 
         assertFalse(controller().isRunning)
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
         assertEquals(0, drawListenerCount(activity.window.decorView))
         assertEquals(0, dispatcher.pending)
         // Only SDK-owned callbacks: the global looper queue also holds unrelated posts (WorkManager, Robolectric).
@@ -534,7 +543,7 @@ class ReplayControllerTest {
         settle()
 
         assertFalse(controller().isRunning)
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
         assertEquals(0, drawListenerCount(activity.window.decorView))
         assertEquals(listOf(firstOnly), batches().map { it.sessionId }) // only the flushed first-session chunk
         idle(10_000)
@@ -629,7 +638,7 @@ class ReplayControllerTest {
         settle()
 
         assertFalse(controller().isRunning)
-        assertSame(activity, activity.window.callback)
+        assertReplayNotBound(activity)
         assertEquals(0, drawListenerCount(activity.window.decorView))
         assertTrue(batches().isEmpty()) // dropped, not uploaded into another 403
 

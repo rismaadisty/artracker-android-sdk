@@ -34,6 +34,7 @@ import id.art.tracker.perf.ProcSelfReader
 import id.art.tracker.perf.WindowListenerRegistry
 import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.replay.ReplayController
+import id.art.tracker.replay.touch.TouchRecorder
 import id.art.tracker.replay.ReplayControllerFactory
 import id.art.tracker.replay.ReplayIntake
 import id.art.tracker.replay.ReplaySink
@@ -227,6 +228,8 @@ internal class ARTrackerCore(
     private val windowListener = object : ActivityTracker.WindowListener {
         override fun onActivityResumed(a: Activity) {
             resumedActivity = WeakReference(a)
+            // Core-owned input observer: user activity counts even when replay is off or not sampled.
+            runCatching { TouchRecorder.install(a.window) { onUserActivity() } }
             replay?.onActivityResumed(a)
             extraWindowListeners.forEach { runCatching { it.onActivityResumed(a) } }
         }
@@ -234,6 +237,7 @@ internal class ARTrackerCore(
         override fun onActivityPaused(a: Activity) {
             if (resumedActivity?.get() === a) resumedActivity = null
             replay?.onActivityPaused(a)
+            runCatching { TouchRecorder.uninstall(a.window) }
             extraWindowListeners.forEach { runCatching { it.onActivityPaused(a) } }
         }
     }

@@ -336,17 +336,17 @@ internal class ReplayController(
     private fun wrapTouch(activity: Activity) {
         val window = runCatching { activity.window }.getOrNull() ?: return
         val density = runCatching { activity.resources.displayMetrics.density }.getOrDefault(1f).takeIf { it > 0f } ?: 1f
-        TouchRecorder.wrap(window) { kind, x, y -> onTouch(kind, x, y, density) } ?: return
+        TouchRecorder.bindReplay(window, { kind, x, y -> onTouch(kind, x, y, density) }, null) ?: return
         if (wrappedWindows.none { it.get() === window }) wrappedWindows.add(WeakReference(window))
     }
 
     private fun unwrapTouch(window: Window) {
-        TouchRecorder.unwrap(window)
+        TouchRecorder.unbindReplay(window)
         wrappedWindows.removeAll { it.get() == null || it.get() === window }
     }
 
     private fun unwrapAllTouch() {
-        for (ref in wrappedWindows) ref.get()?.let(TouchRecorder::unwrap)
+        for (ref in wrappedWindows) ref.get()?.let(TouchRecorder::unbindReplay)
         wrappedWindows.clear()
     }
 
