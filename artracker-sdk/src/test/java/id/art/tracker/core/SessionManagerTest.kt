@@ -63,6 +63,7 @@ class SessionManagerTest {
         m.onForeground()
         val old = m.currentId()
         clock.advance(5 * minute)
+        m.onUserActivity()
         m.onBackground()
         clock.advance(timeout + 1)
         m.onForeground()
@@ -311,5 +312,18 @@ class SessionManagerTest {
             m.currentId()
         }
         assertEquals(listOf(id), listener.starts)
+    }
+
+    @Test
+    fun backgrounding_doesNotCountAsUserInput() {
+        val m = manager()
+        m.onForeground()
+        val id = m.currentId()
+        clock.advance(45 * minute) // a keep-screen-on app, nobody touching it
+        m.onBackground()
+        clock.advance(2 * minute)
+        m.onForeground()
+        assertNotEquals(id, m.currentId())
+        assertEquals(listOf(id to 0L), listener.ends) // duration = last user input - start
     }
 }

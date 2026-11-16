@@ -537,4 +537,17 @@ class FrameSchedulerTest {
         assertEquals(1, captures)
         s.stop()
     }
+
+    @Test
+    fun repeatingTheSameStateFps_doesNotPostponeTheTick() {
+        val s = scheduler(baseFps = 1.0)
+        s.start()
+        s.markDirty()
+        repeat(5) { // e.g. a trigger every 250 ms re-applying the unchanged state
+            s.setStateFps(1.0)
+            advance(250)
+        }
+        assertEquals(1, captures) // the 1 s tick ran at t = 1 s
+        s.stop()
+    }
 }

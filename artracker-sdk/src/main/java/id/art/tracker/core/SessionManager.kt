@@ -91,10 +91,14 @@ internal class SessionManager(
         dispatch(events)
     }
 
+    /** Backgrounding is not user input: the last real input stays the reference for the timeout (persisted as is). */
     @Synchronized
     fun onBackground() {
         foreground = false
-        if (id != null) touch(clock.nowMs(), force = true)
+        if (id != null) {
+            lastPersistedActive = lastActive
+            store.putLong(KEY_LAST_ACTIVE, lastActive)
+        }
     }
 
     fun rotate() {

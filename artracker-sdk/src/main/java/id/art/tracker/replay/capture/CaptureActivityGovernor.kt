@@ -20,12 +20,14 @@ internal class CaptureActivityGovernor(
 
     private var lastInputMs = 0L
     private var lastNetworkAdmittedMs: Long? = null
+    private var lastErrorAdmittedMs: Long? = null
 
     /** Recording begins: ACTIVE, the clock of idleness starts now. */
     fun onStart(nowMs: Long) {
         state = CaptureState.ACTIVE
         lastInputMs = nowMs
         lastNetworkAdmittedMs = null
+        lastErrorAdmittedMs = null
     }
 
     /** User input. True if the state was IDLE or DORMANT, i.e. the caller must take a wake capture. */
@@ -63,15 +65,17 @@ internal class CaptureActivityGovernor(
      */
     fun admitTrigger(kind: TriggerKind, nowMs: Long): Long? {
         evaluate(nowMs)
-        if (kind == TriggerKind.NETWORK) {
+        if (kind == TriggerKind.NETWORK || kind == TriggerKind.ERROR) {
+            // ERROR shares the windows (own clock): a failing request is also an error log, and an app that logs
+            // errors in a loop must not turn Dormant into continuous capture.
             val windowMs = when (state) {
                 CaptureState.ACTIVE -> 0L
                 CaptureState.IDLE -> NETWORK_IDLE_WINDOW_MS
                 CaptureState.DORMANT -> NETWORK_DORMANT_WINDOW_MS
             }
-            val last = lastNetworkAdmittedMs
+            val last = if (kind == TriggerKind.NETWORK) lastNetworkAdmittedMs else lastErrorAdmittedMs
             if (last != null && nowMs - last < windowMs) return null
-            lastNetworkAdmittedMs = nowMs
+            if (kind == TriggerKind.NETWORK) lastNetworkAdmittedMs = nowMs else lastErrorAdmittedMs = nowMs
         }
         return when (kind) {
             TriggerKind.NETWORK -> NETWORK_DEBOUNCE_MS
@@ -82,9 +86,14 @@ internal class CaptureActivityGovernor(
 
     /** When [evaluate] will next change the state if no input arrives; null once DORMANT. */
     fun nextTransitionAtMs(): Long? = when (state) {
-        CaptureState.ACTIVE -> lastInputMs + idleAfterMs
-        CaptureState.IDLE -> lastInputMs + dormantAfterMs
+        CaptureState.ACTIVE -> saturatingAdd(lastInputMs, idleAfterMs)
+        CaptureState.IDLE -> saturatingAdd(lastInputMs, dormantAfterMs)
         CaptureState.DORMANT -> null
+    }
+
+    private fun saturatingAdd(a: Long, b: Long): Long {
+        val sum = a + b
+        return if (sum < a) Long.MAX_VALUE else sum
     }
 
     companion object {

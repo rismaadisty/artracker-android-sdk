@@ -187,9 +187,12 @@ class ReplayControllerTest {
     }
 
     /** Walks a freshly started controller (one frame taken) into DORMANT: no input for 3 minutes. */
+    private var dormantView: TextView? = null
+
     private fun startDormant(): Activity {
         startCore()
-        val (activity, _) = textActivity()
+        val (activity, tv) = textActivity()
+        dormantView = tv
         capture()
         advanceBoth(181_000)
         flushChunks()
@@ -955,6 +958,7 @@ class ReplayControllerTest {
         val frames = frameCount()
 
         repeat(3) { // three responses within 2 s coalesce into one capture
+            dormantView!!.text = "result ${clock.nowMs()}"
             controller().onTrigger(TriggerKind.NETWORK)
             advanceBoth(700)
         }
@@ -964,7 +968,8 @@ class ReplayControllerTest {
 
         advanceBoth(10_000) // the limiter window passed
         val polled = frameCount()
-        repeat(20) { // every 3 s for 60 s
+        repeat(20) { // every 3 s for 60 s, each response changes what is on screen
+            dormantView!!.text = "poll ${clock.nowMs()}"
             controller().onTrigger(TriggerKind.NETWORK)
             advanceBoth(3_000)
         }
@@ -995,6 +1000,7 @@ class ReplayControllerTest {
         startDormant()
         val frames = frameCount()
 
+        dormantView!!.text = "a new window changed the picture"
         controller().onTrigger(TriggerKind.WINDOW)
         advanceBoth(1_000)
         flushChunks()
@@ -1103,6 +1109,78 @@ class ReplayControllerTest {
         assertEquals(0.2, schedulerField("stateRate") as Double, 0.0)
         advanceBoth(3_000)
         assertEquals(true, schedulerField("statePaused"))
+    }
+
+    @Test
+    fun unchangedScreenPolling_inDormant_sendsNoDuplicateFrames() {
+        startDormant()
+        controller().onTrigger(TriggerKind.NETWORK) // the first trigger frame after the test's own chunk flush is new
+        advanceBoth(12_000) // ...and its chunk closes by the one-shot flush, which keeps the duplicate filter
+        settle()
+        val frames = frameCount()
+        val batchesBefore = batches().size
+
+        repeat(30) { // an API polled every 3 s whose result does not change the picture
+            controller().onTrigger(TriggerKind.NETWORK)
+            advanceBoth(3_000)
+        }
+        advanceBoth(12_000)
+        settle()
+
+        assertEquals(frames, frameCount())
+        assertEquals(batchesBefore, batches().size)
+    }
+
+    @Test
+    fun repeatedErrors_inDormant_areRateLimited_andTheChunkStillCloses() {
+        startDormant()
+        val frames = frameCount()
+        val batchesBefore = batches().size
+
+        repeat(10) { // a failing request every 2 s for 20 s
+            controller().noteError()
+            controller().onTrigger(TriggerKind.ERROR)
+            advanceBoth(2_000)
+        }
+        advanceBoth(11_000) // the one-shot close fired although triggers kept coming
+        settle()
+
+        assertTrue(batches().size > batchesBefore)
+        val taken = frameCount() - frames
+        assertTrue("taken=$taken", taken in 1..3)
+    }
+
+    @Test
+    fun lateInit_noActivityObserved_staysActiveAndKeepsCapturing() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get() // resumed before the SDK starts
+        activity.setContentView(TextView(activity).apply { text = "late" })
+        idle(50)
+        startCore()
+        idle(200)
+        dispatcher.runAll()
+
+        advanceBoth(200_000)
+        assertEquals(1.0, schedulerField("stateRate") as Double, 0.0) // no input can be seen: never idle
+        advanceBoth(31 * 60_000L, stepMs = 60_000)
+        flushChunks()
+        val frames = frameCount()
+        controller().onTrigger(TriggerKind.SCREEN)
+        advanceBoth(2_000)
+        flushChunks()
+        assertEquals(frames + 1, frameCount()) // the (unobservable) session is not treated as expired
+    }
+
+    @Test
+    fun anExtraWindowOnScreen_keepsCaptureActive() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        android.app.AlertDialog.Builder(activity).setMessage("Choose a plan").show()
+        advanceBoth(2_000) // a capture finds the dialog's window
+        advanceBoth(200_000) // the user scrolls inside it: input the activity window never sees
+
+        assertEquals(1.0, schedulerField("stateRate") as Double, 0.0)
+        assertEquals(false, schedulerField("statePaused"))
     }
 
     // endregion

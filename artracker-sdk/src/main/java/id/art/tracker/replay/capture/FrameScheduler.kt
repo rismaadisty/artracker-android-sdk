@@ -130,6 +130,9 @@ internal class FrameScheduler(
      * [markDirty] keep working); a value caps the tick period like [capFps], also below the 0.5 fps floor.
      */
     fun setStateFps(fps: Double?) {
+        val rate = fps?.takeIf { it.isFinite() && it > 0.0 }
+        // Re-applying the state we are already in must not re-post the tick: triggers do that often and would starve it.
+        if (if (fps == null) statePaused else (!statePaused && stateRate == rate)) return
         if (fps == null) {
             statePaused = true
             stateRate = null
@@ -137,7 +140,7 @@ internal class FrameScheduler(
             return
         }
         statePaused = false
-        stateRate = fps.takeIf { it.isFinite() && it > 0.0 }
+        stateRate = rate
         if (started) scheduleTick()
     }
 

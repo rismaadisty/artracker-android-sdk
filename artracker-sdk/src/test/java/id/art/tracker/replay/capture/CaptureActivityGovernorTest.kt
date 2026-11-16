@@ -127,4 +127,32 @@ class CaptureActivityGovernorTest {
         assertEquals(CaptureState.IDLE, g.evaluate(5_000))
         assertEquals(CaptureState.DORMANT, g.evaluate(6_000))
     }
+
+    @Test
+    fun errorRateLimit_idleAndDormant_isSeparateFromNetwork() {
+        val g = governor()
+        g.evaluate(180_000)
+        assertEquals(300L, g.admitTrigger(TriggerKind.ERROR, 180_000))
+        assertNull(g.admitTrigger(TriggerKind.ERROR, 182_000))
+        assertNull(g.admitTrigger(TriggerKind.ERROR, 189_999))
+        assertEquals(300L, g.admitTrigger(TriggerKind.ERROR, 190_000))
+        assertEquals(500L, g.admitTrigger(TriggerKind.NETWORK, 190_001)) // its own window
+
+        val idle = governor()
+        assertEquals(300L, idle.admitTrigger(TriggerKind.ERROR, 30_000))
+        assertNull(idle.admitTrigger(TriggerKind.ERROR, 34_999))
+        assertEquals(300L, idle.admitTrigger(TriggerKind.ERROR, 35_000))
+
+        val active = governor()
+        repeat(3) { assertEquals(300L, active.admitTrigger(TriggerKind.ERROR, it * 10L)) }
+    }
+
+    @Test
+    fun hugeThresholds_doNotOverflowTheNextTransition() {
+        val g = CaptureActivityGovernor(1.0, 30_000, Long.MAX_VALUE)
+        g.onStart(1_000)
+        assertEquals(CaptureState.IDLE, g.evaluate(40_000))
+        val next = g.nextTransitionAtMs()!!
+        assertTrue("next=$next", next > 40_000)
+    }
 }
