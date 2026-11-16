@@ -386,19 +386,26 @@ while it kills cached processes).
   main thread that has not responded for 5 s is reported once as `error` `anr` with `source: "watchdog"`, the
   main-thread stack (16 KB), the screen and the breadcrumbs. Not while a debugger is attached; stopped in the
   background; API 30+ keeps using `ApplicationExitInfo` only. Always on, no setting.
-- **Build id (for deobfuscation)**: set `<meta-data android:name="id.art.tracker.BUILD_ID" android:value="${artrackerBuildId}" />`
-  inside `<application>`; the SDK reads it once, in the background, and adds `build_id` to `session_start` (and to crash and
-  exit items, see below), so the backend can pick the R8 mapping of that build. In `app/build.gradle.kts`:
+- **Build id (for deobfuscation)**: put the id of your build in the manifest, inside `<application>`:
+  `<meta-data android:name="id.art.tracker.BUILD_ID" android:value="@string/artracker_build_id" />`. The SDK reads it
+  once, in the background, and adds `build_id` to `session_start` and to the crash and exit items (see above), so the
+  backend can pick the R8 mapping of that build. Fill the string from Gradle, in `app/build.gradle.kts`:
   ```kotlin
   val artrackerBuildId = providers.gradleProperty("artrackerBuildId")
       .orElse(providers.exec { commandLine("git", "rev-parse", "--short=12", "HEAD") }
           .standardOutput.asText.map { "git-" + it.trim() })
-  android { defaultConfig { manifestPlaceholders["artrackerBuildId"] = artrackerBuildId.get() } }
+  android { defaultConfig { resValue("string", "artracker_build_id", artrackerBuildId.get()) } }
   ```
-  (CI can pass `-PartrackerBuildId=<value>`.) Use a value that contains a non-hexadecimal letter (a prefix such as `git-`)
-  or a UUID: Android stores an all-digit value as an integer (leading zeros are lost) and one like `12e45` as a float,
-  which the SDK ignores. Use `android:value`, not `android:resource`. Absent or blank means no `build_id` field. Up to
-  128 characters. The same value must be used when the mapping is uploaded (backend side, not available yet).
+  (CI can pass `-PartrackerBuildId=<value>`; a build without git or a `.git` directory must pass it, otherwise the
+  Gradle configuration fails.) Why `@string` and not a literal `android:value`: Android turns a literal that looks like a
+  number into a number (`4512` or `0012` becomes the integer 4512 or 12, `12e45` a float, `0x1F` the integer 31, and a
+  long all-digit value such as `202611160930` may not be stored as an integer at all), so the SDK would see something
+  other than what you wrote and drops a float. A string resource always arrives as the text you wrote. Use an id that
+  contains a letter (a prefix such as `git-`) or a UUID. An id of up to 128 characters is sent as is; one that the
+  redaction would rewrite (a long run of digits that looks like a card or phone number, for example
+  `build-20261116093000` now and then) is **not sent** and a warning is logged, because a rewritten id would match no
+  mapping. Absent or blank means no `build_id` field. The same value must be used when the mapping is uploaded (backend
+  side, not available yet).
 - **Offline**: items are persisted in SQLite (`artracker.db`) up to 5 MB or 5000 rows (replay chunks are evicted first,
   crash items never) and dropped after 7 days. Batches are at most 50 items or 128 KB, gzip-compressed. Foreground flush
   every 10 s; when the app goes to background one WorkManager job (`CONNECTED` constraint) drains the queue.

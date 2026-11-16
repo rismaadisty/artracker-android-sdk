@@ -658,6 +658,9 @@ internal class ARTrackerCore(
 
     /** Returns true when items from an earlier run are waiting. Runs before the pipeline consumer ever starts. */
     private fun maintainQueueAndSaveTransportConfig(): Boolean {
+        // First of all: the crash handler only ever reads this volatile, so the sooner it is set the shorter the window in
+        // which a crash right after init goes out without a build id. Opening the database etc. comes after.
+        runCatching { crashBuildId = device.buildId }.onFailure { SdkLog.w("reading the build id failed", it) }
         // Only here: a batch still marked in-flight belongs to a dead process (never reset it elsewhere).
         runCatching { queue.resetOrphanedBatches() }
         runCatching { queue.purgeOlderThan(clock.nowMs() - RETENTION_MS) }
@@ -673,7 +676,6 @@ internal class ARTrackerCore(
             )
             crashAppVersion = device.appVersion
         }.onFailure { SdkLog.w("saving transport config failed", it) }
-        runCatching { crashBuildId = device.buildId }.onFailure { SdkLog.w("reading the build id failed", it) }
         return runCatching { queue.pendingCount() > 0 }.getOrDefault(false)
     }
 

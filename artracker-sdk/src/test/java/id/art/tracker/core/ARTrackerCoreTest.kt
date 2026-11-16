@@ -139,6 +139,21 @@ class ARTrackerCoreTest {
     }
 
     @Test
+    fun theBuildIdIsReadBeforeTheQueueDatabaseIsOpened() {
+        // The first background task reads it first, so a crash right after init has the shortest possible window
+        // without it (the crash handler never waits for it). Opening the database is the first slow thing that follows.
+        var databaseExistedAtRead: Boolean? = null
+        startCoreWithBuildId {
+            databaseExistedAtRead = app.getDatabasePath("artracker.db").exists()
+            "git-abc"
+        }
+        ProcessLifecycleTestUtil.start()
+        settle()
+
+        assertEquals(false, databaseExistedAtRead)
+    }
+
+    @Test
     fun initDoesNotReadTheBuildIdOnTheMainThread() {
         val loopers = CopyOnWriteArrayList<Looper?>()
         startCoreWithBuildId { loopers += Looper.myLooper(); "git-abc" }

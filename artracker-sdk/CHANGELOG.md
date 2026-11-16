@@ -21,7 +21,10 @@ versions follow semantic versioning.
   crash before the value is read has none; the crash handler never waits for it), to the watchdog `anr` items, and to `anr`
   / `native_crash` items from `ApplicationExitInfo`, except exits from before the last app update (they belong to another
   build). Absent or blank →
-  no field. See the README section "Build id".
+  no field. An id that the redaction of attribute values would rewrite (a long run of digits that looks like a card or
+  phone number) is not sent, with a warning, because it would match no mapping. Prefer
+  `android:value="@string/…"` over a literal so Android cannot turn the value into a number. See the README section
+  "Build id".
 - **ANR detection on Android 7-10 (API 24-29).** While the app is in the foreground a watchdog thread posts a tick to
   the main thread every second; a tick that is still unanswered after 5 s is reported once per episode (not while a
   debugger is attached; a watchdog that wakes more than 2 s late rebases the episode instead of reporting). Nothing runs

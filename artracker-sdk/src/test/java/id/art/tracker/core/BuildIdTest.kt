@@ -77,6 +77,20 @@ class BuildIdTest {
     }
 
     @Test
+    fun anIdTheRedactionWouldRewriteIsDropped() {
+        // The pipeline masks card-like digit runs in every attribute value: the id would arrive as "**** **** **** 1111"
+        // and match no mapping. Better no id than a wrong one.
+        assertNull(withValue { putString(key, "4111-1111-1111-1111") })
+    }
+
+    @Test
+    fun idsOfTheRecommendedShapesPassTheRedactionCheck() {
+        assertEquals("git-1a2b3c4d5e6f", withValue { putString(key, "git-1a2b3c4d5e6f") })
+        assertEquals("123e4567-e89b-12d3-a456-426614174000", withValue { putString(key, "123e4567-e89b-12d3-a456-426614174000") })
+        assertEquals("4512", withValue { putInt(key, 4512) })
+    }
+
+    @Test
     fun packageManagerFailureOmitsTheBuildId() {
         val broken = object : ContextWrapper(context) {
             override fun getPackageManager(): PackageManager = throw IllegalStateException("package manager is gone")

@@ -2,6 +2,7 @@ package id.art.tracker.core
 
 import android.content.Context
 import android.content.pm.PackageManager
+import id.art.tracker.privacy.AttributeRedactor
 
 /**
  * The build id the host puts in its manifest, `<meta-data android:name="id.art.tracker.BUILD_ID" android:value="..."/>`,
@@ -11,6 +12,11 @@ import android.content.pm.PackageManager
  * Android stores a numeric `android:value` as an `Integer` (`4512`) and a value like `12e45` as a `Float`, so the value is
  * normalised: a string is trimmed, an integer becomes its decimal string, anything else is ignored (with one warning),
  * a blank value is no value, and the result is cut to [MAX_LENGTH] characters without splitting a surrogate pair.
+ *
+ * It must also reach the backend unchanged: every attribute value goes through the redactor, which masks card-like,
+ * phone-like and national-id-like digit runs. An id that the redactor would rewrite (`build-20261116093000`, now and
+ * then a UUID or a long hex sha) is dropped with a warning instead of being sent as `**** **** **** 1234`, which would
+ * match no mapping: better no id than a wrong one.
  */
 internal object BuildId {
     const val META_DATA_KEY = "id.art.tracker.BUILD_ID"
@@ -42,8 +48,16 @@ internal object BuildId {
             }
         }
         if (text.isEmpty()) return null
-        if (text.length <= MAX_LENGTH) return text
-        val end = if (Character.isHighSurrogate(text[MAX_LENGTH - 1])) MAX_LENGTH - 1 else MAX_LENGTH
-        return text.substring(0, end)
+        val clipped = if (text.length <= MAX_LENGTH) {
+            text
+        } else {
+            val end = if (Character.isHighSurrogate(text[MAX_LENGTH - 1])) MAX_LENGTH - 1 else MAX_LENGTH
+            text.substring(0, end)
+        }
+        if (AttributeRedactor.redactString(clipped) != clipped) {
+            SdkLog.w("$META_DATA_KEY looks like personal data to the redactor (long digit runs): not sent; add a letter prefix such as git-")
+            return null
+        }
+        return clipped
     }
 }
