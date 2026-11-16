@@ -16,34 +16,20 @@ internal object Stacktrace {
      * truncation marker. Work stops at the budget, so a 5000-frame trace costs about as much as a 300-frame one.
      */
     fun format(t: Throwable, maxBytes: Int = MAX_BYTES): String {
-        val markBytes = utf8Size(TRUNCATION_MARK)
-        val budget = maxBytes - markBytes - 1
-        val sb = StringBuilder(minOf(maxBytes, 4096))
-        var used = 0
-        var truncated = false
-
-        fun append(line: String): Boolean {
-            val clipped = if (line.length > MAX_LINE_CHARS) clipLine(line) else line
-            val size = utf8Size(clipped) + 1
-            if (used + size > budget) return false
-            sb.append(clipped).append('\n')
-            used += size
-            return true
-        }
-
+        val text = BudgetedText(maxBytes)
         val seen = ArrayList<Throwable>(4)
         var current: Throwable? = t
         var depth = 0
         outer@ while (current != null) {
             if (seen.any { it === current }) break // cyclic cause chain
             if (depth > MAX_CAUSES) {
-                truncated = true
+                text.truncated = true
                 break
             }
             seen += current
             val header = if (depth == 0) describe(current) else "Caused by: " + describe(current)
-            if (!append(header)) {
-                truncated = true
+            if (!text.append(header)) {
+                text.truncated = true
                 break
             }
             val frames = try {
@@ -52,8 +38,8 @@ internal object Stacktrace {
                 emptyArray()
             }
             for (frame in frames) {
-                if (!append("\tat $frame")) {
-                    truncated = true
+                if (!text.append("\tat $frame")) {
+                    text.truncated = true
                     break@outer
                 }
             }
@@ -64,8 +50,50 @@ internal object Stacktrace {
             }
             depth++
         }
-        if (truncated) sb.append(TRUNCATION_MARK) else if (sb.isNotEmpty()) sb.setLength(sb.length - 1)
-        return sb.toString()
+        return text.result()
+    }
+
+    /**
+     * [header] followed by `\tat frame` lines, for frames that do not come from a [Throwable] (the main thread's stack
+     * seen by the ANR watchdog). Same line format and the same budget as [format]: never longer than [maxBytes] in
+     * UTF-8, ending with the truncation marker when the frames did not all fit.
+     */
+    fun formatFrames(header: String, frames: Array<StackTraceElement>, maxBytes: Int = MAX_BYTES): String {
+        val text = BudgetedText(maxBytes)
+        if (!text.append(header)) {
+            text.truncated = true
+        } else {
+            for (frame in frames) {
+                if (!text.append("\tat $frame")) {
+                    text.truncated = true
+                    break
+                }
+            }
+        }
+        return text.result()
+    }
+
+    /** Lines appended under a byte budget, with the truncation marker kept in reserve. Shared by every `format*`. */
+    private class BudgetedText(maxBytes: Int) {
+        private val budget = maxBytes - utf8Size(TRUNCATION_MARK) - 1
+        private val sb = StringBuilder(minOf(maxBytes, 4096))
+        private var used = 0
+        var truncated = false
+
+        /** False (nothing appended) when the line does not fit any more. */
+        fun append(line: String): Boolean {
+            val clipped = if (line.length > MAX_LINE_CHARS) clipLine(line) else line
+            val size = utf8Size(clipped) + 1
+            if (used + size > budget) return false
+            sb.append(clipped).append('\n')
+            used += size
+            return true
+        }
+
+        fun result(): String {
+            if (truncated) sb.append(TRUNCATION_MARK) else if (sb.isNotEmpty()) sb.setLength(sb.length - 1)
+            return sb.toString()
+        }
     }
 
     /** `Class: message`, or just `Class` without a message. Never throws. */
@@ -85,13 +113,21 @@ internal object Stacktrace {
      * after an unrelated edit of the file) groups together.
      */
     fun fingerprint(t: Throwable): String {
-        val md = MessageDigest.getInstance("SHA-1")
-        md.update(t.javaClass.name.toByteArray(Charsets.UTF_8))
         val frames = try {
             t.stackTrace
         } catch (_: Throwable) {
             emptyArray()
         }
+        return fingerprintFrames(t.javaClass.name, frames)
+    }
+
+    /**
+     * The same fingerprint for raw frames: SHA-1 (hex) of [kind] and the top [FINGERPRINT_FRAMES] as `className.method`.
+     * [kind] is a fixed string (`"anr"`), not a class name: a host's R8 renames the SDK's own classes.
+     */
+    fun fingerprintFrames(kind: String, frames: Array<StackTraceElement>): String {
+        val md = MessageDigest.getInstance("SHA-1")
+        md.update(kind.toByteArray(Charsets.UTF_8))
         for (i in 0 until minOf(FINGERPRINT_FRAMES, frames.size)) {
             val f = frames[i]
             md.update('\n'.code.toByte())
