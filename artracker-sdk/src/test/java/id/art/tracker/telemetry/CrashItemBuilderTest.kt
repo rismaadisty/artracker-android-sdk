@@ -13,6 +13,7 @@ class CrashItemBuilderTest {
         breadcrumbs: Breadcrumbs = Breadcrumbs(),
         userId: String? = "u-1",
         screen: String? = "Checkout",
+        buildId: String? = null,
     ): JSONObject {
         val (id, json) = CrashItemBuilder.build(
             thread = Thread.currentThread(),
@@ -23,6 +24,7 @@ class CrashItemBuilderTest {
             appVersion = "1.2.3",
             screen = screen,
             breadcrumbs = breadcrumbs,
+            buildId = buildId,
         )
         val o = JSONObject(json)
         assertEquals(id, o.getString("id"))
@@ -107,5 +109,32 @@ class CrashItemBuilderTest {
         repeat(30) { b.add("event", "e$it") }
         val crumbs = build(RuntimeException(), b).getJSONObject("attributes").getJSONArray("breadcrumbs")
         assertEquals("e29", crumbs.getJSONObject(crumbs.length() - 1).getString("message"))
+    }
+
+    @Test
+    fun buildIdIsAttachedWhenKnown() {
+        val o = build(RuntimeException("boom"), buildId = "git-abc")
+
+        assertEquals("git-abc", o.getJSONObject("attributes").getString("build_id"))
+    }
+
+    @Test
+    fun nullBuildIdIsOmitted() {
+        val o = build(RuntimeException("boom"), buildId = null)
+
+        assertFalse(o.getJSONObject("attributes").has("build_id"))
+    }
+
+    @Test
+    fun buildIdSurvivesTheAttributeBudget() {
+        // A huge stack and 30 big breadcrumbs force the trimming; it sheds breadcrumbs and half the stack, not the build id.
+        val crumbs = Breadcrumbs(clock = FakeClock(1_762_331_598_000))
+        repeat(30) { crumbs.add("http", "GET /x$it " + "m".repeat(300), mapOf("k" to "v".repeat(300))) }
+        val t = RuntimeException("deep")
+        t.stackTrace = Array(5_000) { StackTraceElement("com.example.Deep$it", "method$it", "Deep.kt", it) }
+
+        val o = build(t, crumbs, buildId = "git-abc")
+
+        assertEquals("git-abc", o.getJSONObject("attributes").getString("build_id"))
     }
 }

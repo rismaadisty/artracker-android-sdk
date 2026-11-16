@@ -80,6 +80,12 @@ class ARTrackerCoreTest {
         core.start()
     }
 
+    private fun startCoreWithBuildId(reader: (android.content.Context) -> String?) {
+        val core = ARTrackerCore(app, configWith(), FakeClock(1_700_000_000_000L), buildIdReader = reader)
+        ARTrackerCore.install(core)
+        core.start()
+    }
+
     @Before
     fun setUp() {
         ARTracker.resetForTest()
@@ -121,6 +127,42 @@ class ARTrackerCoreTest {
 
     private fun replayBatch(session: String = "session-xyz-1") =
         NewReplayBatch(session, byteArrayOf(1, 2, 3), 1, 1_000, 2_000, false, null, "test")
+
+    @Test
+    fun sessionStartOfTheRunCarriesTheBuildId() {
+        startCoreWithBuildId { "git-abc" }
+        ProcessLifecycleTestUtil.start()
+
+        val start = settle().named("session_start").first()
+
+        assertEquals("git-abc", start.attributes["build_id"])
+    }
+
+    @Test
+    fun theBuildIdIsReadBeforeTheQueueDatabaseIsOpened() {
+        // The first background task reads it first, so a crash right after init has the shortest possible window
+        // without it (the crash handler never waits for it). Opening the database is the first slow thing that follows.
+        var databaseExistedAtRead: Boolean? = null
+        startCoreWithBuildId {
+            databaseExistedAtRead = app.getDatabasePath("artracker.db").exists()
+            "git-abc"
+        }
+        ProcessLifecycleTestUtil.start()
+        settle()
+
+        assertEquals(false, databaseExistedAtRead)
+    }
+
+    @Test
+    fun initDoesNotReadTheBuildIdOnTheMainThread() {
+        val loopers = CopyOnWriteArrayList<Looper?>()
+        startCoreWithBuildId { loopers += Looper.myLooper(); "git-abc" }
+        ProcessLifecycleTestUtil.start()
+        settle()
+
+        assertTrue("the reader ran", loopers.isNotEmpty())
+        assertTrue("never on the main looper", loopers.none { it === Looper.getMainLooper() })
+    }
 
     @Test
     fun optOut_clearsStoredReplayBatches() {

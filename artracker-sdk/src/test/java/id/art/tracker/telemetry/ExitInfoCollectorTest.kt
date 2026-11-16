@@ -50,6 +50,9 @@ class ExitInfoCollectorTest {
     private val store = InMemoryStore()
     private val items = ItemFactory(clock, { "current-session" }, { null })
     private val collector get() = ExitInfoCollector(context, store, items, clock)
+    private fun collectorWith(buildId: String?, installedAtMs: Long) =
+        ExitInfoCollector(context, store, items, clock, buildId, installedAtMs)
+
     private val activityManager get() = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
 
     private fun addExit(
@@ -354,6 +357,57 @@ class ExitInfoCollectorTest {
         awaitIdle()
         assertNotNull(ARTrackerCore.instanceOrNull())
         assertTrue(sentItems().none { it.getString("name") == "anr" })
+    }
+
+    // endregion
+
+    // region build id
+
+    private val installedAt = 1_699_999_000_000L
+
+    @Test
+    fun anrCarriesTheBuildId() {
+        addExit(ApplicationExitInfo.REASON_ANR, 1_700_000_000_000)
+
+        val item = collectorWith("git-abc", installedAt).collect().single()
+
+        assertEquals("git-abc", item.attributes["build_id"])
+    }
+
+    @Test
+    fun nativeCrashCarriesTheBuildId() {
+        addExit(ApplicationExitInfo.REASON_CRASH_NATIVE, 1_700_000_000_000)
+
+        assertEquals("git-abc", collectorWith("git-abc", installedAt).collect().single().attributes["build_id"])
+    }
+
+    @Test
+    fun lowMemoryKillHasNoBuildId() {
+        addExit(ApplicationExitInfo.REASON_LOW_MEMORY, 1_700_000_000_000)
+
+        assertFalse("build_id" in collectorWith("git-abc", installedAt).collect().single().attributes.keys)
+    }
+
+    @Test
+    fun exitBeforeTheLastUpdateHasNoBuildId() {
+        // It happened in the build that was installed before: the current id would point at the wrong mapping.
+        addExit(ApplicationExitInfo.REASON_ANR, 1_699_998_000_000)
+
+        assertFalse("build_id" in collectorWith("git-abc", installedAt).collect().single().attributes.keys)
+    }
+
+    @Test
+    fun unknownInstallTimeStillAttaches() {
+        addExit(ApplicationExitInfo.REASON_ANR, 1_699_998_000_000)
+
+        assertEquals("git-abc", collectorWith("git-abc", 0L).collect().single().attributes["build_id"])
+    }
+
+    @Test
+    fun noBuildIdMeansNoAttribute() {
+        addExit(ApplicationExitInfo.REASON_ANR, 1_700_000_000_000)
+
+        assertFalse("build_id" in collectorWith(null, installedAt).collect().single().attributes.keys)
     }
 
     // endregion

@@ -127,6 +127,8 @@ internal object CrashItemBuilder {
         appVersion: String?,
         screen: String?,
         breadcrumbs: Breadcrumbs,
+        /** The manifest build id when it was already read (a plain volatile read by the caller), else null: no wait. */
+        buildId: String? = null,
     ): Pair<String, String> {
         val startNs = System.nanoTime()
         val id = UuidV7.generate(nowMs)
@@ -142,6 +144,7 @@ internal object CrashItemBuilder {
         attrs["breadcrumbs"] = redactedBreadcrumbs(breadcrumbs, startNs)
         if (screen != null) attrs["screen"] = AttributeRedactor.redactString(screen)
         attrs["app_version"] = appVersion ?: "unknown"
+        if (buildId != null) attrs["build_id"] = buildId // before the trimming below, which only sheds breadcrumbs and stack
         attrs["mem_free_bytes"] = Runtime.getRuntime().freeMemory()
 
         // The server drops attributes above 24 KB: shed the breadcrumbs first, then half of the stack trace.

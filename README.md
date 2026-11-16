@@ -377,13 +377,35 @@ while it kills cached processes).
 
 - **Crash**: an uncaught-exception handler is installed at `init` and always calls the previous handler (Crashlytics
   and similar). It writes the crash to a file synchronously (atomic rename, no SQLite, no network); the next launch
-  turns it into a `log` item (`fatal`, name `crash`) with the highest priority, and it is never evicted.
+  turns it into a `log` item (`fatal`, name `crash`) with the highest priority, and it is never evicted. It carries
+  `build_id` when the manifest sets one and it was read before the crash (the handler never waits for it).
 - **ANR / native crash / low-memory kill**: API 30+, read from `ApplicationExitInfo` and sent as `fatal` `anr` /
-  `native_crash`, and `warn` `low_memory_kill`.
+  `native_crash`, and `warn` `low_memory_kill`. `anr` and `native_crash` carry `build_id`, except for exits that happened
+  before the app was last updated (they belong to another build, and the current id would select the wrong mapping).
 - **ANR (API 24–29)**: while the app is in the foreground a watchdog thread checks the main thread every second; a
   main thread that has not responded for 5 s is reported once as `error` `anr` with `source: "watchdog"`, the
   main-thread stack (16 KB), the screen and the breadcrumbs. Not while a debugger is attached; stopped in the
   background; API 30+ keeps using `ApplicationExitInfo` only. Always on, no setting.
+- **Build id (for deobfuscation)**: put the id of your build in the manifest, inside `<application>`:
+  `<meta-data android:name="id.art.tracker.BUILD_ID" android:value="@string/artracker_build_id" />`. The SDK reads it
+  once, in the background, and adds `build_id` to `session_start` and to the crash and exit items (see above), so the
+  backend can pick the R8 mapping of that build. Fill the string from Gradle, in `app/build.gradle.kts`:
+  ```kotlin
+  val artrackerBuildId = providers.gradleProperty("artrackerBuildId")
+      .orElse(providers.exec { commandLine("git", "rev-parse", "--short=12", "HEAD") }
+          .standardOutput.asText.map { "git-" + it.trim() })
+  android { defaultConfig { resValue("string", "artracker_build_id", artrackerBuildId.get()) } }
+  ```
+  (CI can pass `-PartrackerBuildId=<value>`; a build without git or a `.git` directory must pass it, otherwise the
+  Gradle configuration fails.) Why `@string` and not a literal `android:value`: Android turns a literal that looks like a
+  number into a number (`4512` or `0012` becomes the integer 4512 or 12, `12e45` a float, `0x1F` the integer 31, and a
+  long all-digit value such as `202611160930` may not be stored as an integer at all), so the SDK would see something
+  other than what you wrote and drops a float. A string resource always arrives as the text you wrote. Use an id that
+  contains a letter (a prefix such as `git-`) or a UUID. An id of up to 128 characters is sent as is; one that the
+  redaction would rewrite (a long run of digits that looks like a card or phone number, for example
+  `build-20261116093000` now and then) is **not sent** and a warning is logged, because a rewritten id would match no
+  mapping. Absent or blank means no `build_id` field. The same value must be used when the mapping is uploaded (backend
+  side, not available yet).
 - **Offline**: items are persisted in SQLite (`artracker.db`) up to 5 MB or 5000 rows (replay chunks are evicted first,
   crash items never) and dropped after 7 days. Batches are at most 50 items or 128 KB, gzip-compressed. Foreground flush
   every 10 s; when the app goes to background one WorkManager job (`CONNECTED` constraint) drains the queue.
@@ -399,11 +421,11 @@ while it kills cached processes).
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; once per process, only when the process was started to show an Activity |
-| Session | `session` | `session_start` / `session_end` | device metadata |
+| Session | `session` | `session_start` / `session_end` | device metadata (+ `build_id` when the manifest sets one) |
 | Replay | *(not an ingest item)* | `artracker-screen-v1` screenshot chunk, via the Session Replay API | at most 5 MiB gzipped per upload (chunks 2 MB) |
-| JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
-| ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |
-| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, reported while the app is still running |
+| JVM crash | `log` | `fatal`, name `crash` | sent on the next launch (+ `build_id` when known) |
+| ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` (+ `build_id` for exits of the current build) |
+| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, reported while the app is still running (+ `build_id`) |
 | Low-memory kill (API 30+) | `log` | `warn`, name `low_memory_kill` | from `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
 | HTTP | `log` | `info`/`warn`/`error`, name `http_request` | |

@@ -107,6 +107,8 @@ internal class ARTrackerCore(
      * thread); null = the real one, which exists only on API 24-29 (from API 30 `ApplicationExitInfo` reports ANRs).
      */
     private val anrWatchdogFactory: ((onAnr: (Long, Array<StackTraceElement>) -> Unit) -> AnrWatchdog?)? = null,
+    /** Reads the manifest build id (tests inject one); runs once, on the SDK thread. */
+    private val buildIdReader: (android.content.Context) -> String? = BuildId::read,
 ) {
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
@@ -137,10 +139,17 @@ internal class ARTrackerCore(
     @Volatile
     private var crashAppVersion: String? = config.appVersion?.takeIf { it.isNotBlank() }
 
+    /**
+     * The manifest build id, copied here by the first background task. The crash handler reads only this volatile: it
+     * runs on a dying thread and must never wait for the PackageManager. A crash before it is set has no `build_id`.
+     */
+    @Volatile
+    private var crashBuildId: String? = null
+
     private var crashHandler: CrashHandler? = null
 
     /** Lazy: building it may query the PackageManager, which init must not do on the main thread. */
-    val device: DeviceContext by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { DeviceContext(app, config.appVersion) }
+    val device: DeviceContext by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { DeviceContext(app, config.appVersion, buildIdReader) }
 
     /** User id to stamp on the `session_end` of a session that `reset()` is just closing (user already cleared). */
     @Volatile
@@ -435,6 +444,7 @@ internal class ARTrackerCore(
             attrs["source"] = "watchdog"
             attrs["blocked_ms"] = blockedMs
             attrs["main_thread_stack"] = Stacktrace.formatFrames("ANR: main thread blocked for $blockedMs ms", stack)
+            crashBuildId?.let { attrs["build_id"] = it } // this process, so this build
             screens.currentScreen?.let { attrs["screen"] = it }
             attrs["breadcrumbs"] = breadcrumbs.snapshot()
             // After the snapshot: the trail attached to this report ends before it, later reports see it.
@@ -616,7 +626,7 @@ internal class ARTrackerCore(
      */
     private fun collectExitInfo() {
         runCatching {
-            val collector = ExitInfoCollector(app, transportPrefs, items, clock)
+            val collector = ExitInfoCollector(app, transportPrefs, items, clock, device.buildId, device.lastUpdateTimeMs)
             if (isDisabled()) {
                 collector.markProcessed()
                 return@runCatching
@@ -639,10 +649,18 @@ internal class ARTrackerCore(
             appVersion = crashAppVersion,
             screen = screens.currentScreen,
             breadcrumbs = breadcrumbs,
+            buildId = crashBuildId, // a volatile read only: never `device`, which would touch the PackageManager
         )
+
+    /** The crash item JSON exactly as the crash handler would build it (tests). */
+    @androidx.annotation.VisibleForTesting
+    internal fun crashItemJsonForTest(thread: Thread, t: Throwable): String = buildCrashItem(thread, t).second
 
     /** Returns true when items from an earlier run are waiting. Runs before the pipeline consumer ever starts. */
     private fun maintainQueueAndSaveTransportConfig(): Boolean {
+        // First of all: the crash handler only ever reads this volatile, so the sooner it is set the shorter the window in
+        // which a crash right after init goes out without a build id. Opening the database etc. comes after.
+        runCatching { crashBuildId = device.buildId }.onFailure { SdkLog.w("reading the build id failed", it) }
         // Only here: a batch still marked in-flight belongs to a dead process (never reset it elsewhere).
         runCatching { queue.resetOrphanedBatches() }
         runCatching { queue.purgeOlderThan(clock.nowMs() - RETENTION_MS) }

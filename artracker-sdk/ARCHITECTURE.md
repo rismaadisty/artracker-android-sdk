@@ -159,7 +159,7 @@ Nama layar default: `activity.javaClass.simpleName`, bisa ditimpa lewat `@ARTrac
 | ID | UUIDv7 string (≤128), persist di `SharedPreferences` (`artracker_session`, dikecualikan dari backup) |
 | Sesi baru | Saat init pertama, atau saat kembali ke foreground setelah **>30 menit** di background (configurable), atau `ARTracker.reset()` |
 | Batas keras | 24 jam per sesi |
-| `session_start` | `type:"session"`, attributes `{platform:"android", os_version, api_level, manufacturer, model, app_version, app_build, screen{w,h,density}, locale, tz, network, is_emulator, sdk_version}`. Ini wajib karena backend membuang field `context` selain environment/app_version |
+| `session_start` | `type:"session"`, attributes `{platform:"android", os_version, api_level, manufacturer, model, app_version, app_build, build_id?, screen{w,h,density}, locale, tz, network, is_emulator, sdk_version}`. Ini wajib karena backend membuang field `context` selain environment/app_version |
 | `session_end` | Dikirim saat background >timeout terdeteksi atau sesi dirotasi, dengan `duration_ms`, `screen_count`, ringkasan breadcrumbs |
 
 ### 4.4 Threading
@@ -306,10 +306,10 @@ Port aturan web SDK agar konsisten:
 2. Di handler: bangun JSON `{id(UUIDv7), timestamp, session_id, user_id, thread, exception_class, message, stacktrace (cause chain, maks 16 KB), breadcrumbs (30 terakhir), screen, memory, app_version}` lalu tulis **sinkron** ke `filesDir/artracker/crash/<id>.json` lewat file temp + `rename` (atomik). Tidak menyentuh SQLite atau jaringan; batas waktu <50 ms.
 3. Guard re-entrancy: bila handler sendiri melempar, langsung delegasikan ke handler lama.
 4. Pada `init()` berikutnya: file crash diubah menjadi item `type:"log"`, `level:"fatal"`, `name:"crash"`, `message:"<Class>: <msg>"`, dimasukkan ke SQLite, lalu file dihapus. Item crash diberi **prioritas tertinggi** di batcher dan tidak pernah di-evict.
-5. `ExitInfoCollector` (API 30+): `ActivityManager.getHistoricalProcessExitReasons` untuk `REASON_ANR`, `REASON_CRASH_NATIVE`, dan `REASON_LOW_MEMORY` sejak timestamp terakhir yang diproses → `log/fatal` `name:"anr"` / `"native_crash"` (trace ANR dipotong 16 KB).
+5. `ExitInfoCollector` (API 30+; `anr` dan `native_crash` membawa `build_id` kecuali exit lebih tua dari `PackageInfo.lastUpdateTime`, yang milik build lain): `ActivityManager.getHistoricalProcessExitReasons` untuk `REASON_ANR`, `REASON_CRASH_NATIVE`, dan `REASON_LOW_MEMORY` sejak timestamp terakhir yang diproses → `log/fatal` `name:"anr"` / `"native_crash"` (trace ANR dipotong 16 KB).
 5b. API 24–29: `AnrWatchdog` mem-post tick ke main thread tiap 1 s; tick yang belum diproses setelah 5 s dilaporkan sekali per episode (tidak saat debugger terpasang; watchdog yang bangun terlambat >2 s me-rebase episode). Hanya berjalan di foreground.
 6. `fingerprint = sha1(exception_class + 5 frame teratas)` untuk dedup di sisi SDK (maks 10 error identik per sesi).
-7. Stack yang sudah di-R8 dikirim apa adanya + `attributes.build_id` (diinjeksi via plugin di masa depan). Symbolication di luar scope.
+7. Stack yang sudah di-R8 dikirim apa adanya + `attributes.build_id` dari meta-data manifest `id.art.tracker.BUILD_ID` (diinjeksi host lewat `manifestPlaceholders`, kelak Gradle plugin). Dibaca sekali di thread SDK (bukan di `init` sinkron, bukan di crash handler); crash sebelum nilai terbaca tidak punya `build_id`. Upload mapping dan symbolication di luar scope.
 
 ### 8.2 Network (`ARTrackerOkHttpInterceptor`)
 
@@ -427,11 +427,11 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; sekali per proses, hanya bila proses dimulai untuk menampilkan Activity |
-| Sesi | `session` | `session_start` / `session_end` | metadata perangkat |
+| Sesi | `session` | `session_start` / `session_end` | metadata perangkat (+ `build_id` bila ada) |
 | Replay | *(bukan item ingest)* | chunk `artracker-screen-v1` lewat Session Replay API | ≤5 MiB gzip per upload (chunk 2 MB) |
-| Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya |
-| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, dilaporkan selagi app masih berjalan |
-| ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | dari `ApplicationExitInfo` |
+| Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya (+ `build_id` bila sudah terbaca) |
+| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, dilaporkan selagi app masih berjalan (+ `build_id`) |
+| ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | dari `ApplicationExitInfo` (+ `build_id` untuk exit build saat ini) |
 | `captureException` | `log` | `error`, name `exception` | |
 | HTTP | `log` | `info`/`warn`/`error`, name `http_request` | |
 | `log()` | `log` | sesuai level | |
