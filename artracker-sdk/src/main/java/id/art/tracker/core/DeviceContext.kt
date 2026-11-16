@@ -20,6 +20,11 @@ internal class DeviceContext(
 ) {
     private val appContext: Context = context.applicationContext ?: context
 
+    /** When the installed build was installed or last updated (`PackageInfo.lastUpdateTime`); 0 when unknown. */
+    val lastUpdateTimeMs: Long by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        runCatching { packageInfo().lastUpdateTime }.getOrDefault(0L)
+    }
+
     /** The `id.art.tracker.BUILD_ID` of the manifest, or null (absent, blank, unreadable). Read once, never throws. */
     val buildId: String? by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching { buildIdReader(appContext) }.getOrNull()

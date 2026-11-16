@@ -444,6 +444,7 @@ internal class ARTrackerCore(
             attrs["source"] = "watchdog"
             attrs["blocked_ms"] = blockedMs
             attrs["main_thread_stack"] = Stacktrace.formatFrames("ANR: main thread blocked for $blockedMs ms", stack)
+            crashBuildId?.let { attrs["build_id"] = it } // this process, so this build
             screens.currentScreen?.let { attrs["screen"] = it }
             attrs["breadcrumbs"] = breadcrumbs.snapshot()
             // After the snapshot: the trail attached to this report ends before it, later reports see it.
@@ -625,7 +626,7 @@ internal class ARTrackerCore(
      */
     private fun collectExitInfo() {
         runCatching {
-            val collector = ExitInfoCollector(app, transportPrefs, items, clock)
+            val collector = ExitInfoCollector(app, transportPrefs, items, clock, device.buildId, device.lastUpdateTimeMs)
             if (isDisabled()) {
                 collector.markProcessed()
                 return@runCatching

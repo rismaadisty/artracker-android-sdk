@@ -35,6 +35,13 @@ internal class ExitInfoCollector(
     private val store: KeyValueStore,
     private val items: ItemFactory,
     private val clock: Clock = Clock.SYSTEM,
+    /**
+     * The manifest build id of the CURRENT build, or null. Attached to `anr` and `native_crash` (not `low_memory_kill`)
+     * only when the exit happened at or after [buildInstalledAtMs] (`PackageInfo.lastUpdateTime`, 0 = unknown): an exit
+     * of before the last app update belongs to another build, and the current id would select the wrong R8 mapping.
+     */
+    private val buildId: String? = null,
+    private val buildInstalledAtMs: Long = 0L,
 ) {
     /** Builds the items for the exits not seen yet and remembers them as processed. */
     fun collect(): List<TelemetryItem> = process(emit = true)
@@ -100,6 +107,7 @@ internal class ExitInfoCollector(
         attrs["rss"] = info.rss
         attrs["exit_timestamp"] = info.timestamp
         info.processName?.let { attrs["process_name"] = it }
+        if (buildId != null && name != "low_memory_kill" && info.timestamp >= buildInstalledAtMs) attrs["build_id"] = buildId
         if (level == LogLevel.FATAL) readTrace(info)?.let { attrs["trace"] = it }
         // Built by the factory for the id and the session, then moved to the time of the exit.
         return items.log(level, name, info.description?.takeIf { it.isNotBlank() }, attrs)

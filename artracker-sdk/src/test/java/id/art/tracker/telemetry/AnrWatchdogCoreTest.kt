@@ -75,7 +75,12 @@ class AnrWatchdogCoreTest {
     )
 
     /** A core whose watchdog has a fake clock and a thread that is never started; `fake = false` = the real factory. */
-    private fun startCore(fake: Boolean = true, beforeSend: BeforeSend? = null, clock: Clock = Clock.SYSTEM): ARTrackerCore {
+    private fun startCore(
+        fake: Boolean = true,
+        beforeSend: BeforeSend? = null,
+        clock: Clock = Clock.SYSTEM,
+        buildId: String? = null,
+    ): ARTrackerCore {
         val factory: (((Long, Array<StackTraceElement>) -> Unit) -> AnrWatchdog?)? = if (fake) {
             { onAnr ->
                 AnrWatchdog(
@@ -89,7 +94,7 @@ class AnrWatchdogCoreTest {
         } else {
             null
         }
-        val c = ARTrackerCore(app, config(beforeSend), clock, anrWatchdogFactory = factory)
+        val c = ARTrackerCore(app, config(beforeSend), clock, anrWatchdogFactory = factory, buildIdReader = { buildId })
         ARTrackerCore.install(c)
         c.start()
         core = c
@@ -198,6 +203,17 @@ class AnrWatchdogCoreTest {
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(61_000))
 
         assertTrue("it comes back with the rest of the recording", c.anrWatchdog!!.isRunning)
+    }
+
+    @Test
+    fun watchdogAnrCarriesTheBuildId() {
+        val c = startCore(buildId = "git-abc")
+        ProcessLifecycleTestUtil.start()
+        settle() // the build id is read by the first background task
+
+        c.onMainThreadBlocked(5_000, frames)
+
+        assertEquals("git-abc", settle().anrs().single().attributes["build_id"])
     }
 
     @Test

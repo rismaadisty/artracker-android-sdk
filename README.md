@@ -380,7 +380,8 @@ while it kills cached processes).
   turns it into a `log` item (`fatal`, name `crash`) with the highest priority, and it is never evicted. It carries
   `build_id` when the manifest sets one and it was read before the crash (the handler never waits for it).
 - **ANR / native crash / low-memory kill**: API 30+, read from `ApplicationExitInfo` and sent as `fatal` `anr` /
-  `native_crash`, and `warn` `low_memory_kill`.
+  `native_crash`, and `warn` `low_memory_kill`. `anr` and `native_crash` carry `build_id`, except for exits that happened
+  before the app was last updated (they belong to another build, and the current id would select the wrong mapping).
 - **ANR (API 24–29)**: while the app is in the foreground a watchdog thread checks the main thread every second; a
   main thread that has not responded for 5 s is reported once as `error` `anr` with `source: "watchdog"`, the
   main-thread stack (16 KB), the screen and the breadcrumbs. Not while a debugger is attached; stopped in the
@@ -416,8 +417,8 @@ while it kills cached processes).
 | Session | `session` | `session_start` / `session_end` | device metadata (+ `build_id` when the manifest sets one) |
 | Replay | *(not an ingest item)* | `artracker-screen-v1` screenshot chunk, via the Session Replay API | at most 5 MiB gzipped per upload (chunks 2 MB) |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch (+ `build_id` when known) |
-| ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |
-| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, reported while the app is still running |
+| ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` (+ `build_id` for exits of the current build) |
+| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, reported while the app is still running (+ `build_id`) |
 | Low-memory kill (API 30+) | `log` | `warn`, name `low_memory_kill` | from `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
 | HTTP | `log` | `info`/`warn`/`error`, name `http_request` | |

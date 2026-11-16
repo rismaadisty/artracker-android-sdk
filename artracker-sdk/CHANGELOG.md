@@ -17,8 +17,10 @@ versions follow semantic versioning.
 - View fields with the androidx autofill hints `phoneNumber`, `phoneNumberDevice` and `phoneNational` are now masked
   too (until now only the View constant `phone` was).
 - **`build_id` for deobfuscation.** Set `<meta-data android:name="id.art.tracker.BUILD_ID" android:value="…"/>` in the
-  app manifest; the SDK reads it once in the background and adds `build_id` to `session_start` and to JVM crash items (a
-  crash before the value is read has none; the crash handler never waits for it; exit items follow). Absent or blank →
+  app manifest; the SDK reads it once in the background and adds `build_id` to `session_start` to JVM crash items (a
+  crash before the value is read has none; the crash handler never waits for it), to the watchdog `anr` items, and to `anr`
+  / `native_crash` items from `ApplicationExitInfo`, except exits from before the last app update (they belong to another
+  build). Absent or blank →
   no field. See the README section "Build id".
 - **ANR detection on Android 7-10 (API 24-29).** While the app is in the foreground a watchdog thread posts a tick to
   the main thread every second; a tick that is still unanswered after 5 s is reported once per episode (not while a

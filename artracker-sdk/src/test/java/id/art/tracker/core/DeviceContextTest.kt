@@ -89,4 +89,12 @@ class DeviceContextTest {
         assertEquals("1.2.3", attrs["app_version"])
         assertEquals("android", attrs["platform"])
     }
+
+    @Test
+    fun lastUpdateTimeComesFromPackageInfo() {
+        org.robolectric.Shadows.shadowOf(context.packageManager)
+            .getInternalMutablePackageInfo(context.packageName).lastUpdateTime = 1_234_567L
+
+        assertEquals(1_234_567L, DeviceContext(context, "1.2.3").lastUpdateTimeMs)
+    }
 }
