@@ -10,7 +10,21 @@
 > **Always manual:** the 401 kill-switch (it persists for an hour and would poison automated runs), the offline crash then
 > relaunch, and playback of replay chunks in the dashboard.
 
-Status: NOT yet run. This checklist is Task 24 Step 3; record the result in the PR description.
+Status (Phase 4, 2026-11-16): **partly run on a physical device** (OPPO CPH2387, Android 14), **not run against the real backend**
+(no Docker here). The whole checklist below still needs a backend; what was run instead, and what was not:
+
+| Item | Result |
+| --- | --- |
+| Offline crash then relaunch (acceptance criterion #2, section 4) | **PASS, 5 of 5 runs**, `scripts/e2e-crash-offline.sh SERIAL` (6-7 s each): crash on the `OFFLINE` profile (debug-only intent extra `artracker.crash_now`, delivered with `am start --activity-single-top`), crash file on disk, nothing reached the stand-in ingest, then the relaunch on `LOCAL` delivered a `crash` item with level `fatal`. The ingest is `scripts/mock-ingest.py`, not the real backend, so server-side storage and the dashboard are untested. |
+| Instrumented `IngestFlowTest` (redaction, 503 `Retry-After` retry) | **2 of 2 pass** after two test-only fixes. Both tests failed identically on the pre-Phase-1 baseline `feaddeb` (checked in a temporary worktree), so these were not regressions: the redaction test now uses the deny-listed key `card` in a `payment_note` value, and the retry test waits for an empty queue inside a live Activity before it arms the 503. |
+| Screenshot budget, 5 min (section 6b data part) | PASS: 16.95 MB of chunks (limit 25), jank delta -1.60 points (limit +2); details in `artracker-sdk/PERF.md`. |
+| 401 kill-switch (section 3) | **PASS on the device** (`scripts/e2e-killswitch-401.sh SERIAL`, one run): the stand-in ingest answers 401 to every POST; the SDK sent exactly 1 POST, wrote `disabled_until` about 3600 s ahead, sent nothing more in the following 75 s, and a force-stop + relaunch also sent nothing (the trip is persisted). Step 3's foreground/background round trip was weak in that run (`am start` was delivered to the already-running Activity), step 4 is the stronger check; no negative control (same script against a 202 ingest) was run. Not tested: the real backend's 401 body, and the one-hour expiry. |
+| ANR (section 5), API 24-29 watchdog | **NOT run**: no API 24-29 device; the API 34 ANR path was not exercised either. |
+| Replay checklist 6b (fonts, icons, photos, dialogs against a recording), playback in the dashboard | **NOT run.** |
+| Backend E2E (sections 1-3, 7) | **NOT run**: needs Docker and the `artracker` backend repo. |
+
+Device notes for whoever repeats this: ColorOS refuses `pm clear` to adb (the scripts wipe data through `run-as`), the
+process can linger after a crash, and a screen that timed out pauses the Activity, so the scripts send `KEYCODE_WAKEUP` first.
 
 Prerequisites: Docker, an Android emulator (API 30+ for the ANR step), the `artracker` backend repo next to this one.
 

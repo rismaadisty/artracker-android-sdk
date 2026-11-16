@@ -1,9 +1,10 @@
 # Performance measurement notes (Task 25)
 
-Status: **only the AAR size has been measured.** Every other result below is **NOT MEASURED**: it needs an emulator or a
-device, and the machine this was prepared on has neither. Nothing here is an estimate. Fill the tables in on a device
-and keep the targets as they are: if one is missed, record the real number and the cause as an issue instead of
-lowering the target.
+Status (Phase 4, 2026-11-16): **measured on a physical device**, OPPO CPH2387 (Android 14, API 34, 60 Hz), **debug build**
+of the sample at commit `ec9ace3` plus the uncommitted Phase 4 test changes (adb over USB, screen on unless noted). The emulator has only
+API 30 images here, so the "Emulator API 34" columns stay **NOT MEASURED**. Nothing is an estimate; items that could
+not be run are listed under "Not measured here". Targets were not lowered: one miss (`init` cost, section 1) is recorded
+with its real number and cause. Not run at all: Perfetto traces, API 24-29 (no such device), backend E2E (no Docker).
 
 Targets come from the issue #12 acceptance criteria and `ARCHITECTURE.md` section 1 / 6.
 
@@ -44,14 +45,29 @@ is loaded from disk, which on a slow device can exceed 2 ms. **If the measured m
 prefetch those preferences off the main thread** (start the three loads on the SDK background thread before
 `ARTrackerCore` needs them, or construct the stores lazily), then re-measure. Do not raise the target.
 
-| Run | Emulator API 34 (us) | Mid-range device (us) |
+| Run | Emulator API 34 (us) | OPPO CPH2387, API 34, debug build (us) |
 | --- | --- | --- |
-| 1 | NOT MEASURED | NOT MEASURED |
-| 2 | NOT MEASURED | NOT MEASURED |
-| 3 | NOT MEASURED | NOT MEASURED |
-| 4 | NOT MEASURED | NOT MEASURED |
-| 5 | NOT MEASURED | NOT MEASURED |
-| **Median** | **NOT MEASURED** | **NOT MEASURED** |
+| discarded (first start after the data wipe) | NOT MEASURED | 126517 |
+| 1 | NOT MEASURED | 104699 |
+| 2 | NOT MEASURED | 105280 |
+| 3 | NOT MEASURED | 103355 |
+| 4 | NOT MEASURED | 104221 |
+| 5 | NOT MEASURED | 107621 |
+| **Median** | **NOT MEASURED** | **104699 (about 105 ms): target 2000 us MISSED** |
+
+**The target is missed by a wide margin on this device and was not lowered.** Where the time goes (from temporary
+`init-step` logs around each step of `ARTracker.init`, removed again after the run; one cold start each, so read them as
+orders of magnitude): the first `getSharedPreferences` + first read of the three SDK files about 15 ms, building the
+pipeline and the coroutine scopes about 10 ms, starting replay about 17 ms, starting performance sampling about 3 ms,
+`AppStartTracker` registration 4-5 ms. Those steps explain only part of the 104 ms: in a debug build the code is not AOT
+compiled (interpreted/JIT on first use) and the sample has 22 dex files, which inflates every first call, so this
+number is not a release-build figure. A second set of 6 cold starts after `cmd package compile -m speed -f` (the package still reported `status=verify`, because the
+sample is debuggable, so this is not a true AOT figure) gave 63.8-73.1 ms, median about 65 ms: the cost is real, not only
+interpretation. Reaching 2 ms means building the core off the main thread (a facade that queues calls until the core is ready),
+which changes the public behaviour of `ARTracker.init` and is **not done here: it needs a decision**; prefetching the
+three `SharedPreferences` alone would save only about 15 ms. Not done: a release build (R8 + baseline profile) measurement, and moving the
+three `SharedPreferences` loads off the main thread, which the note above prescribes. Both are the next step for this
+target.
 
 ## 2. Replay capture on the Feed screen (target: p95 <= 16 ms, the `FrameScheduler` budget)
 
@@ -74,7 +90,7 @@ For a jank view, run a Macrobenchmark scroll of the Feed with and without replay
 | Device | Samples | p50 (us) | p95 (us) | max (us) | Watchdog fired? |
 | --- | --- | --- | --- | --- | --- |
 | Emulator API 34 | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| Mid-range device | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| OPPO CPH2387, API 34, debug build (5 min of Feed scrolling in `ScreenshotBudgetTest`) | 490 | 3892 | **6196** (target <= 16000: met) | 51265 | no (no `fps lowered` line) |
 
 ## 3. Background CPU over 10 minutes (target: < 1 %, acceptance criterion #1)
 
@@ -108,9 +124,16 @@ sched freq idle am wm -a id.art.tracker`, open it in ui.perfetto.dev):
 
 | Build | Avg CPU 10 min (%) | Perfetto: SDK work in background |
 | --- | --- | --- |
-| Sample with SDK | NOT MEASURED | NOT MEASURED |
-| Baseline (no `init`) | NOT MEASURED | n/a |
-| **SDK share (difference)** | **NOT MEASURED** | |
+| Sample with SDK (OPPO CPH2387, API 34, debug) | **0.00** (0 CPU ticks in a 170 s window, tick = 10 ms); `dumpsys cpuinfo` over 12:27-12:32 does not list the process at all (the list goes down to 0.1 %) | NOT MEASURED (no Perfetto run) |
+| Baseline (no `init`) | NOT RUN (the SDK build already shows ~0, so there is nothing to subtract) | n/a |
+| **SDK share (difference)** | **< 0.1 %: target < 1 % met** | |
+
+How this was measured (deviation from the procedure above, stated plainly): the sample was launched, left in the
+foreground for 20 s, sent to the background with Home, the screen was turned off and left for 10 minutes; at the end the
+`dumpsys cpuinfo` window (5 minutes, ending 108 s before the dump) did not list the app. For a number instead of an
+absence, `/proc/<pid>/stat` (utime + stime) was read twice, 170 s apart, in the same state: 1723 ticks both times. The
+10-minute window was therefore not read as one `x%` figure, and Perfetto was not run, so the "no recurring SDK timer" and
+"one `artracker-flush` WorkManager run" expectations are **not verified by a trace**.
 
 ## 4. Release AAR size (MEASURED)
 
@@ -124,7 +147,7 @@ Measured on 2026-11-06 with `./gradlew :artracker-sdk:assembleRelease` and `ls -
 The AAR is not minified (library modules ship the compiled classes; the host app's R8 shrinks it). The 0.1.0 size is recorded in
 `artracker-sdk/CHANGELOG.md`.
 
-## 5. Method count (optional, NOT MEASURED)
+## 5. Method count (MEASURED)
 
 ```sh
 unzip -o artracker-sdk/build/outputs/aar/artracker-sdk-release.aar classes.jar -d /tmp/aar
@@ -134,15 +157,20 @@ $ANDROID_HOME/build-tools/<version>/d8 --lib $ANDROID_HOME/platforms/android-36/
 
 | Metric | Value |
 | --- | --- |
-| Methods in the SDK dex (before the host app's R8) | NOT MEASURED |
+| Methods in the SDK dex (before the host app's R8) | **3180** method ids (448 classes), d8 of `classes.jar` from the release AAR built at `ec9ace3` (the unresolved `okhttp3` / `androidx.work` desugaring warnings are expected: they are compileOnly / separate libraries) |
+| Release AAR now | 607754 bytes; `classes.jar` 644053 (the 0.1.0 figure in section 4 above predates phases 1-3) |
 
 ## Not measured here (summary)
 
-- `init` main-thread cost (section 1).
-- Replay capture p95 on the Feed screen (section 2).
-- Background CPU over 10 minutes and the Perfetto check (section 3), which is acceptance criterion #1.
-- Method count (section 5).
-- Playback of the replay chunks in the dashboard.
+- Everything in the "Emulator API 34" columns (the AVD here is API 30 only).
+- Perfetto traces of any kind (sections 3 and profiling): no trace was recorded, so attribution is by CPU ticks and logs only.
+- A 10-minute background window read as one `dumpsys cpuinfo` figure, and a baseline build without `init` (section 3).
+- A release-build (R8, baseline profile) `init` measurement (section 1).
+- `app_start` against `am start -W` on the device: the sample sent no `app_start` in 5 cold starts, see "app_start on the
+  device" below; this OPPO also reports `LaunchState: UNKNOWN` and a constant `WaitTime` of about 3.04 s, so `am start -W` is not a usable reference here.
+- Rage tap on the device (6 `input tap` in one shell did not leave a chunk row to inspect, and a `has_rage_click` chunk goes to the
+  replay endpoint, which the stand-in ingest does not serve): covered by the unit tests only.
+- API 24-29 ANR watchdog, API 34 memory warning, backend E2E (needs Docker), playback of replay chunks in the dashboard.
 
 ## 4. Screenshot replay
 
@@ -160,6 +188,10 @@ mode) and `Replay watchdog: fps lowered to ...` when the watchdog fires.
 | Device / API | Quality | Minutes | Total chunk MB | Jank delta (pp) | Watchdog fired? |
 | --- | --- | --- | --- | --- | --- |
 | OPPO CPH2387, API 34, 60 Hz, debug build, `ScreenshotBudgetTest` | STANDARD, 2 fps | 5 | **16.91** (457 frames; limit 25) | **-10.74** (baseline 76.98 %, 13000/16888 frames over 16 ms; with replay 66.24 %, 11443/17275) | not recorded |
+| same, second run (Phase 4, `ec9ace3`) | STANDARD, 2 fps | 5 | **16.95** (457 frames; limit 25) | **-1.60** (baseline 76.94 %, 12821/16664; with replay 75.33 %, 12760/16938) | no (`fps lowered` absent from the log) |
+
+The two runs agree on data (16.91 and 16.95 MB) and disagree on the jank delta (-10.74 and -1.60 points): both are far
+below the +2 limit, but the spread between them shows the metric is dominated by noise here, not by replay.
 
 Read of the result:
 
@@ -180,7 +212,8 @@ Reproduce: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest`, `adb in
 
 ## 4. Session profiling overhead (target: average CPU differs by <= 1 % of one core)
 
-Status: **measured on an emulator only; the target is NOT MET there, and it has not been run on a physical device.**
+Status: **the target is MET on a physical device (+0.04 points, Phase 4, below); on the emulator it was NOT MET (+3.27) and
+the cause of that emulator figure is still undetermined, see "Physical device run".**
 The numbers below are an emulator on a laptop host, which is noisy and not a substitute for the device run the plan asks
 for. Do not lower the target: repeat on a physical device before release, and treat a miss there as an issue.
 
@@ -215,7 +248,39 @@ code. A profile (Perfetto or a method trace) of a physical device run would sett
 | Device / API | Run A: profiling on (% of one core) | Run B: profiling off (% of one core) | Difference |
 | --- | --- | --- | --- |
 | Emulator, API 30 (2 runs each) | 6.34 | 3.07 | **+3.27, target missed** |
-| Physical device | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| OPPO CPH2387, API 34 (2 runs each, see below) | 1.72 | 1.68 | **+0.04, target met** |
+
+### Physical device run (Phase 4)
+
+Procedure: debug sample at `ec9ace3`; two APKs differing only in `PerformanceConfig(enabled = ...)` in
+`PlaygroundSettings.toConfig` (the "off" APK was a temporary local edit, reverted, not committed); profile `LOCAL` against
+`scripts/mock-ingest.py` through `adb reverse`; data wiped before each run; the sample idle in the foreground on its home
+screen, replay on (the sample default) in both; 30 s warm-up, then 300 s; CPU = `utime + stime` ticks of the process from
+`/proc/<pid>/stat` before and after (the same pid at both reads) divided by seconds, so both sides are measured the same way, % of one core;
+`KEYCODE_WAKEUP` every 30 s to keep the screen on. Order A B A B, to spread drift.
+
+| Run | Config | Ticks (10 ms) in about 300 s | Mean CPU (% of one core) |
+| --- | --- | --- | --- |
+| A1 | perf on | 510 | 1.694 |
+| B1 | perf off | 514 | 1.701 |
+| A2 | perf on | 527 | 1.750 |
+| B2 | perf off | 499 | 1.657 |
+
+Reading: on = 1.722 %, off = 1.679 %, a difference of **+0.043 points, inside the run-to-run spread (the two "off" runs
+alone differ by 0.044)**. That is well below the 1 % target. The "on" side did record profiling: the stand-in ingest
+received `perf.samples` items only after the "on" runs (1 after A1, none new after B1, 2 after A2, none new after B2).
+So the +3.3 % seen on the emulator does **not** reproduce on the device; the emulator figure was probably the emulator
+(shared host, x86 JIT, binder calls on a virtual battery), but that was not verified, and it was not profiled, so its
+cause remains undetermined. Not run: Perfetto, `trackFrames = false` on the device, a release build.
+
+### `app_start` on the device
+
+Five cold starts of the debug sample sent `screen_view`, `app_foreground`, `app_background` and `perf.samples` but **no
+`app_start`**. The log shows why: process start 13:07:45.4, `init` ran at 13:07:48.0 (a 2.6 s gap before `Application.onCreate`:
+debug, non-AOT, ColorOS), the first Activity was created at 13:07:49.5, 1.45 s after `init`, over
+`AppStartTracker.MAX_FIRST_CREATE_DELAY_MS` (1000 ms), so the tracker finished without reporting, by design. On a slow
+device or debug build with a long gap between `init` and the first Activity the event is never sent. Whether a 1 s window
+is right is a product decision (not changed here); `app_start` against a trusted launch time stays **unverified on a device**.
 
 ## Device context fields
 
