@@ -865,6 +865,9 @@ internal class ARTrackerCore(
 
     // region lifecycle hooks (driven by [processObserver])
 
+    /** Real user input (touch/key). Extends or rotates the session; never called for SDK-internal reads. */
+    internal fun onUserActivity() = session.onUserActivity()
+
     internal fun onForeground() {
         foreground = true
         // May rotate the session after a long background: that emits session_end/session_start via the listener.
