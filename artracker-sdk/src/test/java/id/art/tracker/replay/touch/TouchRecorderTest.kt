@@ -249,5 +249,20 @@ class TouchRecorderTest {
         assertEquals(1, inputs) // uninstalled recorder is a pass-through
     }
 
+    @Test
+    fun keyDown_reachesTheReplayBinding_untilUnbound() {
+        val window = activity().window
+        var keys = 0
+        TouchRecorder.install(window) {}
+        TouchRecorder.bindReplay(window, record, null, onKeyDown = { keys++ })
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN))
+        assertEquals(1, keys)
+        TouchRecorder.unbindReplay(window)
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+        assertEquals(1, keys)
+        TouchRecorder.uninstall(window)
+    }
+
     private class ForeignWrapper(private val inner: Window.Callback) : Window.Callback by inner
 }

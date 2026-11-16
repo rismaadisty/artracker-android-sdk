@@ -73,6 +73,7 @@ internal class ReplayController(
     private val mainHandler: Handler,
     private val sampler: (String, Double) -> Boolean = Sampling::isSampled,
     processing: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
+    imeVisibility: ((View) -> Boolean?)? = null,
 ) : ActivityTracker.WindowListener {
 
     private val scope = CoroutineScope(
@@ -99,7 +100,11 @@ internal class ReplayController(
     /** Active / Idle / Dormant lifecycle driven by real user input (named apart from the byte-budget [governor]). */
     private val captureGovernor =
         CaptureActivityGovernor(baseFps, replayConfig.idleAfterMs, replayConfig.dormantAfterMs)
-    private val imeWatcher = ImeVisibilityWatcher { handleTrigger(TriggerKind.KEYBOARD) }
+    private val imeWatcher = if (imeVisibility != null) {
+        ImeVisibilityWatcher(imeVisibility) { handleTrigger(TriggerKind.KEYBOARD) }
+    } else {
+        ImeVisibilityWatcher { handleTrigger(TriggerKind.KEYBOARD) }
+    }
     private var appliedState = CaptureState.ACTIVE
     private var dormantFlushPending = false
 
@@ -369,10 +374,11 @@ internal class ReplayController(
         }
     }
 
-    /** True when user input reaches a window we wrap, and no other window is on screen. */
+    /** True when user input reaches a window we wrap: no other window on screen and the keyboard not shown. */
     private fun inputObservable(): Boolean {
         val activity = currentActivity?.get() ?: return false
         val decor = runCatching { activity.window.decorView }.getOrNull() ?: return false
+        if (imeWatcher.anyVisible()) return false // typing: the keyboard is another process, no touch reaches us
         return attachedRoots.none { ref -> ref.get()?.let { it !== decor && it.isAttachedToWindow } == true }
     }
 
@@ -458,6 +464,7 @@ internal class ReplayController(
             window,
             { kind, x, y -> onTouch(kind, x, y, density) },
             { handleTrigger(TriggerKind.WINDOW) }, // focus moved to / came back from a dialog or another window
+            { onUserInput() }, // hardware keyboard / D-pad / remote
         ) ?: return
         runCatching { imeWatcher.attach(window.decorView) }
         if (wrappedWindows.none { it.get() === window }) wrappedWindows.add(WeakReference(window))
@@ -657,6 +664,7 @@ internal class ReplayController(
             mainHandler: Handler,
             sampler: (String, Double) -> Boolean = Sampling::isSampled,
             processing: CoroutineDispatcher? = null,
+            imeVisibility: ((View) -> Boolean?)? = null,
         ): ReplayController {
             var controller: ReplayController? = null
             val scheduler = FrameScheduler(
@@ -666,7 +674,7 @@ internal class ReplayController(
             }
             val created = ReplayController(
                 core, screenshot, scheduler, mainHandler, sampler,
-                processing ?: Dispatchers.Default.limitedParallelism(1),
+                processing ?: Dispatchers.Default.limitedParallelism(1), imeVisibility,
             )
             controller = created
             return created

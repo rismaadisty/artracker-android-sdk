@@ -41,4 +41,5 @@ internal fun testReplayController(
     processing: CoroutineDispatcher?,
     kit: ScreenshotKit = testScreenshotKit(core, handler),
     sampler: (String, Double) -> Boolean = { _, _ -> true },
-): ReplayController = ReplayController.create(core, kit, handler, sampler, processing)
+    imeVisibility: ((android.view.View) -> Boolean?)? = null,
+): ReplayController = ReplayController.create(core, kit, handler, sampler, processing, imeVisibility)

@@ -107,6 +107,8 @@ class ReplayControllerTest {
      * A started core whose replay controller runs its background work on [dispatcher]. The cold start tracker is off:
      * its real first-frame hook adds a draw listener of its own, and these tests count the controller's listeners.
      */
+    private var imeVisible = false
+
     private fun startCore(
         replay: ReplayConfig = ReplayConfig(enabled = true, sampleRate = 1.0),
         useDefaultFactory: Boolean = false,
@@ -119,6 +121,7 @@ class ReplayControllerTest {
             ARTrackerCore(app, cfg, clock, replayFactory = { c, handler ->
                 testReplayController(
                     c, handler, dispatcher, testScreenshotKit(c, handler, sink), { id, rate -> sampler(id, rate) },
+                    imeVisibility = { imeVisible },
                 )
             }, replaySink = sink, appStartFactory = { _, _ -> null })
         }
@@ -1181,6 +1184,43 @@ class ReplayControllerTest {
 
         assertEquals(1.0, schedulerField("stateRate") as Double, 0.0)
         assertEquals(false, schedulerField("statePaused"))
+    }
+
+    private fun layoutPass(view: View) {
+        val m = ViewTreeObserver::class.java.getDeclaredMethod("dispatchOnGlobalLayout")
+        m.isAccessible = true
+        m.invoke(view.viewTreeObserver)
+    }
+
+    @Test
+    fun softKeyboardVisible_keepsCaptureActive_untilItIsHidden() {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        imeVisible = true // typing in a form: the keyboard is another process, the app window sees no touch
+        layoutPass(activity.window.decorView)
+        advanceBoth(200_000)
+        assertEquals(1.0, schedulerField("stateRate") as Double, 0.0)
+        assertEquals(false, schedulerField("statePaused"))
+
+        imeVisible = false
+        layoutPass(activity.window.decorView)
+        advanceBoth(185_000)
+        assertEquals(true, schedulerField("statePaused")) // away again: back to the normal lifecycle
+    }
+
+    @Test
+    fun hardwareKeyInDormant_wakesCapture() {
+        val activity = startDormant()
+        val frames = frameCount()
+
+        activity.window.callback.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_DOWN))
+        idle(0)
+        dispatcher.runAll()
+        flushChunks()
+
+        assertEquals(frames + 1, frameCount())
+        assertEquals(1.0, schedulerField("stateRate") as Double, 0.0)
     }
 
     // endregion

@@ -40,6 +40,10 @@ internal class TouchRecorder(
     @Volatile
     internal var onFocusChanged: ((Boolean) -> Unit)? = null
 
+    /** Replay-owned: a key went down (hardware keyboard, D-pad, remote), which is user input for the capture lifecycle. */
+    @Volatile
+    internal var onKeyDown: (() -> Unit)? = null
+
     @Volatile
     internal var active: Boolean = true
 
@@ -61,7 +65,14 @@ internal class TouchRecorder(
 
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
         val result = delegate.dispatchKeyEvent(event)
-        if (active && event != null && event.action == KeyEvent.ACTION_DOWN) notifyInput()
+        if (active && event != null && event.action == KeyEvent.ACTION_DOWN) {
+            notifyInput()
+            try {
+                onKeyDown?.invoke()
+            } catch (_: Throwable) {
+                // Observing must never affect the app.
+            }
+        }
         return result
     }
 
@@ -146,11 +157,13 @@ internal class TouchRecorder(
             window: Window,
             onTouch: (TouchKind, Float, Float) -> Unit,
             onFocusChanged: ((Boolean) -> Unit)?,
+            onKeyDown: (() -> Unit)? = null,
         ): TouchRecorder? = try {
             synchronized(installed) {
                 obtain(window)?.also {
                     it.onTouch = onTouch
                     it.onFocusChanged = onFocusChanged
+                    it.onKeyDown = onKeyDown
                 }
             }
         } catch (_: Throwable) {
@@ -164,6 +177,7 @@ internal class TouchRecorder(
                     val recorder = (window.callback as? TouchRecorder) ?: installed[window]?.get()
                     recorder?.onTouch = null
                     recorder?.onFocusChanged = null
+                    recorder?.onKeyDown = null
                 }
             } catch (_: Throwable) {
                 // Never let cleanup break the app.

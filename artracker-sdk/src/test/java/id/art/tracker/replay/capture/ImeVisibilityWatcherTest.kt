@@ -73,4 +73,23 @@ class ImeVisibilityWatcherTest {
         layout(view)
         assertEquals(emptyList<Boolean>(), changes)
     }
+
+    @Test
+    fun anyVisible_followsTheWatchedViews() {
+        val view = decor()
+        val w = watcher()
+        assertEquals(false, w.anyVisible())
+        w.attach(view)
+        assertEquals(false, w.anyVisible())
+        visible = true
+        layout(view)
+        assertEquals(true, w.anyVisible())
+        visible = false
+        layout(view)
+        assertEquals(false, w.anyVisible())
+        visible = true
+        layout(view)
+        w.detach(view)
+        assertEquals(false, w.anyVisible()) // a detached window no longer counts
+    }
 }
