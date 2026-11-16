@@ -290,6 +290,9 @@ replay = ReplayConfig(
 - **Captured**: every window of the app (dialogs and bottom sheets included, see limitations) composited into one
   frame, and touch coordinates (the SDK wraps `Window.Callback` and only reads coordinates; it never consumes events).
   Keyboard keystrokes are not recorded.
+- **Rage taps**: three or more taps within 1 s, each within 24 dp of the first, mark the chunk with `has_rage_click`
+  in its acknowledgement (the chunk they land in; a burst can span two chunks of the same session). Multi-finger
+  gestures are not counted, and the SDK sends no separate event. `has_dead_click` is always `false`.
 - **Cost control**: capture runs only when the screen was drawn since the last tick, with a 16 ms main-thread budget
   watchdog that halves the frame rate, a rolling data budget of about 5 MB per minute (the frame rate is halved and
   then the quality steps down), identical frames are not sent, and nothing runs in the background. Chunks are queued
@@ -539,7 +542,7 @@ redaction; other profiles show value-free metadata only), *Pengaturan*.
 **Scenarios** (`ecommerce_checkout`, `onboarding_form`, `frustrated_taps`, `logout_switch_account`, `offline_user`,
 `long_session`) drive the UI with synthetic touches dispatched through `decorView.dispatchTouchEvent`, so the SDK's touch
 recorder sees them like real ones. Limits: touches are recorded only while replay runs, only in the Activity window (not
-dialogs or popups), and only after a first frame of the session exists. The SDK has no rage-click detection.
+dialogs or popups), and only after a first frame of the session exists. `frustrated_taps` produces a chunk flagged `has_rage_click`.
 
 **Tests**: `./gradlew :app:testDebugUnitTest` (JVM, MockWebServer for HTTP); `./gradlew :app:connectedDebugAndroidTest`
 (needs an emulator or device). Still manual: the 401 kill-switch, offline crash then relaunch, and replay playback of screenshot chunks in the

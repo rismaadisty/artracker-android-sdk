@@ -150,4 +150,174 @@ class ScreenChunkerTest {
         assertEquals(1, batches.size)
         assertFalse(batches.single().gzipBody.isEmpty())
     }
+
+    // region rage taps
+
+    private fun down(t: Long, x: Int = 100, y: Int = 200) = ScreenTouch(t, x, y, TouchKind.DOWN)
+
+    private fun move(t: Long, x: Int = 100, y: Int = 200) = ScreenTouch(t, x, y, TouchKind.MOVE)
+
+    private fun up(t: Long, x: Int = 100, y: Int = 200) = ScreenTouch(t, x, y, TouchKind.UP)
+
+    private fun ScreenChunker.touches(session: String, vararg all: ScreenTouch) = all.forEach { addTouch(session, it) }
+
+    @Test
+    fun threeQuickDowns_flagTheChunkHasRageClick() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300), down(600))
+        c.close()
+
+        assertTrue(batches.single().hasRageClick)
+        assertFalse(batches.single().hasError)
+    }
+
+    @Test
+    fun twoDowns_doNotFlag() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300))
+        c.close()
+
+        assertFalse(batches.single().hasRageClick)
+    }
+
+    @Test
+    fun moveAndUpBetweenDowns_doNotAffectTheCount() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), move(50), up(80), down(300), up(350), move(400), down(600))
+        c.close()
+
+        assertTrue(batches.single().hasRageClick)
+    }
+
+    @Test
+    fun manyMovesAndUps_neverAddUpToARage() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.addTouch("s1", down(0))
+        for (i in 1..20) c.addTouch("s1", if (i % 2 == 0) move(i * 40L) else up(i * 40L))
+        c.addTouch("s1", down(950))
+        c.close()
+
+        assertFalse("only two DOWNs", batches.single().hasRageClick)
+    }
+
+    @Test
+    fun burstAcrossAChunkClose_flagsTheChunkOfTheThirdDown() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300))
+        c.close()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(600))
+        c.close()
+
+        assertEquals(listOf(false, true), batches.map { it.hasRageClick })
+    }
+
+    @Test
+    fun thirdDownBeforeTheNextFrame_flagsTheNextChunk() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300))
+        c.close()
+        c.addTouch("s1", down(600)) // no open chunk: the touch itself is dropped, the rage is not
+        c.addFrame("s1", frame())
+        c.close()
+
+        assertTrue(batches[1].hasRageClick)
+        assertEquals(0, body(batches[1]).getJSONArray("touches").length())
+    }
+
+    @Test
+    fun aRageWithNoOpenChunk_tellsTheOwnerSoAFrameCanBeForced() {
+        var notified = 0
+        val c = chunker().also { it.onRagePending = { notified++ } }
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300), down(600)) // the chunk is open: nothing to ask for
+        c.close()
+        assertEquals(0, notified)
+
+        c.touches("s1", down(700)) // still rage, but no chunk is open now
+        assertEquals(1, notified)
+    }
+
+    @Test
+    fun noRageMeansNoNotification() {
+        var notified = 0
+        val c = chunker().also { it.onRagePending = { notified++ } }
+        c.addTouch("s1", down(0)) // no chunk, but also no burst
+        c.addTouch("s1", down(5_000))
+        assertEquals(0, notified)
+    }
+
+    @Test
+    fun aThrowingOwner_doesNotBreakTheChunker() {
+        val c = chunker().also { it.onRagePending = { error("boom") } }
+        c.addTouch("s1", down(0))
+        c.addTouch("s1", down(100))
+        c.addTouch("s1", down(200)) // must not throw
+        c.addFrame("s1", frame())
+        c.close()
+        assertTrue(batches.single().hasRageClick)
+    }
+
+    @Test
+    fun pendingRageDoesNotLeakIntoAnotherSession() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300))
+        c.close()
+        c.addTouch("s1", down(600))
+        c.addFrame("s2", frame())
+        c.close()
+
+        assertEquals("s2", batches[1].sessionId)
+        assertFalse(batches[1].hasRageClick)
+    }
+
+    @Test
+    fun aSessionChange_resetsTheBurst() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300))
+        c.addFrame("s2", frame()) // closes the chunk of s1
+        c.touches("s2", down(600))
+        c.close()
+
+        assertEquals(listOf(false, false), batches.map { it.hasRageClick })
+    }
+
+    @Test
+    fun discard_dropsThePendingRageAndTheBurst() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(0), down(300))
+        c.discard()
+        c.addFrame("s1", frame())
+        c.touches("s1", down(600))
+        c.close()
+
+        assertFalse(batches.single().hasRageClick)
+    }
+
+    @Test
+    fun pinchSequence_isNotARageTap() {
+        // What TouchRecorder reports for a two-finger pinch: one DOWN, moves, one UP. Twice within a second.
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.addTouch("s1", down(0))
+        for (i in 1..10) c.addTouch("s1", move(i * 80L))
+        c.addTouch("s1", up(900))
+        c.addTouch("s1", down(1000))
+        for (i in 1..10) c.addTouch("s1", move(1000 + i * 80L))
+        c.addTouch("s1", up(1900))
+        c.close()
+
+        assertFalse(batches.single().hasRageClick)
+    }
+
+    // endregion
 }

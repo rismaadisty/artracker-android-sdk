@@ -17,6 +17,8 @@ internal class NewReplayBatch(
     val userId: String?,
     val environment: String,
     val format: String = ReplayFormat.SCREEN_V1,
+    /** A rage tap (see `RageTapDetector`) landed in this chunk. Last, so positional callers keep working. */
+    val hasRageClick: Boolean = false,
 )
 
 /**
@@ -35,6 +37,8 @@ internal class ReplayUpload(
     val userId: String?,
     val environment: String,
     val format: String = ReplayFormat.SCREEN_V1,
+    /** A rage tap landed in this chunk; sent in the chunk ack as `has_rage_click`. Last, so positional callers keep working. */
+    val hasRageClick: Boolean = false,
 )
 
 /**

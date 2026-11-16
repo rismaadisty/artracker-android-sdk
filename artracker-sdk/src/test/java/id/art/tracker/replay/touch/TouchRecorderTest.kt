@@ -74,6 +74,20 @@ class TouchRecorderTest {
     }
 
     @Test
+    fun pointerDown_isNotRecorded() {
+        // The second finger of a pinch is ACTION_POINTER_DOWN / ACTION_POINTER_UP: never a DOWN, so a pinch cannot
+        // look like a burst of taps to the rage tap detector.
+        val recorder = TouchRecorder(Delegate(activity(), log, result = true), record)
+        val secondDown = MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+        val secondUp = MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+        recorder.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0))
+        recorder.dispatchTouchEvent(event(secondDown, 10))
+        recorder.dispatchTouchEvent(event(secondUp, 20))
+        recorder.dispatchTouchEvent(event(MotionEvent.ACTION_UP, 30))
+        assertEquals(listOf(TouchKind.DOWN, TouchKind.UP), touches.map { it.first })
+    }
+
+    @Test
     fun cancel_isRecordedAsUp() {
         val recorder = TouchRecorder(Delegate(activity(), log, result = true), record)
         recorder.dispatchTouchEvent(event(MotionEvent.ACTION_CANCEL, 0))
