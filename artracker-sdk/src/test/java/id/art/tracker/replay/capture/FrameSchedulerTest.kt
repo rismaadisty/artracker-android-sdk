@@ -445,4 +445,96 @@ class FrameSchedulerTest {
         assertEquals(1.0, s.currentFps, 0.0)
         s.stop()
     }
+
+    @Test
+    fun stateFpsNull_noTicksButSoonStillCaptures() {
+        val s = scheduler()
+        s.start()
+        s.setStateFps(null)
+        s.markDirty()
+        advance(60_000)
+        assertEquals(0, captures)
+        s.requestSoon(300)
+        advance(300)
+        assertEquals(1, captures)
+        s.stop()
+    }
+
+    @Test
+    fun stateFps02_ticksEvery5s() {
+        val s = scheduler(baseFps = 2.0)
+        s.start()
+        s.setStateFps(0.2) // below the 0.5 clamp of the configured rate on purpose
+        repeat(20) {
+            s.markDirty()
+            advance(1_000)
+        }
+        assertEquals(4, captures)
+        s.stop()
+    }
+
+    @Test
+    fun stateFpsRestored_resumesTicksAtTheActiveRate() {
+        val s = scheduler(baseFps = 1.0)
+        s.start()
+        s.setStateFps(null)
+        advance(10_000)
+        s.setStateFps(1.0)
+        s.markDirty()
+        advance(1_000)
+        assertEquals(1, captures)
+        s.stop()
+    }
+
+    @Test
+    fun forcedSoon_preemptsPendingSoon() {
+        val s = scheduler()
+        s.start()
+        s.requestSoon(300)
+        s.requestSoon(0, force = true)
+        advance(0)
+        assertEquals(1, captures)
+        advance(300)
+        assertEquals(1, captures)
+        s.stop()
+    }
+
+    @Test
+    fun forcedSoon_keepsTheEarlierOfTwoForcedRequests() {
+        val s = scheduler()
+        s.start()
+        s.requestSoon(300, force = true)
+        s.requestSoon(500, force = true)
+        advance(300)
+        assertEquals(1, captures)
+        advance(500)
+        assertEquals(1, captures)
+        s.stop()
+    }
+
+    @Test
+    fun plainSoon_doesNotReplaceAPendingForcedOne() {
+        val s = scheduler()
+        s.start()
+        s.requestSoon(300, force = true)
+        s.requestSoon(100)
+        advance(100)
+        assertEquals(0, captures)
+        advance(200)
+        assertEquals(1, captures)
+        s.stop()
+    }
+
+    @Test
+    fun stop_clearsStateFps() {
+        val s = scheduler(baseFps = 1.0)
+        s.start()
+        s.setStateFps(null)
+        s.stop()
+        s.start()
+        s.markDirty()
+        advance(1_000)
+        assertEquals(1, captures)
+        s.stop()
+    }
 }
