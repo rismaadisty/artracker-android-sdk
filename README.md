@@ -380,6 +380,10 @@ while it kills cached processes).
   turns it into a `log` item (`fatal`, name `crash`) with the highest priority, and it is never evicted.
 - **ANR / native crash / low-memory kill**: API 30+, read from `ApplicationExitInfo` and sent as `fatal` `anr` /
   `native_crash`, and `warn` `low_memory_kill`.
+- **ANR (API 24–29)**: while the app is in the foreground a watchdog thread checks the main thread every second; a
+  main thread that has not responded for 5 s is reported once as `error` `anr` with `source: "watchdog"`, the
+  main-thread stack (16 KB), the screen and the breadcrumbs. Not while a debugger is attached; stopped in the
+  background; API 30+ keeps using `ApplicationExitInfo` only. Always on, no setting.
 - **Offline**: items are persisted in SQLite (`artracker.db`) up to 5 MB or 5000 rows (replay chunks are evicted first,
   crash items never) and dropped after 7 days. Batches are at most 50 items or 128 KB, gzip-compressed. Foreground flush
   every 10 s; when the app goes to background one WorkManager job (`CONNECTED` constraint) drains the queue.
@@ -399,6 +403,7 @@ while it kills cached processes).
 | Replay | *(not an ingest item)* | `artracker-screen-v1` screenshot chunk, via the Session Replay API | at most 5 MiB gzipped per upload (chunks 2 MB) |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | from `ApplicationExitInfo` |
+| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, reported while the app is still running |
 | Low-memory kill (API 30+) | `log` | `warn`, name `low_memory_kill` | from `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
 | HTTP | `log` | `info`/`warn`/`error`, name `http_request` | |
@@ -435,6 +440,9 @@ Read these before shipping to production.
 
 **Behaviour**
 
+- The ANR watchdog (API 24–29) sees a main thread blocked for 5 s or more, not the system's ANR dialog, and an app that
+  recovers before 5 s is not reported. Its items are `error`, not `fatal`, because the process does not necessarily
+  die. It is not a way to measure jank: it only fires on a hang of 5 s or more.
 - `app_start` measures the **cold start** only: from the process start to the first drawn frame of the first Activity.
   Warm and hot starts are not measured. A process that was started in the background (a broadcast, WorkManager, a
   push) and opened by the user later reports nothing (a first Activity created more than 1 s after `init` is not a

@@ -19,7 +19,9 @@ versions follow semantic versioning.
 - **ANR detection on Android 7-10 (API 24-29).** While the app is in the foreground a watchdog thread posts a tick to
   the main thread every second; a tick that is still unanswered after 5 s is reported once per episode (not while a
   debugger is attached; a watchdog that wakes more than 2 s late rebases the episode instead of reporting). Nothing runs
-  in the background.
+  in the background. Sent through the normal pipeline as a `log` of level `error` named `anr` with `{source: "watchdog",
+  blocked_ms, main_thread_stack, screen, breadcrumbs}`; the same hang is reported at most 10 times per session. Always on
+  for API 24-29, no configuration; API 30+ keeps `ApplicationExitInfo` only.
 - **Cold start time (`app_start`).** Measured from process start (`Process.getStartUptimeMillis()`) to the first drawn
   frame of the first Activity; a process whose first Activity is created more than 1 s after `init`, or that was not in
   the foreground at `init`, reports nothing, and neither does a first Activity that finished before drawing when the

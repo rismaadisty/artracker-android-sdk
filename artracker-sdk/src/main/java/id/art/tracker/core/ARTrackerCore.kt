@@ -37,6 +37,7 @@ import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.ReplayControllerFactory
 import id.art.tracker.replay.ReplayIntake
 import id.art.tracker.replay.ReplaySink
+import id.art.tracker.telemetry.AnrWatchdog
 import id.art.tracker.telemetry.Breadcrumbs
 import id.art.tracker.telemetry.CrashHandler
 import id.art.tracker.telemetry.CrashItemBuilder
@@ -101,6 +102,11 @@ internal class ARTrackerCore(
      * hook and clock); null = the real one, measured from the process start to the first drawn frame.
      */
     private val appStartFactory: ((onAppStart: (AppStart) -> Unit, onDone: () -> Unit) -> AppStartTracker?)? = null,
+    /**
+     * Builds the ANR watchdog from the callback the core gives it (tests inject one with a fake clock and no real
+     * thread); null = the real one, which exists only on API 24-29 (from API 30 `ApplicationExitInfo` reports ANRs).
+     */
+    private val anrWatchdogFactory: ((onAnr: (Long, Array<StackTraceElement>) -> Unit) -> AnrWatchdog?)? = null,
 ) {
     val scope: CoroutineScope = CoroutineScope(
         SupervisorJob() +
@@ -380,6 +386,7 @@ internal class ARTrackerCore(
         // First thing, before any further work: a crash during the rest of init is already captured.
         crashHandler = CrashHandler.install(crashStore, ::buildCrashItem, shouldCapture = { !killSwitch.optedOut })
         crashSessionId = session.peekId()
+        createAnrWatchdog()
         FlusherRegistry.current = flusher
         backgroundInitJob = scope.launch {
             runCatching { onBackgroundInit() }.onFailure { SdkLog.w("background init hook failed", it) }
@@ -393,6 +400,46 @@ internal class ARTrackerCore(
         if (config.performance.enabled) startPerformance()
         registerProcessObserver()
         killSwitch.disabledUntilMs().takeIf { it > 0L }?.let(::scheduleResume)
+    }
+
+    /** Main-thread watchdog (API 24-29 only); runs while the app is in the foreground. */
+    @Volatile
+    private var watchdog: AnrWatchdog? = null
+
+    @androidx.annotation.VisibleForTesting
+    internal val anrWatchdog: AnrWatchdog? get() = watchdog
+
+    private fun createAnrWatchdog() {
+        runCatching {
+            watchdog = anrWatchdogFactory?.invoke(::onMainThreadBlocked)
+                ?: if (anrWatchdogFactory == null && Build.VERSION.SDK_INT in 24..29) {
+                    AnrWatchdog(mainHandler, ::onMainThreadBlocked)
+                } else {
+                    null
+                }
+        }.onFailure { SdkLog.w("ANR watchdog unavailable", it) }
+    }
+
+    /**
+     * A report of the watchdog, built on its thread: dropped when the SDK is disabled or the app is no longer in the
+     * foreground (the report may have been in the making while that changed). `error`, not `fatal`: the process is not
+     * known to die. The same hang is reported at most 10 times per session (fingerprint of the top frames).
+     */
+    internal fun onMainThreadBlocked(blockedMs: Long, stack: Array<StackTraceElement>) {
+        runCatching {
+            if (isDisabled() || !foreground) return
+            val fingerprint = Stacktrace.fingerprintFrames("anr", stack)
+            if (!errorDeduper.shouldReport(session.currentId(), fingerprint)) return
+            val attrs = LinkedHashMap<String, Any?>(8)
+            attrs["source"] = "watchdog"
+            attrs["blocked_ms"] = blockedMs
+            attrs["main_thread_stack"] = Stacktrace.formatFrames("ANR: main thread blocked for $blockedMs ms", stack)
+            screens.currentScreen?.let { attrs["screen"] = it }
+            attrs["breadcrumbs"] = breadcrumbs.snapshot()
+            // After the snapshot: the trail attached to this report ends before it, later reports see it.
+            breadcrumbs.add("error", "anr")
+            emit(items.log(LogLevel.ERROR, "anr", "Main thread blocked for $blockedMs ms", attrs))
+        }.onFailure { SdkLog.w("reporting a blocked main thread failed", it) }
     }
 
     /** One-shot cold start measurement; not created at all while the SDK is disabled. */
@@ -753,6 +800,7 @@ internal class ARTrackerCore(
         if (enabled) {
             pipeline.stopTimer()
             pipeline.discardAll()
+            runCatching { watchdog?.stop() }
             // Nothing recorded earlier may be sent later: the buffered samples go too.
             stopPerfLoop()
             runCatching { perf?.discard() }
@@ -761,6 +809,7 @@ internal class ARTrackerCore(
         } else if (foreground) {
             pipeline.startTimer()
             startPerfLoop()
+            runCatching { watchdog?.start() }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             persistJob = scope.launch { persistOptOut() }
@@ -809,6 +858,7 @@ internal class ARTrackerCore(
         pipeline.startTimer()
         emit(items.event("app_foreground"))
         startPerfLoop()
+        runCatching { watchdog?.start() }
     }
 
     internal fun onBackground() {
@@ -817,6 +867,7 @@ internal class ARTrackerCore(
         // Stops capture, unwraps windows and flushes the open replay chunk: nothing replay-related runs in background.
         runCatching { replay?.onAppBackground() }
         val active = !isDisabled()
+        runCatching { watchdog?.stop() } // nothing watches the main thread in the background
         stopPerfLoop() // no sampling in the background
         if (active) emit(items.event("app_background"))
         // Enqueued before flushNow(): the last samples travel with this flush, not with the next launch.
@@ -860,6 +911,7 @@ internal class ARTrackerCore(
         lifecycleStopped = true
         killSwitch.onTrip = null
         onMain { mainHandler.removeCallbacks(resumeAfterTrip) }
+        runCatching { watchdog?.stop() }
         runCatching { appStart?.let(app::unregisterActivityLifecycleCallbacks) }
         runCatching { app.unregisterActivityLifecycleCallbacks(activityTracker) }
         runCatching { activityTracker.detachAll() }

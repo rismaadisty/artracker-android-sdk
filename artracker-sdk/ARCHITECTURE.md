@@ -430,6 +430,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | Sesi | `session` | `session_start` / `session_end` | metadata perangkat |
 | Replay | *(bukan item ingest)* | chunk `artracker-screen-v1` lewat Session Replay API | ≤5 MiB gzip per upload (chunk 2 MB) |
 | Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya |
+| ANR (API 24–29) | `log` | `error`, name `anr` | `source:"watchdog"`, dilaporkan selagi app masih berjalan |
 | ANR / native crash (API 30+) | `log` | `fatal`, name `anr` / `native_crash` | dari `ApplicationExitInfo` |
 | `captureException` | `log` | `error`, name `exception` | |
 | HTTP | `log` | `info`/`warn`/`error`, name `http_request` | |
