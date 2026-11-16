@@ -16,6 +16,7 @@ import id.art.tracker.ReplayConfig
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.ClassAvailability
+import id.art.tracker.replay.capture.TriggerKind
 import id.art.tracker.replay.touch.TouchRecorder
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
@@ -161,6 +162,40 @@ class ReplayControllerTest {
         }
     }
 
+    /** Moves the fake clock and the main looper together, in 1 s steps, running the background work as it goes. */
+    private fun advanceBoth(ms: Long, stepMs: Long = 1_000, each: () -> Unit = {}) {
+        var left = ms
+        while (left > 0) {
+            val step = minOf(stepMs, left)
+            clock.advance(step)
+            idle(step)
+            dispatcher.runAll()
+            each()
+            left -= step
+        }
+    }
+
+    private fun schedulerField(name: String): Any? {
+        val scheduler = controller().javaClass.getDeclaredField("scheduler").also { it.isAccessible = true }.get(controller())!!
+        return scheduler.javaClass.getDeclaredField(name).also { it.isAccessible = true }.get(scheduler)
+    }
+
+    /** Simulates a draw of the root (the real draw listener only flips this flag). */
+    private fun markDirty() {
+        val scheduler = controller().javaClass.getDeclaredField("scheduler").also { it.isAccessible = true }.get(controller())!!
+        scheduler.javaClass.getDeclaredMethod("markDirty").invoke(scheduler)
+    }
+
+    /** Walks a freshly started controller (one frame taken) into DORMANT: no input for 3 minutes. */
+    private fun startDormant(): Activity {
+        startCore()
+        val (activity, _) = textActivity()
+        capture()
+        advanceBoth(181_000)
+        flushChunks()
+        return activity
+    }
+
     private fun idle(ms: Long = 0) {
         if (ms == 0L) shadowOf(looper).idle() else shadowOf(looper).idleFor(Duration.ofMillis(ms))
     }
@@ -198,7 +233,7 @@ class ReplayControllerTest {
 
     /** Lets the posted screen-change / session callbacks run (and the capture they request), then processes it. */
     private fun applyPosted() {
-        idle(200)
+        idle(500) // longer than the 300 ms debounce of a screen-change trigger
         dispatcher.runAll()
     }
 
@@ -503,9 +538,12 @@ class ReplayControllerTest {
     @Test
     fun checkout_every120s_forcesAFrame_evenWhenThePictureIsTheSame() {
         startCore()
-        textActivity()
+        val (activity, _) = textActivity()
         capture()
-        clock.advance(120_000)
+        repeat(5) { // a touch every 24 s keeps the user ACTIVE (the keyframe only runs while ACTIVE)
+            advanceBoth(24_000)
+            touch(activity, MotionEvent.ACTION_DOWN, 10)
+        }
         idle(5_000) // the flush tick sees the checkout interval is over and asks for a forced capture
         applyPosted() // ...which the scheduler runs soon after
         flushChunks()
@@ -821,4 +859,203 @@ class ReplayControllerTest {
         assertTrue(screens().all { it == "android://ScreenKeyMarker-_" })
         assertEquals(2, frameCount())
     }
+
+    // region capture lifecycle: Active -> Idle -> Dormant
+
+    @Test
+    fun idleThenDormant_stopsPeriodicCaptureAndClosesChunk() {
+        startCore()
+        textActivity()
+        capture()
+        advanceBoth(29_000)
+        assertEquals(1.0, schedulerField("stateRate") as Double, 0.0) // still ACTIVE: the configured rate
+        advanceBoth(2_000)
+        assertEquals(0.2, schedulerField("stateRate") as Double, 0.0) // IDLE: one check every 5 s
+
+        advanceBoth(139_000) // t = 170 s: an important change opens a chunk, which DORMANT will close on entry
+        controller().onTrigger(TriggerKind.SCREEN)
+        advanceBoth(1_000)
+        val before = batches().size
+        advanceBoth(8_000) // t = 179 s: chunk still open and not due
+        assertEquals(before, batches().size)
+        advanceBoth(2_000) // t = 181 s: DORMANT entered, the chunk was closed at once
+        settle()
+        assertEquals(before + 1, batches().size)
+        assertEquals(true, schedulerField("statePaused"))
+        assertFalse("flush" in pendingSdkCallbacks())
+
+        val frames = frameCount()
+        advanceBoth(60_000) { markDirty() }
+        flushChunks()
+        assertEquals(frames, frameCount())
+    }
+
+    @Test
+    fun carouselIdle_stopsCapturingAfterDormant() {
+        startCore()
+        val (_, tv) = textActivity("a")
+        var n = 0
+        lateinit var animate: Runnable
+        animate = Runnable {
+            tv.text = if (n++ % 2 == 0) "banner A" else "banner B"
+            markDirty()
+            tv.postDelayed(animate, 100)
+        }
+        tv.post(animate)
+        advanceBoth(181_000)
+        flushChunks()
+        val atDormancy = frameCount()
+        advanceBoth(1_800_000 - 181_000, stepMs = 5_000)
+        flushChunks()
+
+        assertEquals("no frame may be taken once DORMANT without a trigger", atDormancy, frameCount())
+        assertTrue("frames=$atDormancy", atDormancy in 1..(30 * 1 + 150 * 1 / 5 + 2))
+    }
+
+    @Test
+    fun dormantTouchDown_capturesImmediatelyAndResumes() {
+        val activity = startDormant()
+        val frames = frameCount()
+
+        touch(activity, MotionEvent.ACTION_DOWN, 10)
+        idle(0) // no debounce: the frame of what the user came back to is taken now
+        dispatcher.runAll()
+        flushChunks()
+
+        assertEquals(frames + 1, frameCount())
+        assertEquals(1.0, schedulerField("stateRate") as Double, 0.0) // back to the configured rate
+        assertEquals(false, schedulerField("statePaused"))
+        assertTrue("flush" in pendingSdkCallbacks())
+    }
+
+    @Test
+    fun dormantScreenChange_capturesOnceStaysDormant() {
+        startDormant()
+        val frames = frameCount()
+
+        ARTracker.screen("Checkout")
+        idle(200)
+        dispatcher.runAll()
+        flushChunks()
+        assertEquals(frames, frameCount()) // inside the 300 ms debounce
+        idle(200)
+        dispatcher.runAll()
+        flushChunks()
+
+        assertEquals(frames + 1, frameCount())
+        assertEquals(true, schedulerField("statePaused"))
+        advanceBoth(60_000) { markDirty() }
+        flushChunks()
+        assertEquals(frames + 1, frameCount())
+    }
+
+    @Test
+    fun pollingApiInDormant_isRateLimited() {
+        startDormant()
+        val frames = frameCount()
+
+        repeat(3) { // three responses within 2 s coalesce into one capture
+            controller().onTrigger(TriggerKind.NETWORK)
+            advanceBoth(700)
+        }
+        advanceBoth(1_000)
+        flushChunks()
+        assertEquals(frames + 1, frameCount())
+
+        advanceBoth(10_000) // the limiter window passed
+        val polled = frameCount()
+        repeat(20) { // every 3 s for 60 s
+            controller().onTrigger(TriggerKind.NETWORK)
+            advanceBoth(3_000)
+        }
+        flushChunks()
+        assertTrue("captures=${frameCount() - polled}", frameCount() - polled in 1..6)
+    }
+
+    @Test
+    fun dormantError_capturesAndFlagsChunk() {
+        startDormant()
+        val frames = frameCount()
+        val batchesBefore = batches().size
+
+        controller().noteError()
+        controller().onTrigger(TriggerKind.ERROR)
+        advanceBoth(1_000)
+        assertEquals(batchesBefore, batches().size) // the chunk is open
+        advanceBoth(10_000) // the one-shot close 10 s after the trigger
+        settle()
+
+        assertEquals(batchesBefore + 1, batches().size)
+        assertTrue(batches().last().hasError)
+        assertEquals(frames + 1, frameCount())
+    }
+
+    @Test
+    fun dormantNewWindow_capturesOnce() {
+        startDormant()
+        val frames = frameCount()
+
+        controller().onTrigger(TriggerKind.WINDOW)
+        advanceBoth(1_000)
+        flushChunks()
+
+        assertEquals(frames + 1, frameCount())
+    }
+
+    @Test
+    fun expiredSession_triggersIgnored() {
+        startDormant()
+        advanceBoth(31 * 60_000L, stepMs = 60_000)
+        assertTrue(core.session.isExpired())
+        flushChunks()
+        val frames = frameCount()
+
+        controller().onTrigger(TriggerKind.NETWORK)
+        controller().onTrigger(TriggerKind.SCREEN)
+        advanceBoth(2_000)
+        flushChunks()
+
+        assertEquals(frames, frameCount())
+    }
+
+    @Test
+    fun wakeAfterTimeout_frameBelongsToNewSession() {
+        val activity = startDormant()
+        val old = core.session.peekId()!!
+        advanceBoth(31 * 60_000L, stepMs = 60_000)
+
+        touch(activity, MotionEvent.ACTION_DOWN, 10) // the core rotates the session first, then replay wakes
+        idle(0)
+        dispatcher.runAll()
+        flushChunks()
+
+        val fresh = core.session.peekId()!!
+        assertTrue(old != fresh)
+        assertEquals(fresh, batches().last().sessionId)
+        assertTrue(batches().count { it.sessionId == old } >= 1)
+    }
+
+    @Test
+    fun dormant10min_touchKeepsSession() {
+        val activity = startDormant()
+        val id = core.session.peekId()
+        advanceBoth(10 * 60_000L, stepMs = 10_000)
+
+        touch(activity, MotionEvent.ACTION_DOWN, 10)
+
+        assertEquals(id, core.session.currentId())
+    }
+
+    @Test
+    fun keyframeOnlyInActive_notWhileIdle() {
+        startCore()
+        textActivity()
+        capture()
+        advanceBoth(125_000) // IDLE then DORMANT: the 120 s keyframe must not fire
+        flushChunks()
+
+        assertEquals(1, frameCount())
+    }
+
+    // endregion
 }

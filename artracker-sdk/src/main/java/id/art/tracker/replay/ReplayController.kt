@@ -12,8 +12,11 @@ import id.art.tracker.effectiveFps
 import id.art.tracker.preset
 import id.art.tracker.lower
 import id.art.tracker.lifecycle.ActivityTracker
+import id.art.tracker.replay.capture.CaptureActivityGovernor
+import id.art.tracker.replay.capture.CaptureState
 import id.art.tracker.replay.capture.FrameScheduler
 import id.art.tracker.replay.capture.RootViewLocator
+import id.art.tracker.replay.capture.TriggerKind
 import id.art.tracker.replay.screenshot.ByteBudgetGovernor
 import id.art.tracker.replay.screenshot.RawFrame
 import id.art.tracker.replay.screenshot.ScreenChunker
@@ -89,6 +92,12 @@ internal class ReplayController(
     private val attachedRoots = ArrayList<WeakReference<View>>()
     private val wrappedWindows = ArrayList<WeakReference<Window>>()
     private val flushRunnable = Runnable { onFlushTick() }
+    private val stateRunnable = Runnable { onStateTick() }
+    private val dormantFlushRunnable = Runnable { onDormantFlush() }
+
+    /** Active / Idle / Dormant lifecycle driven by real user input (named apart from the byte-budget [governor]). */
+    private val captureGovernor = CaptureActivityGovernor(baseFps)
+    private var appliedState = CaptureState.ACTIVE
 
     // Last screen name -> its sanitized href: the redactor regexes must not run on the main thread every frame.
     private var hrefScreen: String? = null
@@ -200,8 +209,17 @@ internal class ReplayController(
         post {
             if (!running) return@post
             forceFullNext = true
-            scheduler.requestSoon()
+            handleTrigger(TriggerKind.SCREEN)
         }
+    }
+
+    /**
+     * An important UI change (screen, window/dialog, error, API response, keyboard, app request): captures a frame
+     * after the trigger's debounce in every capture state, subject to the NETWORK rate limit and to the session not
+     * being expired. Any thread; the work happens on the main thread.
+     */
+    internal fun onTrigger(kind: TriggerKind) {
+        post { handleTrigger(kind) }
     }
 
     override fun onActivityResumed(a: Activity) = onMain {
@@ -266,6 +284,10 @@ internal class ReplayController(
         lastGovernorCap = null
         applyFpsCaps()
         scheduler.start() // T21 contract: start BEFORE attach
+        captureGovernor.onStart(core.clock.nowMs())
+        appliedState = CaptureState.ACTIVE
+        applyState()
+        scheduleStateTick()
         reattachRoots()
         currentActivity?.get()?.let(::wrapTouch)
         mainHandler.removeCallbacks(flushRunnable)
@@ -283,6 +305,8 @@ internal class ReplayController(
         if (!running) return
         running = false
         mainHandler.removeCallbacks(flushRunnable)
+        mainHandler.removeCallbacks(stateRunnable)
+        mainHandler.removeCallbacks(dormantFlushRunnable)
         scheduler.stop() // removes its callbacks and every draw listener
         attachedRoots.clear()
         unwrapAllTouch()
@@ -304,15 +328,79 @@ internal class ReplayController(
             halt(flushPipeline = false)
             return
         }
+        applyState()
+        if (appliedState == CaptureState.DORMANT) return // the flush timer stays stopped until the next input
         submit {
             if (core.isDisabled()) screenshot.chunker.discard() else screenshot.chunker.closeIfDue()
         }
-        if (core.clock.nowMs() - lastFullAtMs >= CHECKOUT_MS) {
+        val now = core.clock.nowMs()
+        if (captureGovernor.keyframeAllowed && now - lastFullAtMs >= CHECKOUT_MS) {
+            lastFullAtMs = now
             forceFullNext = true
             scheduler.requestSoon()
         }
         mainHandler.postDelayed(flushRunnable, FLUSH_INTERVAL_MS)
     }
+
+    // region main thread: capture lifecycle (Active -> Idle -> Dormant)
+
+    /** Brings the scheduler and the timers in line with the governor's state; acts only on a change. */
+    private fun applyState() {
+        val state = captureGovernor.evaluate(core.clock.nowMs())
+        scheduler.setStateFps(captureGovernor.periodicFps())
+        if (state == appliedState) return
+        appliedState = state
+        if (state == CaptureState.DORMANT) {
+            // Nothing is captured or uploaded on a timer while the user is away: close the chunk, stop the flush timer.
+            mainHandler.removeCallbacks(flushRunnable)
+            submit { closeScreenChunk() }
+        }
+    }
+
+    private fun scheduleStateTick() {
+        mainHandler.removeCallbacks(stateRunnable)
+        val next = captureGovernor.nextTransitionAtMs() ?: return
+        mainHandler.postDelayed(stateRunnable, (next - core.clock.nowMs()).coerceAtLeast(1L))
+    }
+
+    private fun onStateTick() {
+        if (!running) return
+        applyState()
+        scheduleStateTick()
+    }
+
+    /** Real user input (touch). The first one after Idle/Dormant captures what the user came back to, at once. */
+    private fun onUserInput() {
+        // While ACTIVE this is a flag flip: the state timer re-reads the deadline when it fires.
+        if (!captureGovernor.onUserInput(core.clock.nowMs())) return
+        forceFullNext = true
+        scheduler.requestSoon(0, force = true)
+        mainHandler.removeCallbacks(dormantFlushRunnable)
+        mainHandler.removeCallbacks(flushRunnable)
+        mainHandler.postDelayed(flushRunnable, FLUSH_INTERVAL_MS)
+        applyState()
+        scheduleStateTick()
+    }
+
+    private fun handleTrigger(kind: TriggerKind) {
+        if (!running || core.session.isExpired()) return
+        applyState()
+        val debounceMs = captureGovernor.admitTrigger(kind, core.clock.nowMs()) ?: return
+        forceFullNext = true
+        scheduler.requestSoon(debounceMs, force = true)
+        if (appliedState == CaptureState.DORMANT) {
+            // The flush timer is stopped: a one-shot close makes sure this frame is queued for upload (survives a kill).
+            mainHandler.removeCallbacks(dormantFlushRunnable)
+            mainHandler.postDelayed(dormantFlushRunnable, DORMANT_FLUSH_MS)
+        }
+    }
+
+    private fun onDormantFlush() {
+        if (!running || appliedState != CaptureState.DORMANT) return
+        submit { closeScreenChunk() }
+    }
+
+    // endregion
 
     private fun reattachRoots() {
         // Re-attach rather than trusting attach()'s idempotence: a root may have a new ViewTreeObserver.
@@ -393,6 +481,13 @@ internal class ReplayController(
 
     private fun onTouch(kind: TouchKind, rawX: Float, rawY: Float, density: Float) {
         if (!running) return
+        if (kind == TouchKind.DOWN && core.session.currentId() != recordingSessionId) {
+            // The core's input observer already rotated the session for this DOWN (it runs first): follow it, so the
+            // wake frame below belongs to the new session, or stop if the new session is not sampled.
+            evaluate()
+            if (!running) return
+        }
+        onUserInput()
         val sessionId = recordingSessionId ?: return
         val x = (rawX / density).roundToInt()
         val y = (rawY / density).roundToInt()
@@ -507,6 +602,7 @@ internal class ReplayController(
     companion object {
         const val FLUSH_INTERVAL_MS: Long = 5_000
         const val CHECKOUT_MS: Long = 120_000
+        const val DORMANT_FLUSH_MS: Long = 10_000
         private const val BUDGET_MS = 16L
         private const val MAX_FPS = 10.0
 
