@@ -1,5 +1,7 @@
 package id.art.tracker.e2e
 
+import androidx.activity.ComponentActivity
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import id.art.tracker.ARTracker
 import id.art.tracker.MockIngest
@@ -62,16 +64,28 @@ class IngestFlowTest {
         assertEquals(0, ARTracker.diagnostics().pendingItems)
     }
 
+    private fun awaitQueueEmpty() {
+        val deadline = System.nanoTime() + 15_000_000_000L
+        while (ARTracker.diagnostics().pendingItems > 0 && System.nanoTime() < deadline) Thread.sleep(100)
+    }
+
     @Test
     fun retryAfterIsHonouredThenAccepted() {
-        ingest.enqueue(503, mapOf("Retry-After" to "1"))
-        ARTracker.track("retry_event")
-        ARTracker.flush()
-        val seen = ingest.awaitUntil(30_000) { rs -> rs.count { it.body.contains("retry_event") } >= 2 }
-        assertTrue("the 503'd batch must be sent again", seen.count { it.body.contains("retry_event") } >= 2)
-        val deadline = System.nanoTime() + 30_000_000_000L
-        while (ARTracker.diagnostics().lastSendResult != "accepted" && System.nanoTime() < deadline) Thread.sleep(100)
-        assertEquals("accepted", ARTracker.diagnostics().lastSendResult)
+        // After a 503 the batch is sent again by the flush timer, which runs only while the app is in the foreground. This
+        // class never starts an Activity by itself (the process stays in the background), so one is launched here.
+        ActivityScenario.launch(ComponentActivity::class.java).use {
+            // The foreground's own items (session_start, app_foreground) go out first: the 503 must meet retry_event.
+            awaitQueueEmpty()
+            ingest.clear()
+            ingest.enqueue(503, mapOf("Retry-After" to "1"))
+            ARTracker.track("retry_event")
+            ARTracker.flush()
+            val seen = ingest.awaitUntil(30_000) { rs -> rs.count { it.body.contains("retry_event") } >= 2 }
+            assertTrue("the 503'd batch must be sent again", seen.count { it.body.contains("retry_event") } >= 2)
+            val deadline = System.nanoTime() + 30_000_000_000L
+            while (ARTracker.diagnostics().lastSendResult != "accepted" && System.nanoTime() < deadline) Thread.sleep(100)
+            assertEquals("accepted", ARTracker.diagnostics().lastSendResult)
+        }
     }
 
     @Test
@@ -83,7 +97,10 @@ class IngestFlowTest {
         ARTracker.track(
             "redaction_probe",
             mapOf(
+                // The key "card" is on the deny-list: its value is replaced whole. The card number in a value under a plain
+                // key is what shows the masked form (last four digits), so both are sent.
                 "password" to raw[0], "email" to raw[1], "card" to raw[2], "jwt" to raw[3], "auth" to raw[4],
+                "payment_note" to "paid with ${raw[2]}",
             ),
         )
         ARTracker.track(raw[5]) // an event NAME that is an email

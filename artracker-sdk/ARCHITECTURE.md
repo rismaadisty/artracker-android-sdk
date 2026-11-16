@@ -471,10 +471,12 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 
 ## 14. Checklist Implementasi
 
-> **Status (2026-11-06):** Fase 0–5 selesai di JVM/Robolectric (kecuali dua item di bawah yang belum dijalankan); sample app (Fase 6) dan audit fuzz selesai.
-> **Belum dijalankan/diukur** (butuh emulator, perangkat, atau Docker, yang tidak tersedia saat Task 25): tes instrumentasi crash offline,
-> pemutaran chunk di dashboard, Macrobenchmark/Perfetto (CPU background <1%, `init` ≤2 ms), dan E2E ke backend lokal
-> (`docs/e2e-manual-test.md`). Ukuran AAR rilis terukur: 398621 byte (`PERF.md`).
+> **Status (2026-11-16, setelah Fase 4 verifikasi perangkat):** Fase 0–5 selesai di JVM/Robolectric; sample app (Fase 6) dan audit fuzz selesai.
+> Diukur di perangkat fisik OPPO CPH2387 (API 34, build debug): crash offline → relaunch **lulus 5/5** (`scripts/e2e-crash-offline.sh`),
+> p95 capture replay 6196 µs (target ≤16 ms, tercapai), anggaran data 5 menit 16,95 MB (≤25), overhead profiling +0,04 poin (≤1, tercapai),
+> CPU background ≈0 (<0,1%), `init` 104,7 ms median di build debug (**target ≤2 ms tidak tercapai**, `PERF.md` §1).
+> **Belum dijalankan:** Perfetto, pengukuran di build rilis, `app_start` di perangkat (jendela 1 s terlewati di build debug, lihat `PERF.md`),
+> watchdog ANR API 24–29, E2E ke backend sebenarnya (butuh Docker), dan pemutaran chunk di dashboard (`docs/e2e-manual-test.md`).
 > Fase 7: konfigurasi publikasi, README, dan CHANGELOG selesai (Task 26, `0.1.0`); publikasi ke repositori publik dan E2E belum dikerjakan.
 
 
@@ -500,7 +502,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 - [x] `ExitInfoCollector` (API 30+)
 - [x] `Breadcrumbs`, `captureException`, `log()`, dedup fingerprint
 - [x] `ARTrackerOkHttpInterceptor` (compileOnly)
-- [ ] Tes instrumentasi crash offline → relaunch (acceptance criteria #2) *(belum: butuh emulator; hanya ada tes JVM `CrashRecoveryTest`)*
+- [x] Tes crash offline → relaunch (acceptance criteria #2) — lulus 5/5 di perangkat fisik via `scripts/e2e-crash-offline.sh` (stand-in ingest `scripts/mock-ingest.py`, bukan backend sebenarnya)
 
 ### Fase 4 — Privacy Engine
 - [x] `MaskingPolicy`, `ViewMaskRules` (inputType, autofill, tag, kelas), `ComposeMaskRules`
@@ -516,7 +518,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 
 ### Fase 6 — Sample App & Pengerasan
 - [x] Layar demo (§10.5) + panel debug — layar Login/Payment/Feed/Legacy/Diagnostics; panel debug = `DiagnosticsScreen`
-- [ ] Macrobenchmark & Perfetto: walk ≤8 ms/frame, CPU background <1% (acceptance criteria #1) *(belum diukur: butuh emulator/perangkat; prosedur dan tabel hasil di `PERF.md`)*
+- [ ] Macrobenchmark & Perfetto: walk ≤8 ms/frame, CPU background <1% (acceptance criteria #1) *(sebagian: CPU background ≈0 dan capture p95 6,2 ms diukur di OPPO API 34; Macrobenchmark dan Perfetto belum dijalankan; `init` ≤2 ms **tidak tercapai**, 104,7 ms di build debug; hasil di `PERF.md`)*
 - [x] Audit: tidak ada exception SDK yang lolos ke app (fuzz API publik) — `PublicApiFuzzTest` (1000 iterasi, seed tetap): 3 bug ditemukan dan diperbaiki (pipeline mati oleh `Error`, `Number` non-JSON, surrogate tunggal)
 
 ### Fase 7 — Rilis
