@@ -10,6 +10,10 @@ import id.art.tracker.BeforeSend
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.ARTrackerCore
+import id.art.tracker.core.Clock
+import id.art.tracker.core.KillSwitch
+import id.art.tracker.core.SharedPrefsStore
+import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
 import id.art.tracker.testutil.QueueReader
 import id.art.tracker.transport.ReplayStore
@@ -27,7 +31,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import java.time.Duration
 
 /** The watchdog wired into the core: which API levels get one, when it runs, and what a report becomes. */
 @RunWith(RobolectricTestRunner::class)
@@ -69,7 +75,7 @@ class AnrWatchdogCoreTest {
     )
 
     /** A core whose watchdog has a fake clock and a thread that is never started; `fake = false` = the real factory. */
-    private fun startCore(fake: Boolean = true, beforeSend: BeforeSend? = null): ARTrackerCore {
+    private fun startCore(fake: Boolean = true, beforeSend: BeforeSend? = null, clock: Clock = Clock.SYSTEM): ARTrackerCore {
         val factory: (((Long, Array<StackTraceElement>) -> Unit) -> AnrWatchdog?)? = if (fake) {
             { onAnr ->
                 AnrWatchdog(
@@ -83,7 +89,7 @@ class AnrWatchdogCoreTest {
         } else {
             null
         }
-        val c = ARTrackerCore(app, config(beforeSend), anrWatchdogFactory = factory)
+        val c = ARTrackerCore(app, config(beforeSend), clock, anrWatchdogFactory = factory)
         ARTrackerCore.install(c)
         c.start()
         core = c
@@ -177,6 +183,21 @@ class AnrWatchdogCoreTest {
         c.optOut(false)
 
         assertTrue(c.anrWatchdog!!.isRunning)
+    }
+
+    @Test
+    fun foregroundEnteredDuringATrip_startsTheWatchdogWhenTheTripExpires() {
+        val clock = FakeClock(1_700_000_000_000L)
+        // A trip written by an earlier run, still running when the app comes to the foreground.
+        SharedPrefsStore(app, TransportConfigStore.PREFS_NAME).putLong(KillSwitch.KEY_DISABLED_UNTIL, clock.nowMs() + 60_000)
+        val c = startCore(clock = clock)
+        ProcessLifecycleTestUtil.start()
+        assertFalse("disabled while the trip lasts", c.anrWatchdog!!.isRunning)
+
+        clock.advance(61_000)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(61_000))
+
+        assertTrue("it comes back with the rest of the recording", c.anrWatchdog!!.isRunning)
     }
 
     @Test

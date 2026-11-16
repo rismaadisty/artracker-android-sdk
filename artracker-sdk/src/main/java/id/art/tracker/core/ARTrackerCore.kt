@@ -273,6 +273,7 @@ internal class ARTrackerCore(
                 replay?.onDisabledChanged()
                 pipeline.startTimer()
                 startPerfLoop()
+                watchdog?.start() // onForeground returned early while the trip lasted
             }
         }.onFailure { SdkLog.w("resuming after the kill-switch failed", it) }
     }
