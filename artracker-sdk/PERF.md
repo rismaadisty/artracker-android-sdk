@@ -61,7 +61,11 @@ orders of magnitude): the first `getSharedPreferences` + first read of the three
 pipeline and the coroutine scopes about 10 ms, starting replay about 17 ms, starting performance sampling about 3 ms,
 `AppStartTracker` registration 4-5 ms. Those steps explain only part of the 104 ms: in a debug build the code is not AOT
 compiled (interpreted/JIT on first use) and the sample has 22 dex files, which inflates every first call, so this
-number is not a release-build figure. Not done: a release build (R8 + baseline profile) measurement, and moving the
+number is not a release-build figure. A second set of 6 cold starts after `cmd package compile -m speed -f` (the package still reported `status=verify`, because the
+sample is debuggable, so this is not a true AOT figure) gave 63.8-73.1 ms, median about 65 ms: the cost is real, not only
+interpretation. Reaching 2 ms means building the core off the main thread (a facade that queues calls until the core is ready),
+which changes the public behaviour of `ARTracker.init` and is **not done here: it needs a decision**; prefetching the
+three `SharedPreferences` alone would save only about 15 ms. Not done: a release build (R8 + baseline profile) measurement, and moving the
 three `SharedPreferences` loads off the main thread, which the note above prescribes. Both are the next step for this
 target.
 
