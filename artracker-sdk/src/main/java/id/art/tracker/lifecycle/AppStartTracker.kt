@@ -24,11 +24,14 @@ internal fun interface FirstFrameHook {
  * - the first lifecycle callback it hears is not `onActivityCreated`: `init` ran after the first Activity was created;
  * - the process was not in the foreground at `init` ([startedInForeground]): it was started by a broadcast, a service,
  *   WorkManager or a push, and the user may open the app much later;
- * - the first Activity is created more than [MAX_FIRST_CREATE_DELAY_MS] after the process started: the process was
- *   alive for a while before it showed anything;
+ * - the first Activity is created more than [MAX_FIRST_CREATE_DELAY_MS] after this tracker was created (`init`): the
+ *   process sat idle before it showed anything. The gap is taken from `init`, not from the process start, so a slow
+ *   `Application.onCreate` or a heavy ContentProvider does not turn a genuine slow start into "nothing";
  * - the app goes to the background before the first frame, or the duration is not in `0..`[MAX_DURATION_MS].
  * A first Activity that is paused or destroyed before it drew (a splash that finishes, a rotation) is given up, and the
- * next one created is measured instead, from the same process start; its name is the reported `first_screen`.
+ * next one created is measured instead, from the same process start; its name is the reported `first_screen`. That
+ * next Activity must be created within [MAX_NEXT_CREATE_DELAY_MS] of the last lifecycle event, otherwise (a trampoline
+ * that finished without starting one, a dialog over the splash, the user coming back much later) nothing is reported.
  *
  * Both times are on the `SystemClock.uptimeMillis` clock; no I/O. Main thread only, no locks.
  */
@@ -40,6 +43,9 @@ internal class AppStartTracker(
     private val onAppStart: (AppStart) -> Unit,
     private val onDone: () -> Unit,
 ) : Application.ActivityLifecycleCallbacks {
+    /** The clock at creation, which is `init`: the first Activity must follow it closely. */
+    private val initUptimeMs = uptime()
+    private var lastEventUptimeMs = initUptimeMs
     private var done = false
     private var heardFirstCallback = false
     private var candidate: WeakReference<Activity>? = null
@@ -52,10 +58,13 @@ internal class AppStartTracker(
         if (!heardFirstCallback) {
             heardFirstCallback = true
             if (!startedInForeground) return@guard finish()
-            if (uptime() - processStartUptimeMs > MAX_FIRST_CREATE_DELAY_MS) return@guard finish()
+            if (uptime() - initUptimeMs > MAX_FIRST_CREATE_DELAY_MS) return@guard finish()
+        } else if (uptime() - lastEventUptimeMs > MAX_NEXT_CREATE_DELAY_MS) {
+            return@guard finish() // too long after the last event: not the same launch
         }
         cancelHook() // a newer Activity replaces a candidate that has not drawn yet
         candidate = WeakReference(activity)
+        lastEventUptimeMs = uptime()
     }
 
     override fun onActivityResumed(activity: Activity) = guard {
@@ -89,6 +98,7 @@ internal class AppStartTracker(
     /** The first thing heard was not `onActivityCreated`: `init` came late. True when this call ended the work. */
     private fun skipIfNotTheFirstCallback(): Boolean {
         if (done) return true
+        lastEventUptimeMs = uptime()
         if (heardFirstCallback) return false
         heardFirstCallback = true
         finish()
@@ -146,8 +156,11 @@ internal class AppStartTracker(
     }
 
     companion object {
-        /** A first Activity created later than this after the process started means the process was not started for it. */
+        /** A first Activity created later than this after `init` means the process was not started to show it. */
         const val MAX_FIRST_CREATE_DELAY_MS = 1_000L
+
+        /** After an Activity was given up, the next one must be created within this long of the last lifecycle event. */
+        const val MAX_NEXT_CREATE_DELAY_MS = 2_000L
 
         /** A longer "cold start" is not a start (a process that sat in the background first): dropped. */
         const val MAX_DURATION_MS = 60_000L

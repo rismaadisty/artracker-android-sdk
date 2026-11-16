@@ -437,9 +437,12 @@ Read these before shipping to production.
 
 - `app_start` measures the **cold start** only: from the process start to the first drawn frame of the first Activity.
   Warm and hot starts are not measured. A process that was started in the background (a broadcast, WorkManager, a
-  push) and opened by the user later reports nothing (a first Activity created more than 1 s after the process started
-  is not a start), neither does one where `init` runs after the first Activity was created, and a duration above 60 s
-  is dropped. It is always on and has no setting.
+  push) and opened by the user later reports nothing (a first Activity created more than 1 s after `init` is not a
+  start; the gap is taken from `init`, so a slow `Application.onCreate` does not hide a genuine slow start). Nothing is
+  reported either when `init` runs after the first Activity was created, when the first Activity finished or paused
+  before drawing and the next one is created more than 2 s later, when the process was not in the foreground at
+  `init` (this also covers a launch with the screen off or under the keyguard), and when the duration is above 60 s.
+  It is always on and has no setting.
 - Global properties apply to items enqueued **after** the call, and a call before `init` is ignored. **Crash, ANR and
   native crash items never carry them**: a JVM crash is written when the process dies and sent by the next process, and
   ANR / native crash exits are reported by a later process, whose properties do not describe them. If you need the

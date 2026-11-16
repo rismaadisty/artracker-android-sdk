@@ -17,8 +17,9 @@ versions follow semantic versioning.
 - View fields with the androidx autofill hints `phoneNumber`, `phoneNumberDevice` and `phoneNational` are now masked
   too (until now only the View constant `phone` was).
 - **Cold start time (`app_start`).** Measured from process start (`Process.getStartUptimeMillis()`) to the first drawn
-  frame of the first Activity; a process whose first Activity is created more than 1 s after it started, or that was
-  not in the foreground at `init`, reports nothing. Sent as an `event` named `app_start` with
+  frame of the first Activity; a process whose first Activity is created more than 1 s after `init`, or that was not in
+  the foreground at `init`, reports nothing, and neither does a first Activity that finished before drawing when the
+  next one is created more than 2 s later. Sent as an `event` named `app_start` with
   `{type: "cold", duration_ms, first_screen}`; always on, no configuration.
 - **Global properties.** Attributes set once are merged into every event, log and session item (not `perf.samples`)
   before `beforeSend`; an item's own attribute wins on a key conflict. They are redacted like any attribute, one entry

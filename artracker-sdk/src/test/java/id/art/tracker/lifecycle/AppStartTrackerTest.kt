@@ -144,6 +144,83 @@ class AppStartTrackerTest {
     }
 
     @Test
+    fun aSlowApplicationOnCreate_isStillACountedColdStart() {
+        // The process started 5 s ago (providers, a heavy Application.onCreate); the tracker is created at init, 0.3 s
+        // before the first Activity: it is the gap since init that says the process was started to show something.
+        now = 10_000
+        val t = AppStartTracker(5_000L, true, { now }, hook, { starts += it }, { done++ }).also {
+            app.registerActivityLifecycleCallbacks(it)
+            registered = it
+        }
+        now = 10_300
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+        now = 10_800
+        hook.requests.single().onFrame()
+
+        assertEquals(listOf(AppStart(5_800, "PlainActivity")), starts)
+        assertTrue(t.isDone)
+    }
+
+    @Test
+    fun aSplashDestroyedAndTheNextActivityCreatedMuchLater_emitsNothing() {
+        // A trampoline that finishes in onCreate without starting an Activity of this process: the user opens the app
+        // 20 s later. That is not the start of the process.
+        val t = tracker()
+        now = 10_100
+        val splash = Robolectric.buildActivity(SplashActivity::class.java).create()
+        splash.get().finish()
+        splash.destroy()
+        now = 30_000
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+
+        assertTrue(starts.isEmpty())
+        assertTrue(t.isDone)
+        assertTrue(hook.requests.isEmpty())
+    }
+
+    @Test
+    fun aPausedCandidateAndAnActivityOpenedMuchLater_emitsNothing() {
+        // A system dialog over a splash: the Activity pauses before it drew and resumes later without being created again.
+        val t = tracker()
+        now = 10_100
+        val first = Robolectric.buildActivity(PlainActivity::class.java).setup()
+        first.pause()
+        now = 30_000
+        Robolectric.buildActivity(AnnotatedActivity::class.java).setup()
+
+        assertTrue(starts.isEmpty())
+        assertTrue(t.isDone)
+        assertEquals("only the first Activity was ever waited for", 1, hook.requests.size)
+    }
+
+    @Test
+    fun theNextActivityIsMeasuredWithinTheWindow_butNotAfterIt() {
+        val atTheEdge = tracker()
+        now = 10_100
+        val splash = Robolectric.buildActivity(SplashActivity::class.java).create()
+        splash.get().finish()
+        splash.destroy()
+        now = 10_100 + AppStartTracker.MAX_NEXT_CREATE_DELAY_MS
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+        assertFalse(atTheEdge.isDone)
+        assertEquals(1, hook.requests.size)
+    }
+
+    @Test
+    fun theNextActivityOneMsPastTheWindow_isNotMeasured() {
+        val t = tracker()
+        now = 10_100
+        val splash = Robolectric.buildActivity(SplashActivity::class.java).create()
+        splash.get().finish()
+        splash.destroy()
+        now = 10_100 + AppStartTracker.MAX_NEXT_CREATE_DELAY_MS + 1
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+
+        assertTrue(t.isDone)
+        assertTrue(hook.requests.isEmpty())
+    }
+
+    @Test
     fun pausedCandidateCancelsItsHook() {
         tracker()
         now = 10_100
