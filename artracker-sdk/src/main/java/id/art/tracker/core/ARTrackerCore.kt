@@ -158,25 +158,30 @@ internal class ARTrackerCore(
     @Volatile
     private var endedSessionUserId: String? = null
 
-    /** The session that ended last and the user it belonged to (a user switch or `reset()` changes the user first). */
-    @Volatile
-    private var lastEndedSession: Pair<String, String?>? = null
-
-    /**
-     * The user a replay chunk of [sessionId] belongs to: the previous user for the session that just ended (a frame
-     * of it can still arrive after `identify(B)` / `reset()`), otherwise the user signed in now.
-     */
-    internal fun userForSession(sessionId: String): String? {
-        val ended = lastEndedSession
-        return if (ended != null && ended.first == sessionId) ended.second else identity.userId
-    }
-
     /** Serialises [identify] and [reset]: both read-modify-write the user, the dedupe state and the session. */
     private val identityLock = Any()
 
-    /** The traits of the last `$identify` this process emitted (in memory only); null: none yet, or after [reset]. */
+    /** The traits of the last `$identify` this process emitted (in memory only); null: none yet, after [reset], or after an opt-out. */
     @Volatile
     private var lastEmittedTraits: Map<String, Any?>? = null
+
+    /**
+     * The user of the last few sessions whose user was replaced (a user switch or `reset()`), recorded BEFORE the user
+     * changes, so a replay frame of such a session that is still in flight keeps the user it belonged to.
+     */
+    private val replacedSessionUsers = object : LinkedHashMap<String, String?>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String?>?) = size > 8
+    }
+
+    private fun rememberSessionUser(previousUser: String?) {
+        val sessionId = session.peekId() ?: return
+        synchronized(replacedSessionUsers) { replacedSessionUsers[sessionId] = previousUser }
+    }
+
+    /** The user a replay chunk of [sessionId] belongs to: the one it had when it was replaced, else the current user. */
+    internal fun userForSession(sessionId: String): String? = synchronized(replacedSessionUsers) {
+        if (replacedSessionUsers.containsKey(sessionId)) replacedSessionUsers[sessionId] else identity.userId
+    }
 
     private val sessionListener = object : SessionManager.Listener {
         override fun onSessionStart(id: String) {
@@ -197,12 +202,10 @@ internal class ARTrackerCore(
         override fun onSessionEnd(id: String, durationMs: Long) {
             // Samples buffered in this session go out under its id, before the session closes.
             runCatching { perf?.flush() }
-            // Also while disabled: replay may still hold a frame of this session.
-            val user = endedSessionUserId ?: identity.userId
-            lastEndedSession = id to user
             runCatching {
                 if (isDisabled()) return@runCatching
                 // Stamped with the id of the session that ended, never with the current one.
+                val user = endedSessionUserId ?: identity.userId
                 emit(itemsFor(id, user).session("session_end", mapOf("duration_ms" to durationMs)))
             }
         }
@@ -758,6 +761,8 @@ internal class ARTrackerCore(
     }
 
     private fun identifyLocked(userId: String, clean: Map<String, Any?>) {
+        // Checked again inside the lock: an opt-out that ran meanwhile must not have its cleared state re-set.
+        if (isDisabled()) return
         val previous = identity.userId
         // Same user, same traits: nothing new to tell the backend. `lastEmittedTraits` lives in memory only, so the
         // first call of every process still emits (the common "identify on every app start" pattern).
@@ -766,6 +771,7 @@ internal class ARTrackerCore(
             // A different user on the same device: the old session closes under the old user, the new one opens
             // under the new user. The user id is set BEFORE rotating so the new `session_start` already carries it.
             endedSessionUserId = previous
+            rememberSessionUser(previous)
             try {
                 identity.userId = userId
                 session.rotate()
@@ -863,6 +869,7 @@ internal class ARTrackerCore(
     fun reset() {
         synchronized(identityLock) {
             endedSessionUserId = identity.userId
+            rememberSessionUser(identity.userId)
             lastEmittedTraits = null
             try {
                 identity.reset()
@@ -888,7 +895,7 @@ internal class ARTrackerCore(
         runCatching { replay?.onDisabledChanged() }
         if (enabled) {
             // The unsent `$identify` is about to be discarded: the next identify (after opting back in) must send.
-            lastEmittedTraits = null
+            synchronized(identityLock) { lastEmittedTraits = null }
             pipeline.stopTimer()
             pipeline.discardAll()
             runCatching { watchdog?.stop() }

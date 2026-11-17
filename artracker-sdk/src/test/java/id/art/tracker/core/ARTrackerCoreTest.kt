@@ -609,6 +609,22 @@ class ARTrackerCoreTest {
     }
 
     @Test
+    fun userForSession_remembersSeveralEndedSessions() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.identify("A")
+        val sA = ARTracker.diagnostics().sessionId!!
+        ARTracker.identify("B")
+        val sB = ARTracker.diagnostics().sessionId!!
+        ARTracker.reset()
+        val sAnon = ARTracker.diagnostics().sessionId!!
+        ARTracker.identify("C")
+
+        assertEquals("A", core().userForSession(sA))
+        assertEquals("B", core().userForSession(sB))
+        assertEquals("C", core().userForSession(sAnon))
+    }
+
+    @Test
     fun identify_afterOptOutDiscardedTheQueuedIdentify_sendsAgainOnceOptedBackIn() {
         startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
         ARTracker.identify("A", mapOf("plan" to "pro"))
