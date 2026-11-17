@@ -43,6 +43,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -545,6 +546,62 @@ class ARTrackerCoreTest {
         val items = settle()
         assertEquals(1, items.named("session_start").size)
         assertEquals(1, items.named("screen_view").size)
+    }
+
+    /** A first process that ran in the foreground and went to the background; returns its session id. A "death" follows. */
+    private fun firstProcessThenDeath(clock: FakeClock): String {
+        startCoreWith(clock, sessionTimeoutMs = 60_000)
+        ProcessLifecycleTestUtil.start()
+        ProcessLifecycleTestUtil.stop()
+        val id = settle().named("session_start").single().sessionId
+        ARTracker.resetForTest() // the process is gone; its prefs stay
+        seen.clear()
+        return id
+    }
+
+    @Test
+    fun processRestart_withinTimeout_keepsSessionId() {
+        val clock = FakeClock(1_700_000_000_000)
+        val id = firstProcessThenDeath(clock)
+        clock.advance(30_000)
+        startCoreWith(clock, sessionTimeoutMs = 60_000)
+        ProcessLifecycleTestUtil.start()
+
+        val items = settle()
+        assertTrue(items.named("session_start").isEmpty())
+        assertTrue(items.named("session_end").isEmpty())
+        assertEquals(id, items.named("app_foreground").single().sessionId)
+    }
+
+    @Test
+    fun processRestart_afterTimeout_endsOldSessionThenStartsNew() {
+        val clock = FakeClock(1_700_000_000_000)
+        val id = firstProcessThenDeath(clock)
+        clock.advance(120_000)
+        startCoreWith(clock, sessionTimeoutMs = 60_000)
+        ProcessLifecycleTestUtil.start()
+
+        val items = settle()
+        val end = items.named("session_end").single()
+        val start = items.named("session_start").single()
+        assertEquals(id, end.sessionId)
+        assertNotEquals(id, start.sessionId)
+        assertTrue(items.indexOf(end) < items.indexOf(start))
+        assertEquals(start.sessionId, items.named("app_foreground").single().sessionId)
+    }
+
+    @Test
+    fun processRestartInBackground_keepsStoredSession_untilForeground() {
+        val clock = FakeClock(1_700_000_000_000)
+        val id = firstProcessThenDeath(clock)
+        clock.advance(120_000)
+        startCoreWith(clock, sessionTimeoutMs = 60_000) // started by a push or a job: never in the foreground
+        core().track("push_received", emptyMap())
+
+        val items = settle()
+        assertEquals(id, items.named("push_received").single().sessionId)
+        assertTrue(items.named("session_start").isEmpty())
+        assertTrue(items.named("session_end").isEmpty())
     }
 
     @Test

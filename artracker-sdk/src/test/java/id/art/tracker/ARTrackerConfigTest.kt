@@ -161,6 +161,19 @@ class ARTrackerConfigTest {
     }
 
     @Test
+    fun javaBuilder_appliesSessionTimeout() {
+        val c = ARTrackerConfig.Builder(endpoint, validKey).sessionTimeoutMs(60_000).build()
+        assertEquals(60_000L, c.sessionTimeoutMs)
+        assertTrue(c.validate().isEmpty())
+    }
+
+    @Test
+    fun javaBuilder_sessionTimeoutBelowMinimum_isValidationError() {
+        val c = ARTrackerConfig.Builder(endpoint, validKey).sessionTimeoutMs(999).build()
+        assertTrue(c.validate().any { it.contains("sessionTimeoutMs") })
+    }
+
+    @Test
     fun performance_isOffByDefault() {
         assertFalse(config().performance.enabled)
     }

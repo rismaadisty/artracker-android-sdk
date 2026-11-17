@@ -36,6 +36,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -516,6 +517,47 @@ class ReplayControllerTest {
         flushChunks()
         assertEquals(2, frameCount())
         assertTrue(activity.window.callback is TouchRecorder)
+    }
+
+    @Test
+    fun shortBackground_resumesRecordingUnderSameSession() {
+        startCore()
+        textActivity()
+        capture()
+        val first = core.session.peekId()!!
+
+        ProcessLifecycleTestUtil.stop()
+        settle()
+        clock.advance(60_000) // well inside the 30 minute timeout
+        ProcessLifecycleTestUtil.start()
+        applyPosted()
+        assertTrue(controller().isRunning)
+        capture()
+        flushChunks()
+
+        assertEquals(first, core.session.peekId())
+        assertEquals(2, batches().size) // one closed on background, one after the return
+        assertTrue(batches().all { it.sessionId == first })
+    }
+
+    @Test
+    fun longBackground_resumesRecordingUnderNewSession() {
+        startCore()
+        textActivity()
+        capture()
+        val first = core.session.peekId()!!
+
+        ProcessLifecycleTestUtil.stop()
+        settle()
+        clock.advance(1_800_001) // just past the 30 minute timeout
+        ProcessLifecycleTestUtil.start()
+        applyPosted()
+        capture()
+        flushChunks()
+
+        val second = core.session.peekId()!!
+        assertNotEquals(first, second)
+        assertEquals(listOf(first, second), batches().map { it.sessionId })
     }
 
     @Test

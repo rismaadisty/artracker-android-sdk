@@ -119,6 +119,18 @@ class SessionManagerTest {
     }
 
     @Test
+    fun foregroundAtExactTimeout_keepsSession() {
+        val m = manager()
+        m.onForeground()
+        val id = m.currentId()
+        m.onBackground()
+        clock.advance(timeout) // exactly the timeout: the comparison is strictly greater
+        m.onForeground()
+        assertEquals(id, m.currentId())
+        assertTrue(listener.ends.isEmpty())
+    }
+
+    @Test
     fun rotate_endsAndStarts() {
         val m = manager()
         val old = m.currentId()
