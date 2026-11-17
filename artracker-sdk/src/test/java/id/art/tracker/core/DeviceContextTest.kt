@@ -33,6 +33,18 @@ class DeviceContextTest {
         assertTrue(attrs["network"] in setOf("wifi", "cellular", "ethernet", "none", "unknown"))
     }
 
+    /** The backend builds People profiles from `session_start`: these keys must survive any refactor. */
+    @Test
+    fun sessionStartAttributes_containPeopleContractKeys() {
+        val attrs = DeviceContext(context, "1.2.3").sessionStartAttributes()
+        val contract = setOf(
+            "platform", "os_version", "manufacturer", "model", "app_version", "app_build",
+            "locale", "tz", "network", "is_emulator", "sdk_version",
+        )
+        assertTrue("missing: ${contract - attrs.keys}", attrs.keys.containsAll(contract))
+        assertEquals("android", attrs["platform"])
+    }
+
     @Test
     fun envelopeContext_containsOnlyThreeKeys() {
         val ctx = DeviceContext(context, "9.9").envelopeContext("staging")

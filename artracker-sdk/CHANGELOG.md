@@ -5,6 +5,25 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-17
+
+### Changed
+
+- **`identify` traits are bounded to the People contract**: at most 50 keys (first 50 in sorted order), keys of 1 to
+  64 characters, `String` values truncated to 256 characters, and only `String`, `Number`, `Boolean` or `null`
+  values. Collections, maps, arrays, dates, enums and other objects are dropped instead of being `toString()`-ed.
+- **Global properties are no longer merged into `$identify`**, so they cannot end up in the stored user traits.
+  `beforeSend` still receives and may modify the item.
+- **A repeated identical `identify(userId, traits)` is not sent again** (per process: the first call after a start
+  always sends). Opting out does not affect this: nothing is remembered while opted out.
+- **`identify` for a different user rotates the session** (`session_end` for the previous user, then `session_start`
+  and `$identify` for the new one), so one session never mixes two users. Identifying from anonymous keeps the session.
+
+### Fixed
+
+- A session replay chunk is stamped with the user it was opened under, not the user signed in when it closes. After
+  a user switch the old session's last chunk is no longer uploaded as the new user.
+
 ## [1.0.2] - 2026-11-17
 
 ### Added

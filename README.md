@@ -1,10 +1,10 @@
 # artracker-android-sdk
 Native Android SDK for session replay — capture UI layout states, touch events, and user flows
 
-Version `1.0.2`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
+Version `1.0.3`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
 [ARTracker](https://github.com/tiofani03/artracker) backend (`POST {endpoint}/api/v1/ingest`).
 
-> **Status: what is verified and what is NOT** (read this before adopting `1.0.2`)
+> **Status: what is verified and what is NOT** (read this before adopting `1.0.3`)
 >
 > | Area | State |
 > | --- | --- |
@@ -28,13 +28,13 @@ Version `1.0.2`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 
 ## Installation
 
-Coordinates: `id.art.tracker:artracker-android:1.0.2`, published to **GitHub Packages**
+Coordinates: `id.art.tracker:artracker-android:1.0.3`, published to **GitHub Packages**
 (`https://maven.pkg.github.com/rismaadisty/artracker-android-sdk`).
 
 ```kotlin
 // build.gradle.kts of the app module
 dependencies {
-    implementation("id.art.tracker:artracker-android:1.0.2")
+    implementation("id.art.tracker:artracker-android:1.0.3")
 }
 ```
 
@@ -61,7 +61,7 @@ dependencyResolutionManagement {
 
 Step by step (creating the token, Groovy, version catalog, CI, troubleshooting): [`docs/github-packages.md`](docs/github-packages.md).
 To try an unreleased build instead, publish it to your local Maven repository and add `mavenLocal()`:
-`./gradlew :artracker-sdk:publishToMavenLocal` (writes to `~/.m2/repository/id/art/tracker/artracker-android/1.0.2/`).
+`./gradlew :artracker-sdk:publishToMavenLocal` (writes to `~/.m2/repository/id/art/tracker/artracker-android/1.0.3/`).
 
 The SDK pulls in `kotlinx-coroutines-android`, `androidx.work:work-runtime-ktx`, `androidx.lifecycle:lifecycle-process`,
 `androidx.core:core-ktx` and the Kotlin stdlib. It has no Room, no kotlinx.serialization and no OkHttp dependency.
@@ -141,14 +141,14 @@ invalid config, while the user is opted out, or while the SDK is disabled by the
 
 | Call | What it does |
 | --- | --- |
-| `ARTracker.identify(userId, traits = emptyMap())` | Associates later items with `userId`; records a `$identify` event with `traits` |
+| `ARTracker.identify(userId, traits = emptyMap())` | Associates later items with `userId`; records a `$identify` event with `traits`. Traits are bounded and global properties are not merged into them, see "Identifying users" |
 | `ARTracker.track(name, properties = emptyMap())` | Custom event |
 | `ARTracker.screen(name)` | `screen_view` for screens that are not tracked automatically |
 | `ARTracker.trackNavController(navController)` | `screen_view` (type `compose`) on every destination change of a Jetpack Navigation `NavController`. Ignored without Navigation on the classpath |
 | `ARTracker.log(level, message, attributes = emptyMap())` | Log item at `LogLevel.DEBUG/INFO/WARN/ERROR/FATAL` |
 | `ARTracker.captureException(throwable, attributes = emptyMap())` | `error` log named `exception` with stack trace, fingerprint, breadcrumbs, current screen. At most 10 identical errors per session |
 | `ARTracker.flush()` | Asks the SDK to send what is queued; returns immediately |
-| `ARTracker.reset()` | Logout: forgets the user and starts a new session |
+| `ARTracker.reset()` | Logout: call it when the user signs out. Forgets the user and starts a new anonymous session |
 | `ARTracker.setGlobalProperties(properties)` | Replaces the set of attributes added to every later event, log and session item (not `perf.samples`); the item's own attribute wins on a key conflict. Kept in memory only: set them again after every `init`. Not cleared by `reset()` |
 | `ARTracker.clearGlobalProperties()` | Removes them (call it on logout if they describe the user) |
 | `ARTracker.optOut(enabled)` | `true`: records and sends nothing, and **deletes everything already queued**. Persisted across restarts |
@@ -156,6 +156,31 @@ invalid config, while the user is opted out, or while the SDK is disabled by the
 | `ARTracker.startReplay()` / `stopReplay()` | Force replay on (still never while opted out) or stop it; `stopReplay` stays off across new sessions until `startReplay` |
 | `ARTracker.diagnostics()` | `Diagnostics(initialized, sessionId, pendingItems, lastSendResult, disabled)`. Reads the database: **never call it on the main thread** |
 | `ARTracker.isInitialized()` | True after a successful `init` |
+
+### Identifying users
+
+`identify` ties the device to a person; the traits appear on the dashboard under **People** and in the replay **User**
+tab. Call it after login, and again whenever the traits change (calling it on every app start is fine).
+
+| Situation | What happens |
+| --- | --- |
+| `identify("A")` while anonymous | The current session continues and is now `A`'s. No `session_end` |
+| `identify("A", sameTraits)` while `A` with the same traits | Nothing is sent. The first call in every process always sends, because the traits are kept in memory only |
+| `identify("A", otherTraits)` while `A` | A new `$identify` is sent |
+| `identify("B")` while `A` | The session rotates: `session_end` is stamped with `A`, then `session_start` and `$identify` with `B`. Replay follows the new session |
+| `reset()` | Forgets the user and starts a new anonymous session |
+| `identify` while opted out | Ignored, and nothing is remembered: the first `identify` after opting back in sends |
+
+Trait limits, applied on the device before the redaction below:
+
+- at most 50 keys (the first 50 in sorted key order), keys of 1 to 64 characters (others are dropped);
+- `String` values are truncated to 256 characters;
+- only `String`, `Number`, `Boolean` and `null` are kept. A `Map`, `Collection`, array, `Date`, enum or any other
+  object is dropped (it is never `toString()`-ed).
+
+`$identify` carries the traits only: the global properties (`setGlobalProperties`) are **not** merged into it, so
+they cannot leak into the stored user profile. Traits still go through the same on-device redaction as every other
+attribute (e-mail addresses and sensitive keys are masked), and your `beforeSend` still sees and may change the item.
 
 Automatic: sessions (`session_start` / `session_end`), `app_foreground` / `app_background`, `screen_view` for every
 Activity (`@ARTrackerScreenName("Checkout")` on the class overrides the name) and for every Fragment when AndroidX
@@ -431,7 +456,7 @@ while it kills cached processes).
 | Activity | `type` | `name` / `level` | Notes |
 | --- | --- | --- | --- |
 | `track(name, props)` | `event` | name | props become attributes |
-| `identify()` | `event` | `$identify` | traits become attributes |
+| `identify()` | `event` | `$identify` | the bounded traits become the attributes (no global properties); a repeated identical call is not sent; a different user rotates the session |
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
 | Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; once per process, only when the process was started to show an Activity |
@@ -459,7 +484,7 @@ The AAR ships consumer rules (`consumer-rules.pro`); you need no rules of your o
 The public API (`ARTracker`, `ARTrackerConfig`, ...) is deliberately **not** kept: you call it directly, so R8 knows it
 is used.
 
-Obfuscated builds: stack traces are sent as they are (no symbolication in `1.0.2`). Screen names default to the class
+Obfuscated builds: stack traces are sent as they are (no symbolication in `1.0.3`). Screen names default to the class
 simple name, so a Fragment created in code, or a Compose destination, can show up as an obfuscated name such as `a`;
 use `@ARTrackerScreenName("...")`, `ARTracker.screen("...")` or a `-keepnames` rule for such classes. Activities
 declared in the manifest are kept by AGP's own rules.

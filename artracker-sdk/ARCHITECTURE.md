@@ -157,7 +157,7 @@ Nama layar default: `activity.javaClass.simpleName`, bisa ditimpa lewat `@ARTrac
 | Aspek | Keputusan |
 | --- | --- |
 | ID | UUIDv7 string (≤128), persist di `SharedPreferences` (`artracker_session`, dikecualikan dari backup) |
-| Sesi baru | Saat init pertama; saat kembali ke foreground atau pada user input pertama setelah **tidak ada user input lebih dari `sessionTimeoutMs`** (default 30 menit, configurable lewat `ARTrackerConfig`); saat melewati hard cap 24 jam; atau `ARTracker.reset()`. Masuk background tidak mengakhiri sesi, dan aktivitas SDK (event, API call, upload replay) tidak memperpanjangnya. `session_id` dan waktu aktivitas terakhir dipersist, jadi keputusan ini tetap berlaku setelah process dibunuh |
+| Sesi baru | Saat init pertama; saat kembali ke foreground atau pada user input pertama setelah **tidak ada user input lebih dari `sessionTimeoutMs`** (default 30 menit, configurable lewat `ARTrackerConfig`); saat melewati hard cap 24 jam; `ARTracker.reset()`; atau `identify` untuk user yang berbeda dari user saat ini. Masuk background tidak mengakhiri sesi, dan aktivitas SDK (event, API call, upload replay) tidak memperpanjangnya. `session_id` dan waktu aktivitas terakhir dipersist, jadi keputusan ini tetap berlaku setelah process dibunuh |
 | Batas keras | 24 jam per sesi |
 | `session_start` | `type:"session"`, attributes `{platform:"android", os_version, api_level, manufacturer, model, app_version, app_build, build_id?, screen{w,h,density}, locale, tz, network, is_emulator, sdk_version}`. Ini wajib karena backend membuang field `context` selain environment/app_version |
 | `session_end` | Dikirim saat sesi dirotasi, dengan `duration_ms` = user input terakhir − awal sesi (untuk hard cap dan `reset()`: sekarang − awal sesi). Untuk sesi yang kedaluwarsa melewati process death, item ini dibuat oleh process berikutnya saat masuk foreground, dan `timestamp`-nya adalah waktu itu, bukan waktu sesi berakhir. Tidak dikirim saat opt-out atau kill-switch aktif |
@@ -167,6 +167,19 @@ Nama layar default: `activity.javaClass.simpleName`, bisa ditimpa lewat `@ARTrac
 - Satu `CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineExceptionHandler)`: semua mutasi antrean berjalan berurutan tanpa lock.
 - `track()` dari thread mana pun hanya membuat item (timestamp diambil saat itu) lalu `trySend` ke `Channel(capacity = 1000, onBufferOverflow = DROP_OLDEST)`. Pemanggil tidak pernah terblokir.
 - Capture replay di main thread (komposit window + kumpulan rect mask); bitmap-nya diserahkan ke satu konteks `Dispatchers.Default` untuk mask, scale, JPEG, dan chunking.
+
+### 4.5 Identitas & People
+
+`identify(userId, traits)` dan `reset()` mengikuti kontrak kawat People, supaya backend bisa membangun profil pengguna:
+
+| Aspek | Keputusan |
+| --- | --- |
+| Batas trait | `TraitSanitizer`, dijalankan sebelum redaksi pipeline: maks 50 key (urut key terurut), panjang key 1–64 (yang lain dibuang), nilai `String` ≤ 256 karakter (dipotong), hanya `String`/`Number`/`Boolean`/`null`. `Map`, `Collection`, array, `Date`, enum, dan objek lain dibuang, tidak di-`toString()` |
+| Atribut `$identify` | Hanya trait: global properties **tidak** digabung (dilewati di `EventPipeline.prepare`), supaya tidak mencemari trait yang disimpan. `beforeSend` tetap boleh mengubahnya |
+| Dedup | `identify(A, traitSama)` saat user sudah A tidak mengirim item lagi. State dedup (`lastEmittedTraits`) hanya di memori dan diisi hanya saat SDK aktif, jadi panggilan pertama di setiap process selalu mengirim, begitu juga panggilan pertama setelah opt-in kembali. `reset()` mengosongkannya |
+| Ganti user | `identify(B)` saat user A (A ≠ B): sesi dirotasi. `identity.userId` diisi **sebelum** `rotate()`, jadi `session_start` baru membawa B, sedangkan `session_end` diberi stempel A lewat `endedSessionUserId` (pola yang sama dengan `reset()`). Dari anonim: sesi tidak dirotasi |
+| Replay | Rotasi memanggil `replay.onSessionStarted()`, jadi rekaman pindah ke id sesi baru. Chunk replay diberi stempel user saat chunk dibuka (chunk anonim boleh mengadopsi user yang login), bukan user saat chunk ditutup, sehingga chunk terakhir sesi A tidak terkirim sebagai user B |
+| Konteks `session_start` | Himpunan key `platform, os_version, manufacturer, model, app_version, app_build, locale, tz, network, is_emulator, sdk_version` dikunci oleh `DeviceContextTest.sessionStartAttributes_containPeopleContractKeys` (superset; key lain boleh ditambah) |
 
 ---
 
@@ -185,7 +198,7 @@ ARTracker.init(this, ARTrackerConfig(
     flushIntervalMs = 10_000,
 ))
 
-ARTracker.identify("user-123", mapOf("plan" to "pro"))   // → event "$identify"
+ARTracker.identify("user-123", mapOf("plan" to "pro"))   // → event "$identify" (lihat 4.5)
 ARTracker.track("checkout_clicked", mapOf("total" to 120_000))
 ARTracker.screen("Checkout")                              // screen_view manual
 ARTracker.log(LogLevel.WARN, "Promo API slow", mapOf("ms" to 2300))
