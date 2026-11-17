@@ -5,6 +5,8 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-17
+
 ### Added
 
 - **Compose fields whose autofill `ContentType` is sensitive are masked in session replay**, like the View autofill
