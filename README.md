@@ -8,7 +8,7 @@ Version `1.0.3`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 >
 > | Area | State |
 > | --- | --- |
-> | Unit tests (JVM + Robolectric) | **Verified**: 734 SDK tests + 263 sample-app tests, 0 failures (see "Tests" below) |
+> | Unit tests (JVM + Robolectric) | **Verified**: 1165 SDK tests + 263 sample-app tests, 0 failures (see "Tests" below) |
 > | Sample app builds (`:app:assembleDebug`, R8-minified `:app:assembleRelease`) | **Verified** |
 > | Run on a device or emulator | **Partly.** Screenshot replay was run on **one physical device** (OPPO CPH2387, Android 14 / API 34) through instrumented tests (see "Tests"); Chucker delivery was checked on Android 14 too (see "Custom transport"). No emulator, no other device or API level (24-25 and the `View.draw` path included), no minified app |
 > | End to end against the backend | **NOT run.** Checklist: [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md) |
@@ -180,7 +180,7 @@ Trait limits, applied on the device before the redaction below:
 
 `$identify` carries the traits only: the global properties (`setGlobalProperties`) are **not** merged into it, so
 they cannot leak into the stored user profile. Traits still go through the same on-device redaction as every other
-attribute (e-mail addresses and sensitive keys are masked), and your `beforeSend` still sees and may change the item.
+attribute (e-mail addresses and sensitive keys are masked), and your `beforeSend` still sees and may change the item. The exclusion is by item name, so a custom `track("$identify")` skips the globals too.
 
 Automatic: sessions (`session_start` / `session_end`), `app_foreground` / `app_background`, `screen_view` for every
 Activity (`@ARTrackerScreenName("Checkout")` on the class overrides the name) and for every Fragment when AndroidX
@@ -641,7 +641,7 @@ dashboard (see [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md)).
 ./gradlew :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug
 ```
 
-Last full run (2026-11-10): `:artracker-sdk:testDebugUnitTest` 734 tests, 0 failures (includes the 1000-iteration
+Last full run (2026-11-17): `:artracker-sdk:testDebugUnitTest` 1165 tests, 0 failures (includes the 1000-iteration
 public-API fuzz test and the screenshot pipeline: masking, encoder, chunker, store migration, controller);
 `:app:testDebugUnitTest` 263 tests, 0 failures; `:app:assembleDebug` and `:app:assembleRelease` succeed.
 

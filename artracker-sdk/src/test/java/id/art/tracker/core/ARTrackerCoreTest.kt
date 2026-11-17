@@ -659,6 +659,40 @@ class ARTrackerCoreTest {
     }
 
     @Test
+    fun identify_userSwitchFromABackgroundThread_rotatesReplaySession() {
+        val sampled = CopyOnWriteArrayList<String>()
+        val dispatcher = ManualDispatcher()
+        val core = ARTrackerCore(
+            app,
+            configWith(replay = ReplayConfig(enabled = true, sampleRate = 1.0)),
+            replayFactory = { c, handler ->
+                testReplayController(c, handler, dispatcher, sampler = { id, _ -> sampled += id; true })
+            },
+            replaySink = ReplaySink { },
+        )
+        ARTrackerCore.install(core)
+        core.start()
+        ProcessLifecycleTestUtil.start()
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(TextView(activity).apply { text = "hello replay" })
+        val looper = shadowOf(Looper.getMainLooper())
+        looper.idleFor(java.time.Duration.ofMillis(1_000))
+        ARTracker.identify("A")
+        val oldId = ARTracker.diagnostics().sessionId!!
+
+        Thread { ARTracker.identify("B") }.also { it.start() }.join()
+        val newId = ARTracker.diagnostics().sessionId!!
+        looper.idle()
+        settle()
+        dispatcher.runAll()
+
+        assertNotEquals(oldId, newId)
+        assertEquals(newId, sampled.last())
+        assertEquals("B", core.userForSession(newId))
+        assertEquals("A", core.userForSession(oldId))
+    }
+
+    @Test
     fun identify_userSwitch_rotatesReplaySession() {
         val sampled = CopyOnWriteArrayList<String>()
         val chunks = CopyOnWriteArrayList<NewReplayBatch>()

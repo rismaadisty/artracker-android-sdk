@@ -209,6 +209,7 @@ internal class ScreenChunker(
         frames.clear()
         touches.clear()
         sessionId = null
+        openUser = null
         estimated = 0
         firstTs = Long.MAX_VALUE
         lastTs = Long.MIN_VALUE
