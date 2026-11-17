@@ -33,6 +33,7 @@ import id.art.tracker.perf.PerfSampler
 import id.art.tracker.perf.ProcSelfReader
 import id.art.tracker.perf.WindowListenerRegistry
 import id.art.tracker.privacy.AttributeRedactor
+import id.art.tracker.privacy.TraitSanitizer
 import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.touch.TouchRecorder
 import id.art.tracker.replay.ReplayControllerFactory
@@ -728,7 +729,7 @@ internal class ARTrackerCore(
             return
         }
         if (isDisabled()) return
-        val copy = snapshot(traits)
+        val copy = TraitSanitizer.sanitize(traits)
         // Set first so the `$identify` item itself already carries the user id.
         identity.userId = userId
         identity.traits = copy

@@ -163,6 +163,31 @@ class EventPipelineTest {
     }
 
     @Test
+    fun identify_doesNotCarryGlobalProperties() = runTest {
+        val p = pipeline()
+        val identify = factory.event("\$identify", mapOf("plan" to "pro"))
+        val tracked = factory.event("e")
+        p.enqueue(identify, snap("theme" to "dark"))
+        p.enqueue(tracked, snap("theme" to "dark"))
+        p.awaitIdle()
+
+        assertEquals("{\"plan\":\"pro\"}", attributesOf(identify.id).toString())
+        assertEquals("dark", attributesOf(tracked.id).getString("theme"))
+    }
+
+    @Test
+    fun identify_beforeSend_canStillModify() = runTest {
+        val p = pipeline(beforeSend = BeforeSend { it.copy(attributes = it.attributes + ("x" to 1)) })
+        val identify = factory.event("\$identify", mapOf("plan" to "pro"))
+        p.enqueue(identify, snap("theme" to "dark"))
+        p.awaitIdle()
+
+        assertEquals(1, attributesOf(identify.id).getInt("x"))
+        assertEquals("pro", attributesOf(identify.id).getString("plan"))
+        assertFalse(attributesOf(identify.id).has("theme"))
+    }
+
+    @Test
     fun beforeSendCanRemoveAGlobal() = runTest {
         val p = pipeline(beforeSend = BeforeSend { it.copy(attributes = it.attributes - "tenant") })
         val item = factory.event("e", mapOf("a" to 1))
