@@ -38,6 +38,29 @@ class ScreenChunkerTest {
         JSONObject(GZIPInputStream(ByteArrayInputStream(b.gzipBody)).readBytes().toString(Charsets.UTF_8))
 
     @Test
+    fun chunkKeepsTheUserItWasOpenedUnder_whenAnotherUserSignsInBeforeItCloses() {
+        val c = chunker()
+        user = "A"
+        c.addFrame("s1", frame())
+        user = "B" // a user switch: the new session's first frame closes the old session's chunk
+        c.addFrame("s2", frame(seed = 2))
+        c.close()
+
+        assertEquals(listOf("s1" to "A", "s2" to "B"), batches.map { it.sessionId to it.userId })
+    }
+
+    @Test
+    fun anAnonymousChunk_adoptsTheUserWhoSignsInDuringTheSameSession() {
+        val c = chunker()
+        user = null
+        c.addFrame("s1", frame())
+        user = "A"
+        c.close()
+
+        assertEquals("A", batches.single().userId)
+    }
+
+    @Test
     fun aClosedChunk_followsTheSharedContract() {
         val c = chunker()
         val f = frame(size = 500, ts = 1_700_000_000_100L)

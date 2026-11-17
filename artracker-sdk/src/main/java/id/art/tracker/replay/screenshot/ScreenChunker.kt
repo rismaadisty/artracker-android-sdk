@@ -60,6 +60,13 @@ internal class ScreenChunker(
     private val frames = ArrayList<ScreenFrame>()
     private val touches = ArrayList<ScreenTouch>()
     private var sessionId: String? = null
+
+    /**
+     * The user when the open chunk started. A chunk is stamped with it, not with whoever is signed in when it closes:
+     * after a user switch the old session's chunk closes only on the new session's first frame. An anonymous chunk
+     * may adopt the user who signs in before it closes (same session).
+     */
+    private var openUser: String? = null
     private var estimated = 0
     private var openedAtMs = 0L
     private var firstTs = Long.MAX_VALUE
@@ -138,6 +145,7 @@ internal class ScreenChunker(
         val last = lastTs
         val flagged = hasError
         val rageFlagged = hasRageClick
+        val chunkUser = openUser ?: userId()
         reset()
 
         if (seqSession != session) {
@@ -162,7 +170,7 @@ internal class ScreenChunker(
             firstTsMs = first,
             lastTsMs = last,
             hasError = flagged,
-            userId = userId(),
+            userId = chunkUser,
             environment = environment,
             format = ReplayFormat.SCREEN_V1,
             hasRageClick = rageFlagged,
@@ -186,6 +194,7 @@ internal class ScreenChunker(
     private fun open(sessionId: String) {
         if (frames.isEmpty()) {
             this.sessionId = sessionId
+            openUser = userId()
             openedAtMs = clock.nowMs()
             hasError = errorPending
             errorPending = false

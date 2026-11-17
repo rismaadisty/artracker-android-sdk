@@ -158,6 +158,10 @@ internal class ARTrackerCore(
     @Volatile
     private var endedSessionUserId: String? = null
 
+    /** The traits of the last `$identify` this process emitted (in memory only); null: none yet, or after [reset]. */
+    @Volatile
+    private var lastEmittedTraits: Map<String, Any?>? = null
+
     private val sessionListener = object : SessionManager.Listener {
         override fun onSessionStart(id: String) {
             crashSessionId = id
@@ -729,11 +733,28 @@ internal class ARTrackerCore(
             return
         }
         if (isDisabled()) return
-        val copy = TraitSanitizer.sanitize(traits)
-        // Set first so the `$identify` item itself already carries the user id.
-        identity.userId = userId
-        identity.traits = copy
-        emit(items.event("\$identify", copy))
+        val clean = TraitSanitizer.sanitize(traits)
+        val previous = identity.userId
+        // Same user, same traits: nothing new to tell the backend. `lastEmittedTraits` lives in memory only, so the
+        // first call of every process still emits (the common "identify on every app start" pattern).
+        if (previous == userId && clean == lastEmittedTraits) return
+        if (previous != null && previous != userId) {
+            // A different user on the same device: the old session closes under the old user, the new one opens
+            // under the new user. The user id is set BEFORE rotating so the new `session_start` already carries it.
+            endedSessionUserId = previous
+            try {
+                identity.userId = userId
+                session.rotate()
+            } finally {
+                endedSessionUserId = null
+            }
+        } else {
+            // Set first so the `$identify` item itself already carries the user id.
+            identity.userId = userId
+        }
+        identity.traits = clean
+        lastEmittedTraits = clean
+        emit(items.event("\$identify", clean))
     }
 
     /**
@@ -817,6 +838,7 @@ internal class ARTrackerCore(
      */
     fun reset() {
         endedSessionUserId = identity.userId
+        lastEmittedTraits = null
         try {
             identity.reset()
             session.rotate()
