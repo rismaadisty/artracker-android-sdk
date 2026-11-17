@@ -305,7 +305,7 @@ last touch (14:25:28), device kept awake (`svc power stayon true`), nothing touc
 | Renders (`replay capture took` lines) in 31 min | <= 90 | **37** |
 | Last render | at most ~210 s after the last touch | 14:28:21, i.e. 2 min 53 s after it (DORMANT starts at 3 min) |
 | Renders between dormancy and the next touch (about 28 min) | 0 | **0** |
-| Chunks uploaded | <= 20 | **NOT measured**: the sink summary shows no counts in the UI dump and the SDK logs no chunk line. Chunks close at 10 s windows, so 37 frames bound it at 37; not a measured <= 20 |
+| Chunks uploaded | <= 20 | **NOT verified.** The sink summary (button "Ringkasan screenshot", shown as a toast) needs a touch, which wakes capture, so it cannot be read at the 31 min mark without disturbing it. Second run (below): 24 chunks / 96 frames at read time, but that includes about 4 minutes of my own scrolling before the read, so it neither proves nor disproves <= 20 |
 | Session after the touch at 31 min | new session | **PASS**: header `Sesi 01a1e30e` before, `Sesi 01a1e35b` after (rotation on user input) |
 
 Notes: on the emulator one capture took 280-470 ms against the 16 ms budget, so the watchdog had already lowered the
@@ -313,3 +313,10 @@ rate to 0.5 fps in the first seconds (the watchdog lines are in the log); the 37
 slowdown and a device would render more in the Active 30 s. The 30 min animation was never replayed in a viewer.
 The unit test `carouselIdle_stopsCapturingAfterDormant` simulates the same 30 min on a fake clock (no frame after dormancy).
 `session_end` / `session_start` were not read from the wire: the rotation is read from the id shown by the sample.
+
+Second run (emulator API 30 again, final code at `93f5068`, which adds keyboard / hardware-key input to the capture
+lifecycle): 59 renders (the log is cleared at setup, so it includes about 50 s of setup), last render 2 min 52 s after the
+animation was switched on, none afterwards, and the session id changed after the touch (`01a1e71e` -> `01a1e73b`). The first
+read of the sink summary was 1 chunk / 6 frames (right after setup). A third run meant to read the chunk count with a
+single quick gesture was started and then **abandoned** (it takes 31 min per run), and a "before" run of `main` was **never
+taken**, so the plan's before/after table is not complete. Both are open.
