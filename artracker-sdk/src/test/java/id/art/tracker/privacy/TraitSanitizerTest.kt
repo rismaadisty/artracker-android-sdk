@@ -65,6 +65,20 @@ class TraitSanitizerTest {
     }
 
     @Test
+    fun nullAndNonStringKeys_fromJava_areDropped_theRestIsKept() {
+        @Suppress("UNCHECKED_CAST")
+        val hostile = hashMapOf<Any?, Any?>(null to 1, 5 to 2, "ok" to 3) as Map<String, Any?>
+        val clean = TraitSanitizer.sanitize(hostile)
+        assertEquals(mapOf("ok" to 3), clean)
+    }
+
+    @Test
+    fun longString_neverSplitsASurrogatePair() {
+        val clean = TraitSanitizer.sanitize(mapOf("s" to "x".repeat(255) + "\uD83D\uDE00")) // emoji across the cut
+        assertEquals("x".repeat(255), clean["s"])
+    }
+
+    @Test
     fun emptyInput_givesEmptyMap() {
         assertTrue(TraitSanitizer.sanitize(emptyMap()).isEmpty())
     }
