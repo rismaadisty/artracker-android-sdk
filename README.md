@@ -126,11 +126,11 @@ SDK uninitialised and every other call a no-op; each validation error is logged 
 | `environment` | `"production"` | Sent in the envelope `context.environment` |
 | `appVersion` | `null` | Falls back to the app's `versionName` |
 | `debug` | `false` | SDK logs to logcat (tag `ARTracker`) |
-| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0, quality = ReplayQuality.STANDARD)` | `framesPerSecond` is clamped to 0.5..10.0 (2 recommended); NaN or infinity is rejected. `quality` sets the size and JPEG quality of each frame. See "Session replay" |
+| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0, quality = ReplayQuality.STANDARD, idleAfterMs = 30_000, dormantAfterMs = 180_000)` | `framesPerSecond` is clamped to 0.5..10.0 (2 recommended); NaN or infinity is rejected. `quality` sets the size and JPEG quality of each frame. `idleAfterMs` must be >= 5000 and `dormantAfterMs` > `idleAfterMs`, otherwise the config is invalid. See "Session replay" |
 | `privacy` | `PrivacyConfig(maskAllInputs = true, maskAllText = false, sensitiveViewClasses = emptySet())` | See "Masking" |
 | `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false, sender = null)` | The first four are used by the OkHttp interceptor; `captureHeaders` is reserved: headers are never captured. `sender` replaces the transport, see "Custom transport" |
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
-| `sessionTimeoutMs` | `1_800_000` | Idle timeout (30 min), minimum 1000; a session never lasts more than 24 h |
+| `sessionTimeoutMs` | `1_800_000` | Timeout (30 min) counted from the last **user input** (touch, key, return to foreground), minimum 1000. SDK activity (events, API calls, replay uploads, reading the session id) never extends a session, and a session only rotates on the next user input; it never lasts more than 24 h |
 | `performance` | `PerformanceConfig(enabled = false, sampleIntervalMs = 1_000, trackFrames = true)` | Session profiling, opt-in. `sampleIntervalMs` must be 500..10_000, otherwise the config is invalid. See "Performance monitoring" |
 | `beforeSend` | `null` | `BeforeSend { item -> item }`: modify an item, or return `null` to drop it. Runs before the item is queued |
 
@@ -152,6 +152,7 @@ invalid config, while the user is opted out, or while the SDK is disabled by the
 | `ARTracker.setGlobalProperties(properties)` | Replaces the set of attributes added to every later event, log and session item (not `perf.samples`); the item's own attribute wins on a key conflict. Kept in memory only: set them again after every `init`. Not cleared by `reset()` |
 | `ARTracker.clearGlobalProperties()` | Removes them (call it on logout if they describe the user) |
 | `ARTracker.optOut(enabled)` | `true`: records and sends nothing, and **deletes everything already queued**. Persisted across restarts |
+| `ARTracker.captureReplayFrame(reason)` | Tells replay that something important changed on screen (a custom overlay, a state the SDK cannot see): a frame is taken now, also while the user is idle. `reason` is logged at debug level only, never sent. No effect when replay is not recording |
 | `ARTracker.startReplay()` / `stopReplay()` | Force replay on (still never while opted out) or stop it; `stopReplay` stays off across new sessions until `startReplay` |
 | `ARTracker.diagnostics()` | `Diagnostics(initialized, sessionId, pendingItems, lastSendResult, disabled)`. Reads the database: **never call it on the main thread** |
 | `ARTracker.isInitialized()` | True after a successful `init` |
@@ -295,6 +296,19 @@ replay = ReplayConfig(
 - **Rage taps**: three or more taps within 1 s, each within 24 dp of the first, mark the chunk with `has_rage_click`
   in its acknowledgement (the chunk they land in; a burst can span two chunks of the same session). Multi-finger
   gestures are not counted, and the SDK sends no separate event. `has_dead_click` is always `false`.
+- **Capture lifecycle (Active, Idle, Dormant)**: driven by real user input only. **Active**: a frame whenever the screen
+  was drawn, at most `framesPerSecond`, and a forced keyframe every 120 s. After `idleAfterMs` (30 s) without input it is
+  **Idle**: one check every 5 s (0.2 fps), no keyframe. After `dormantAfterMs` (3 min) it is **Dormant**: no timed
+  capture and no flush timer, the open chunk is closed, and the draw listeners only flip a flag. Important changes are
+  captured in every state, after a debounce so the UI has rendered: screen change, new window or dialog (focus change),
+  an error log, keyboard shown or hidden (300 ms), an API response (500 ms; at most 1 per 5 s while Idle and 1 per 10 s
+  while Dormant; requests to the SDK's own endpoint and to `ignoreHosts` do not count) and `ARTracker.captureReplayFrame`
+  (at once). The first touch after Idle or Dormant takes a frame **immediately**, so what the user came back to is
+  never lost, then capture returns to Active. A trigger in Dormant sends its chunk 10 s later (an error frame survives
+  a process kill). Once the session has timed out (no input for `sessionTimeoutMs`) triggers capture nothing until the
+  next touch, which first rotates the session and then takes its frame in the new session. Dormant never ends the session.
+  Measured once on an emulator (30 min, infinite animation): 37 renders, none after dormancy, new session after the
+  touch; see [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md) section 6 for what was not measured (chunks, a device).
 - **Cost control**: capture runs only when the screen was drawn since the last tick, with a 16 ms main-thread budget
   watchdog that halves the frame rate, a rolling data budget of about 5 MB per minute (the frame rate is halved and
   then the quality steps down), identical frames are not sent, and nothing runs in the background. Chunks are queued

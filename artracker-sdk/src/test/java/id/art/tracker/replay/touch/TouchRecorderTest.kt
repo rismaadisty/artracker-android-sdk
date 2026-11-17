@@ -1,6 +1,7 @@
 package id.art.tracker.replay.touch
 
 import android.app.Activity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Window
 import org.junit.Assert.assertEquals
@@ -121,31 +122,50 @@ class TouchRecorderTest {
     }
 
     @Test
-    fun wrap_isIdempotent() {
+    fun install_isIdempotent_andBindReplayReusesTheRecorder() {
         val activity = activity()
         val window = activity.window
-        val first = TouchRecorder.wrap(window) { _, _, _ -> log.add("old") }
-        val second = TouchRecorder.wrap(window, record)
+        var inputs = 0
+        val first = TouchRecorder.install(window) { inputs++ }
+        val second = TouchRecorder.install(window) { inputs++ }
+        val bound = TouchRecorder.bindReplay(window, record, null)
         assertNotNull(first)
         assertSame(first, second)
+        assertSame(first, bound)
         assertSame(first, window.callback)
         assertSame(activity, first!!.delegate)
 
         window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0))
-        assertEquals(listOf("record:DOWN"), log) // recorded once, by the rebound callback
-        TouchRecorder.unwrap(window)
+        assertEquals(listOf("record:DOWN"), log) // recorded once, by the bound replay listener
+        assertEquals(1, inputs)
+        TouchRecorder.uninstall(window)
     }
 
     @Test
-    fun unwrap_restoresOnlyIfOurs() {
+    fun unbindReplay_stopsRecordingButKeepsObservingInputAndTheCallback() {
+        val window = activity().window
+        var inputs = 0
+        val recorder = TouchRecorder.install(window) { inputs++ }!!
+        TouchRecorder.bindReplay(window, record, null)
+        TouchRecorder.unbindReplay(window)
+        assertSame(recorder, window.callback)
+        window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0))
+        assertTrue(touches.isEmpty())
+        assertEquals(1, inputs)
+        TouchRecorder.uninstall(window)
+    }
+
+    @Test
+    fun uninstall_restoresOnlyIfOurs() {
         val activity = activity()
         val window = activity.window
-        TouchRecorder.wrap(window, record)
-        TouchRecorder.unwrap(window)
+        TouchRecorder.install(window) {}
+        TouchRecorder.uninstall(window)
         assertSame(activity, window.callback)
 
-        // Another SDK wraps after us: unwrapping must not drop its wrapper, ours becomes a pass-through.
-        val ours = TouchRecorder.wrap(window, record)!!
+        // Another SDK wraps after us: uninstalling must not drop its wrapper, ours becomes a pass-through.
+        val ours = TouchRecorder.install(window) {}!!
+        TouchRecorder.bindReplay(window, record, null)
         val foreignForwarding = object : Window.Callback by window.callback {
             override fun dispatchTouchEvent(event: MotionEvent?): Boolean {
                 log.add("foreign")
@@ -153,18 +173,96 @@ class TouchRecorderTest {
             }
         }
         window.callback = foreignForwarding
-        TouchRecorder.unwrap(window)
+        TouchRecorder.uninstall(window)
         assertSame(foreignForwarding, window.callback)
         window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0))
         assertTrue(touches.isEmpty())
         assertEquals(listOf("foreign"), log)
 
-        // Wrapping again re-activates the recorder still in the chain instead of wrapping twice.
-        val again = TouchRecorder.wrap(window, record)
+        // Installing again re-activates the recorder still in the chain instead of wrapping twice.
+        val again = TouchRecorder.install(window) {}
         assertSame(ours, again)
         assertSame(foreignForwarding, window.callback)
+        TouchRecorder.bindReplay(window, record, null)
         window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_UP, 10))
         assertEquals(listOf(TouchKind.UP), touches.map { it.first })
-        TouchRecorder.unwrap(window)
+        TouchRecorder.uninstall(window)
     }
+
+    @Test
+    fun downAndKeyDown_fireOnInput_evenWithoutReplay() {
+        val window = activity().window
+        var inputs = 0
+        TouchRecorder.install(window) { inputs++ }
+        window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0))
+        window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_MOVE, 10))
+        window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_UP, 20))
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A))
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_A))
+        assertEquals(2, inputs)
+        assertTrue(touches.isEmpty()) // no replay bound: nothing recorded
+        TouchRecorder.uninstall(window)
+    }
+
+    @Test
+    fun onInput_firesBeforeOnTouch_forTheSameEvent() {
+        val window = activity().window
+        TouchRecorder.install(window) { log.add("input") }
+        TouchRecorder.bindReplay(window, record, null)
+        window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0))
+        assertEquals(listOf("input", "record:DOWN"), log)
+        TouchRecorder.uninstall(window)
+    }
+
+    @Test
+    fun onInputFailure_isSwallowed_delegateResultKept() {
+        val recorder = TouchRecorder(Delegate(activity(), log, result = true), record)
+        recorder.onInput = { throw IllegalStateException("boom") }
+        assertTrue(recorder.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0)))
+        assertEquals(listOf("delegate", "record:DOWN"), log) // a failing observer does not stop replay recording
+    }
+
+    @Test
+    fun focusChange_forwardedAndDelegated() {
+        val delegate = Delegate(activity(), log, result = true)
+        val recorder = TouchRecorder(delegate, record)
+        val focus = ArrayList<Boolean>()
+        recorder.onFocusChanged = { focus.add(it) }
+        recorder.onWindowFocusChanged(false)
+        assertEquals(1, delegate.focusChanges)
+        assertEquals(listOf(false), focus)
+    }
+
+    @Test
+    fun foreignWrapperOnTop_inputStillObserved() {
+        val activity = activity()
+        val window = activity.window
+        var inputs = 0
+        TouchRecorder.install(window) { inputs++ }
+        val foreign = ForeignWrapper(window.callback)
+        window.callback = foreign
+        window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 0))
+        assertEquals(1, inputs)
+        TouchRecorder.uninstall(window)
+        assertSame(foreign, window.callback) // the other wrapper stays
+        window.callback.dispatchTouchEvent(event(MotionEvent.ACTION_DOWN, 10))
+        assertEquals(1, inputs) // uninstalled recorder is a pass-through
+    }
+
+    @Test
+    fun keyDown_reachesTheReplayBinding_untilUnbound() {
+        val window = activity().window
+        var keys = 0
+        TouchRecorder.install(window) {}
+        TouchRecorder.bindReplay(window, record, null, onKeyDown = { keys++ })
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN))
+        assertEquals(1, keys)
+        TouchRecorder.unbindReplay(window)
+        window.callback.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+        assertEquals(1, keys)
+        TouchRecorder.uninstall(window)
+    }
+
+    private class ForeignWrapper(private val inner: Window.Callback) : Window.Callback by inner
 }

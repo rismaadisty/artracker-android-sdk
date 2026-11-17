@@ -66,12 +66,21 @@ public enum class ReplayQuality { LOW, STANDARD, HIGH }
  * compressed (no pixel of a sensitive view leaves the device).
  *
  * [framesPerSecond] is clamped to 0.5..10 (2 is recommended). [quality] sets the size and JPEG quality of each frame.
+ *
+ * While the user does nothing, capturing winds down: ACTIVE (every [framesPerSecond]) -> IDLE after [idleAfterMs]
+ * (0.2 fps) -> DORMANT after [dormantAfterMs] (no timed capture; the chunk is closed). Important UI changes (screen,
+ * dialog/window, error, API response, keyboard, `ARTracker.captureReplayFrame`) are captured in every state, and the
+ * first touch after IDLE/DORMANT captures what the user came back to at once.
  */
 public class ReplayConfig @JvmOverloads constructor(
     public val enabled: Boolean = false,
     public val sampleRate: Double = 0.1,
     public val framesPerSecond: Double = 1.0,
     public val quality: ReplayQuality = ReplayQuality.STANDARD,
+    /** No user input for this long (>= 5000 ms) and replay captures at 0.2 fps instead of [framesPerSecond]. */
+    public val idleAfterMs: Long = 30_000,
+    /** No user input for this long (must be > [idleAfterMs]) and replay stops capturing on a timer altogether. */
+    public val dormantAfterMs: Long = 180_000,
 )
 
 /**
@@ -116,6 +125,7 @@ private const val KEY_MAX_LENGTH: Int = 128
 private const val MIN_FLUSH_INTERVAL_MS: Long = 1_000
 private const val MIN_SESSION_TIMEOUT_MS: Long = 1_000
 private const val MIN_SAMPLE_INTERVAL_MS: Long = 500
+private const val MIN_IDLE_AFTER_MS: Long = 5_000
 private const val MAX_SAMPLE_INTERVAL_MS: Long = 10_000
 private const val DEFAULT_FPS: Double = 1.0
 private const val MIN_FPS: Double = 0.5
@@ -151,6 +161,12 @@ internal fun ARTrackerConfig.validate(): List<String> {
     }
     if (!(replay.sampleRate in 0.0..1.0)) {
         errors += "replay.sampleRate must be between 0.0 and 1.0"
+    }
+    if (replay.idleAfterMs < MIN_IDLE_AFTER_MS) {
+        errors += "replay.idleAfterMs must be >= $MIN_IDLE_AFTER_MS"
+    }
+    if (replay.dormantAfterMs <= replay.idleAfterMs) {
+        errors += "replay.dormantAfterMs must be > replay.idleAfterMs"
     }
     if (!(network.sampleRate in 0.0..1.0)) {
         errors += "network.sampleRate must be between 0.0 and 1.0"

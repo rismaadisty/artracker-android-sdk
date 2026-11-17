@@ -242,6 +242,25 @@ class ARTrackerCoreTest {
     }
 
     @Test
+    fun replayOff_touchStillExtendsSession() {
+        val clock = FakeClock(1_700_000_000_000L)
+        val core = ARTrackerCore(app, configWith(), clock) // replay disabled by default
+        ARTrackerCore.install(core)
+        core.start()
+        ProcessLifecycleTestUtil.start()
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val id = core.session.currentId()
+        fun down() = activity.window.callback.dispatchTouchEvent(MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 1f, 1f, 0))
+
+        clock.advance(29 * 60_000L)
+        down()
+        clock.advance(2 * 60_000L) // 31 min after the start, but only 2 min after the last touch
+        assertFalse(core.session.isExpired())
+        down()
+        assertEquals(id, core.session.currentId())
+    }
+
+    @Test
     fun rageTaps_reachTheAckAsHasRageClick() {
         val backend = FakeReplayBackend()
         try {

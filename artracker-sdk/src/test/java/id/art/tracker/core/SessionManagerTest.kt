@@ -63,6 +63,7 @@ class SessionManagerTest {
         m.onForeground()
         val old = m.currentId()
         clock.advance(5 * minute)
+        m.onUserActivity()
         m.onBackground()
         clock.advance(timeout + 1)
         m.onForeground()
@@ -260,5 +261,69 @@ class SessionManagerTest {
         m.rotate()
         val fresh = m.currentId()
         assertEquals(listOf("start:$old", "end:$old", "start:$fresh"), order)
+    }
+
+    @Test
+    fun readsDoNotExtendSession() {
+        val m = manager()
+        m.onForeground()
+        val id = m.currentId()
+        repeat(31) {
+            clock.advance(minute)
+            assertEquals(id, m.currentId())
+        }
+        assertTrue(m.isExpired())
+        m.onUserActivity()
+        assertNotEquals(id, m.currentId())
+        assertEquals(listOf(id to 0L), listener.ends)
+    }
+
+    @Test
+    fun inputWithinTimeout_keepsSession() {
+        val m = manager()
+        m.onForeground()
+        val id = m.currentId()
+        clock.advance(29 * minute)
+        m.onUserActivity()
+        assertEquals(id, m.currentId())
+        assertTrue(listener.ends.isEmpty())
+    }
+
+    @Test
+    fun inputAfterTimeout_rotatesWithDurationToLastInput() {
+        val m = manager()
+        m.onForeground()
+        val id = m.currentId()
+        clock.advance(5 * minute)
+        m.onUserActivity()
+        clock.advance(31 * minute)
+        m.onUserActivity()
+        assertEquals(listOf(id to 5 * minute), listener.ends)
+        assertEquals(2, listener.starts.size)
+    }
+
+    @Test
+    fun periodicReadsWithoutInput_neverRotate() {
+        val m = manager()
+        m.onForeground()
+        val id = m.currentId()
+        repeat(120) {
+            clock.advance(minute)
+            m.currentId()
+        }
+        assertEquals(listOf(id), listener.starts)
+    }
+
+    @Test
+    fun backgrounding_doesNotCountAsUserInput() {
+        val m = manager()
+        m.onForeground()
+        val id = m.currentId()
+        clock.advance(45 * minute) // a keep-screen-on app, nobody touching it
+        m.onBackground()
+        clock.advance(2 * minute)
+        m.onForeground()
+        assertNotEquals(id, m.currentId())
+        assertEquals(listOf(id to 0L), listener.ends) // duration = last user input - start
     }
 }

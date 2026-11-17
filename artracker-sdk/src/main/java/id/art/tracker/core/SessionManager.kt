@@ -38,15 +38,37 @@ internal class SessionManager(
                         end(current, now - startedAt, events)
                         start(now, events)
                     }
-                    else -> {
-                        if (foreground) touch(now)
-                        current
-                    }
+                    else -> current
                 }
             }
         dispatch(events)
         return result
     }
+
+    /**
+     * Real user input (touch, key, foreground). The only path besides [onForeground] that extends the session:
+     * rotates first if the timeout elapsed since the last input, then marks the activity.
+     */
+    fun onUserActivity() {
+        val events = ArrayList<Event>(2)
+        synchronized(this) {
+            val now = clock.nowMs()
+            val current = id
+            when {
+                current == null -> start(now, events)
+                now - lastActive > timeoutMs -> {
+                    end(current, lastActive - startedAt, events)
+                    start(now, events)
+                }
+                else -> touch(now)
+            }
+        }
+        dispatch(events)
+    }
+
+    /** True when a session exists and no user input arrived within the timeout (it rotates on the next input). */
+    @Synchronized
+    fun isExpired(): Boolean = id != null && clock.nowMs() - lastActive > timeoutMs
 
     /** The current session id without starting or rotating anything (null before the first session). */
     @Synchronized
@@ -69,10 +91,14 @@ internal class SessionManager(
         dispatch(events)
     }
 
+    /** Backgrounding is not user input: the last real input stays the reference for the timeout (persisted as is). */
     @Synchronized
     fun onBackground() {
         foreground = false
-        if (id != null) touch(clock.nowMs(), force = true)
+        if (id != null) {
+            lastPersistedActive = lastActive
+            store.putLong(KEY_LAST_ACTIVE, lastActive)
+        }
     }
 
     fun rotate() {

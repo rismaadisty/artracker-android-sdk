@@ -34,7 +34,9 @@ import id.art.tracker.perf.ProcSelfReader
 import id.art.tracker.perf.WindowListenerRegistry
 import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.replay.ReplayController
+import id.art.tracker.replay.touch.TouchRecorder
 import id.art.tracker.replay.ReplayControllerFactory
+import id.art.tracker.replay.capture.TriggerKind
 import id.art.tracker.replay.ReplayIntake
 import id.art.tracker.replay.ReplaySink
 import id.art.tracker.telemetry.AnrWatchdog
@@ -227,6 +229,8 @@ internal class ARTrackerCore(
     private val windowListener = object : ActivityTracker.WindowListener {
         override fun onActivityResumed(a: Activity) {
             resumedActivity = WeakReference(a)
+            // Core-owned input observer: user activity counts even when replay is off or not sampled.
+            runCatching { TouchRecorder.install(a.window) { onUserActivity() } }
             replay?.onActivityResumed(a)
             extraWindowListeners.forEach { runCatching { it.onActivityResumed(a) } }
         }
@@ -234,6 +238,7 @@ internal class ARTrackerCore(
         override fun onActivityPaused(a: Activity) {
             if (resumedActivity?.get() === a) resumedActivity = null
             replay?.onActivityPaused(a)
+            runCatching { TouchRecorder.uninstall(a.window) }
             extraWindowListeners.forEach { runCatching { it.onActivityPaused(a) } }
         }
     }
@@ -382,7 +387,12 @@ internal class ARTrackerCore(
             flushIntervalMs = config.flushIntervalMs,
             flushContext = Dispatchers.IO,
             // An error in the session flags the replay batch it happened in (the viewer jumps to it).
-            onItemAccepted = { replay?.noteError() },
+            onItemAccepted = {
+                replay?.let {
+                    it.noteError()
+                    it.onTrigger(TriggerKind.ERROR) // the error dialog / screen is on display now: capture it
+                }
+            },
         )
     }
 
@@ -771,6 +781,17 @@ internal class ARTrackerCore(
         ensureReplay()?.start(manual = true)
     }
 
+    /** `ARTracker.captureReplayFrame()`: the app says the UI changed in a way the SDK cannot see. */
+    fun captureReplayFrame(reason: String) {
+        SdkLog.d("replay frame requested: $reason")
+        replay?.onTrigger(TriggerKind.MANUAL)
+    }
+
+    /** A response (or failure) of a request to the app's own backend: its result is probably on screen soon. */
+    internal fun onHttpCompleted() {
+        runCatching { replay?.onTrigger(TriggerKind.NETWORK) }
+    }
+
     /** `ARTracker.stopReplay()`: flushes and stops recording until the next [startReplay]. */
     fun stopReplay() {
         replay?.stop()
@@ -864,6 +885,9 @@ internal class ARTrackerCore(
     // endregion
 
     // region lifecycle hooks (driven by [processObserver])
+
+    /** Real user input (touch/key). Extends or rotates the session; never called for SDK-internal reads. */
+    internal fun onUserActivity() = session.onUserActivity()
 
     internal fun onForeground() {
         foreground = true

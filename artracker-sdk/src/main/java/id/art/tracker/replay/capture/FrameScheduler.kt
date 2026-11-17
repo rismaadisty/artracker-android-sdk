@@ -1,6 +1,7 @@
 package id.art.tracker.replay.capture
 
 import android.os.Handler
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewTreeObserver
 import id.art.tracker.core.Clock
@@ -17,6 +18,9 @@ import java.util.WeakHashMap
  * - Watchdog: [budgetMs] exceeded on [SLOW_STREAK] consecutive captures (or [capture] throwing that many
  *   times in a row) halves the fps down to [MIN_FPS]; [RECOVERY_MS] without a slow capture restores
  *   [baseFps] (checked on every tick).
+ * - [setStateFps] (the capture lifecycle's rate): the effective rate is min(state, watchdog, external cap); `null`
+ *   pauses the periodic tick entirely while draw listeners, [requestSoon] and [markDirty] keep working. The
+ *   state rate is NOT subject to the 0.5 fps floor (IDLE is 0.2 fps); that floor only guards the configured/watchdog rate.
  * - [stop] removes every pending callback and every draw listener, so a stopped scheduler costs nothing.
  *
  * Capture duration is measured with the injected [Clock] (wall clock; it only offers `nowMs`), so a
@@ -54,6 +58,12 @@ internal class FrameScheduler(
     private var lastSlowAtMs = 0L
     private var externalCap: Double? = null
 
+    /** State rate set by [setStateFps]: [statePaused] = no periodic tick; else [stateRate] caps it (null = no cap). */
+    private var statePaused = false
+    private var stateRate: Double? = null
+    private var soonForced = false
+    private var soonDueMs = 0L
+
     /** The outside limit currently applied (see [capFps]); for tests and diagnostics. */
     val externalFpsCap: Double? get() = externalCap
 
@@ -78,6 +88,7 @@ internal class FrameScheduler(
         started = false
         dirty = false
         soonPending = false
+        soonForced = false
         handler.removeCallbacks(tickRunnable)
         handler.removeCallbacks(soonRunnable)
         val roots = listeners.keys.toList()
@@ -86,6 +97,8 @@ internal class FrameScheduler(
         // Stopping also ends any degradation; the next start() begins at baseFps.
         currentFps = baseFps
         externalCap = null
+        statePaused = false
+        stateRate = null
     }
 
     /** Flags that the screen changed since the last capture. Ignored while stopped. */
@@ -94,11 +107,41 @@ internal class FrameScheduler(
         dirty = true
     }
 
-    /** Schedules a single extra capture after [delayMs]; coalesced, forced even if not dirty. */
-    fun requestSoon(delayMs: Long = 100) {
-        if (!started || soonPending) return
+    /**
+     * Schedules a single extra capture after [delayMs]; coalesced, taken even if not dirty. With [force] (triggers,
+     * wake capture) the request replaces a pending plain one and, between two forced ones, the earlier wins, so a
+     * wake capture never waits behind a coalesced 100 ms request.
+     */
+    fun requestSoon(delayMs: Long = 100, force: Boolean = false) {
+        if (!started) return
+        val dueMs = SystemClock.uptimeMillis() + delayMs
+        if (soonPending) {
+            if (!force || (soonForced && dueMs >= soonDueMs)) return
+            handler.removeCallbacks(soonRunnable)
+        }
         soonPending = true
+        soonForced = force
+        soonDueMs = dueMs
         handler.postDelayed(soonRunnable, delayMs)
+    }
+
+    /**
+     * The capture lifecycle's periodic rate. `null` cancels the periodic tick (draw listeners, [requestSoon] and
+     * [markDirty] keep working); a value caps the tick period like [capFps], also below the 0.5 fps floor.
+     */
+    fun setStateFps(fps: Double?) {
+        val rate = fps?.takeIf { it.isFinite() && it > 0.0 }
+        // Re-applying the state we are already in must not re-post the tick: triggers do that often and would starve it.
+        if (if (fps == null) statePaused else (!statePaused && stateRate == rate)) return
+        if (fps == null) {
+            statePaused = true
+            stateRate = null
+            handler.removeCallbacks(tickRunnable)
+            return
+        }
+        statePaused = false
+        stateRate = rate
+        if (started) scheduleTick()
     }
 
     /** Registers a draw listener on [root] (idempotent per root). Ignored while stopped. */
@@ -134,17 +177,19 @@ internal class FrameScheduler(
     }
 
     private fun periodMs(): Long {
-        val fps = externalCap?.let { minOf(it, currentFps) } ?: currentFps
+        var fps = externalCap?.let { minOf(it, currentFps) } ?: currentFps
+        stateRate?.let { fps = minOf(it, fps) }
         return (1000.0 / fps).toLong().coerceAtLeast(1L)
     }
 
     private fun scheduleTick() {
         handler.removeCallbacks(tickRunnable)
+        if (statePaused) return
         handler.postDelayed(tickRunnable, periodMs())
     }
 
     private fun onTick() {
-        if (!started) return
+        if (!started || statePaused) return
         maybeRecover()
         if (dirty) runCapture()
         if (started) scheduleTick() // capture() could in theory have called stop()
@@ -152,6 +197,7 @@ internal class FrameScheduler(
 
     private fun onSoon() {
         soonPending = false
+        soonForced = false
         if (!started) return
         runCapture()
     }
