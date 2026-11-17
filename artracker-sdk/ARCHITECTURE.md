@@ -157,10 +157,10 @@ Nama layar default: `activity.javaClass.simpleName`, bisa ditimpa lewat `@ARTrac
 | Aspek | Keputusan |
 | --- | --- |
 | ID | UUIDv7 string (≤128), persist di `SharedPreferences` (`artracker_session`, dikecualikan dari backup) |
-| Sesi baru | Saat init pertama, atau saat kembali ke foreground setelah **>30 menit** di background (configurable), atau `ARTracker.reset()` |
+| Sesi baru | Saat init pertama; saat kembali ke foreground atau pada user input pertama setelah **tidak ada user input lebih dari `sessionTimeoutMs`** (default 30 menit, configurable lewat `ARTrackerConfig`); saat melewati hard cap 24 jam; atau `ARTracker.reset()`. Masuk background tidak mengakhiri sesi, dan aktivitas SDK (event, API call, upload replay) tidak memperpanjangnya. `session_id` dan waktu aktivitas terakhir dipersist, jadi keputusan ini tetap berlaku setelah process dibunuh |
 | Batas keras | 24 jam per sesi |
 | `session_start` | `type:"session"`, attributes `{platform:"android", os_version, api_level, manufacturer, model, app_version, app_build, build_id?, screen{w,h,density}, locale, tz, network, is_emulator, sdk_version}`. Ini wajib karena backend membuang field `context` selain environment/app_version |
-| `session_end` | Dikirim saat background >timeout terdeteksi atau sesi dirotasi, dengan `duration_ms`, `screen_count`, ringkasan breadcrumbs |
+| `session_end` | Dikirim saat sesi dirotasi, dengan `duration_ms` = user input terakhir − awal sesi (untuk hard cap dan `reset()`: sekarang − awal sesi). Untuk sesi yang kedaluwarsa melewati process death, item ini dibuat oleh process berikutnya saat masuk foreground |
 
 ### 4.4 Threading
 
