@@ -15,14 +15,19 @@ versions follow semantic versioning.
 - **Global properties are no longer merged into `$identify`**, so they cannot end up in the stored user traits.
   `beforeSend` still receives and may modify the item.
 - **A repeated identical `identify(userId, traits)` is not sent again** (per process: the first call after a start
-  always sends). Opting out does not affect this: nothing is remembered while opted out.
+  always sends). Nothing is remembered while opted out, and opting out clears the state, so the first `identify` after
+  opting back in sends again (the unsent `$identify` was discarded with the queue).
 - **`identify` for a different user rotates the session** (`session_end` for the previous user, then `session_start`
   and `$identify` for the new one), so one session never mixes two users. Identifying from anonymous keeps the session.
 
 ### Fixed
 
-- A session replay chunk is stamped with the user it was opened under, not the user signed in when it closes. After
-  a user switch the old session's last chunk is no longer uploaded as the new user.
+- A session replay chunk is stamped with the user of its own session (the previous user for the session that just
+  ended), not the user signed in when it closes or when a late frame arrives. After a user switch or `reset()` the old
+  session's last chunk is no longer uploaded as the new user.
+- `identify` and `reset()` are serialised, so concurrent `identify` calls for a new user rotate the session once.
+- `identify` traits with `null` or non-`String` keys (from Java) no longer make the whole call fail: those entries are
+  dropped. A `String` cut at 256 characters no longer splits a surrogate pair.
 
 ## [1.0.2] - 2026-11-17
 
