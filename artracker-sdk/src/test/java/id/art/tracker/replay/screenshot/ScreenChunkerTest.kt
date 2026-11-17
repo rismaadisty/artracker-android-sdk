@@ -26,8 +26,10 @@ class ScreenChunkerTest {
     private val batches = ArrayList<NewReplayBatch>()
     private var user: String? = "u-1"
 
+    private var userOfSession: (String) -> String? = { user }
+
     private fun chunker(maxGzipBytes: Int = 2 * 1024 * 1024, windowMs: Long = 10_000) =
-        ScreenChunker(ReplaySink { batches += it }, clock, "test", { user }, maxGzipBytes, windowMs)
+        ScreenChunker(ReplaySink { batches += it }, clock, "test", { session -> userOfSession(session) }, maxGzipBytes, windowMs)
 
     private fun jpeg(size: Int, seed: Long = 1): ByteArray = ByteArray(size).also { Random(seed).nextBytes(it) }
 
@@ -55,6 +57,16 @@ class ScreenChunkerTest {
         user = null
         c.addFrame("s1", frame())
         user = "A"
+        c.close()
+
+        assertEquals("A", batches.single().userId)
+    }
+
+    @Test
+    fun aLateFrameOfAnEndedSession_isStampedWithThatSessionsUser_notTheCurrentOne() {
+        val c = chunker()
+        userOfSession = { session -> if (session == "s1") "A" else "B" } // B is signed in now, s1 was A's
+        c.addFrame("s1", frame()) // no chunk was open: this one opens a chunk of the old session
         c.close()
 
         assertEquals("A", batches.single().userId)

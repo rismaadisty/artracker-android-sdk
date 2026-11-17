@@ -609,6 +609,56 @@ class ARTrackerCoreTest {
     }
 
     @Test
+    fun identify_afterOptOutDiscardedTheQueuedIdentify_sendsAgainOnceOptedBackIn() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.identify("A", mapOf("plan" to "pro"))
+        assertEquals(1, settle().identifies().size)
+        ARTracker.optOut(true) // discards what was queued and not yet sent
+        ARTracker.optOut(false)
+        ARTracker.identify("A", mapOf("plan" to "pro"))
+
+        assertEquals(2, settle().identifies().size)
+    }
+
+    @Test
+    fun identify_concurrentSwitchToTheSameUser_rotatesOnce() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        val rounds = 25
+        repeat(rounds) { i ->
+            ARTracker.identify("A$i")
+            val start = java.util.concurrent.CountDownLatch(1)
+            val threads = (0 until 6).map {
+                Thread { start.await(); ARTracker.identify("B$i", mapOf("n" to 1)) }.also(Thread::start)
+            }
+            start.countDown()
+            threads.forEach(Thread::join)
+        }
+
+        val items = settle()
+        // Per round: exactly one rotation (one session_end stamped with the previous user) and one $identify for B.
+        assertEquals(rounds, items.identifies().count { (it.userId ?: "").startsWith("B") })
+        val endsOfA = items.named("session_end").count { (it.userId ?: "").startsWith("A") }
+        assertEquals(rounds, endsOfA)
+        // The B -> A(next round) switches close one session each; a doubled rotation would add more.
+        assertEquals(rounds - 1, items.named("session_end").count { (it.userId ?: "").startsWith("B") })
+    }
+
+    @Test
+    fun userForSession_isThePreviousUserForTheSessionThatJustEnded() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.identify("A")
+        val oldId = ARTracker.diagnostics().sessionId!!
+        ARTracker.identify("B")
+        val newId = ARTracker.diagnostics().sessionId!!
+
+        assertEquals("A", core().userForSession(oldId))
+        assertEquals("B", core().userForSession(newId))
+        ARTracker.reset()
+        assertEquals("B", core().userForSession(newId))
+        assertEquals(null, core().userForSession(ARTracker.diagnostics().sessionId!!))
+    }
+
+    @Test
     fun identify_userSwitch_rotatesReplaySession() {
         val sampled = CopyOnWriteArrayList<String>()
         val chunks = CopyOnWriteArrayList<NewReplayBatch>()

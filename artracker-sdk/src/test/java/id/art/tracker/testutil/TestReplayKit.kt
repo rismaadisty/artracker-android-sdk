@@ -30,7 +30,7 @@ internal fun testScreenshotKit(
         pixelCopy = PixelCopyApi { _, _, done -> done(PixelCopyApi.ERROR) },
     ),
     encoder = ScreenshotEncoder(),
-    chunker = ScreenChunker(sink, core.clock, core.config.environment, { core.identity.userId }),
+    chunker = ScreenChunker(sink, core.clock, core.config.environment, core::userForSession),
     governorFactory = { fps, quality -> ByteBudgetGovernor(fps, quality, budgetBytes = governorBudget) },
 )
 

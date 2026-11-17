@@ -51,7 +51,8 @@ internal class ScreenChunker(
     private val sink: ReplaySink,
     private val clock: Clock,
     private val environment: String,
-    private val userId: () -> String?,
+    /** The user of a SESSION (not "whoever is signed in now"): a late frame of an ended session keeps its user. */
+    private val userId: (String) -> String?,
     private val maxGzipBytes: Int = DEFAULT_MAX_GZIP_BYTES,
     private val windowMs: Long = DEFAULT_WINDOW_MS,
 ) {
@@ -145,7 +146,7 @@ internal class ScreenChunker(
         val last = lastTs
         val flagged = hasError
         val rageFlagged = hasRageClick
-        val chunkUser = openUser ?: userId()
+        val chunkUser = openUser ?: userId(session)
         reset()
 
         if (seqSession != session) {
@@ -194,7 +195,7 @@ internal class ScreenChunker(
     private fun open(sessionId: String) {
         if (frames.isEmpty()) {
             this.sessionId = sessionId
-            openUser = userId()
+            openUser = userId(sessionId)
             openedAtMs = clock.nowMs()
             hasError = errorPending
             errorPending = false
