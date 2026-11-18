@@ -56,6 +56,11 @@ jobs:
       - name: Build and unit tests
         run: ./gradlew --stacktrace :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug
 
+      - name: Symbols Gradle plugin unit tests
+        # The plugin (artracker-gradle-plugin) is released with the SDK, same version and tag. Its functional tests need an
+        # Android SDK and a long fixture build, so they are not part of the release gate; run them locally (docs/releasing.md).
+        run: ./gradlew --stacktrace -p artracker-gradle-plugin test
+
       - name: Validate the publication in a local Maven repository
         # Publishes to build/verify-m2 (never to GitHub), checks aar/pom/module/dependencies, then builds throw-away
         # consumer apps (AGP 9 minified, and AGP 8 + Kotlin 2.0.21) that resolve the artifact only from that repository.
@@ -105,6 +110,13 @@ jobs:
         # build.gradle.kts reads GITHUB_ACTOR / GITHUB_TOKEN / GITHUB_REPOSITORY from the environment.
         # GitHub Packages never overwrites a version: re-running this job after a successful publish fails with 409.
         run: ./gradlew --stacktrace :artracker-sdk:publishReleasePublicationToGitHubPackagesRepository
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the symbols Gradle plugin
+        # The plugin jar and its plugin marker (id.art.tracker.symbols), same repository and version as the SDK.
+        run: ./gradlew --stacktrace -p artracker-gradle-plugin publishAllPublicationsToGitHubPackagesRepository
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

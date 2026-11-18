@@ -5,6 +5,15 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Gradle plugin `id.art.tracker.symbols`** (module `artracker-gradle-plugin`, released with the SDK under the same
+  version): after every minified Android build it uploads the R8/ProGuard `mapping.txt` to Artracker, one
+  `uploadArtracker<Variant>Mapping` task per minified variant, so crashes in the dashboard are deobfuscated. It needs a
+  secret key (`art_sec_...`), never breaks the build when Artracker is unreachable (unless `failOnUploadError = true`)
+  and works with the configuration cache. The SDK itself is unchanged. See the README, section "Upload `mapping.txt`
+  automatically".
+
 ## [1.0.3] - 2026-11-17
 
 ### Changed

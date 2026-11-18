@@ -484,7 +484,9 @@ The AAR ships consumer rules (`consumer-rules.pro`); you need no rules of your o
 The public API (`ARTracker`, `ARTrackerConfig`, ...) is deliberately **not** kept: you call it directly, so R8 knows it
 is used.
 
-Obfuscated builds: stack traces are sent as they are (no symbolication in `1.0.3`). Screen names default to the class
+Obfuscated builds: the SDK sends stack traces as they are; the dashboard deobfuscates them with the `mapping.txt` of that
+release, which the [Gradle plugin below](#upload-mappingtxt-automatically-gradle-plugin) uploads after every minified
+build. Screen names default to the class
 simple name, so a Fragment created in code, or a Compose destination, can show up as an obfuscated name such as `a`;
 use `@ARTrackerScreenName("...")`, `ARTracker.screen("...")` or a `-keepnames` rule for such classes. Activities
 declared in the manifest are kept by AGP's own rules.
@@ -494,6 +496,60 @@ R8-minified `:app:assembleRelease` of the sample app (has OkHttp, Compose, Fragm
 stand-alone R8 run on the AAR **without** those four libraries succeeds too (and fails without the consumer rules).
 What is **not** run: a real AGP build of an app without them, installed and executed on a device, and the minified
 sample app itself.
+
+### Upload `mapping.txt` automatically (Gradle plugin)
+
+The `id.art.tracker.symbols` plugin uploads the R8/ProGuard `mapping.txt` of every **minified** variant to Artracker after
+`assemble<Variant>` and `bundle<Variant>`. It is released with the SDK (same version, same GitHub Packages repository).
+It needs AGP 8.0+ and JDK 17.
+
+```kotlin
+// settings.gradle.kts: the plugin and its marker artifact come from the same registry as the SDK (credentials as in Installation)
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+        maven {
+            url = uri("https://maven.pkg.github.com/rismaadisty/artracker-android-sdk")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(providers.environmentVariable("GPR_USER")).orNull
+                password = providers.gradleProperty("gpr.key").orElse(providers.environmentVariable("GPR_KEY")).orNull
+            }
+            content { includeGroupByRegex("id\\.art\\.tracker.*") }
+        }
+    }
+}
+
+// build.gradle.kts of the app module
+plugins {
+    id("com.android.application")
+    id("id.art.tracker.symbols") version "1.0.3" // use the SDK version
+}
+
+artracker {
+    apiUrl = "https://art.example.com"
+    // secretKey: do not put it here. Set ARTRACKER_SECRET_KEY in CI (dashboard: Settings > API Keys > Secret key).
+}
+```
+
+| Setting | Default | Fallbacks |
+|---|---|---|
+| `apiUrl` | none | env `ARTRACKER_API_URL`, then Gradle property `artracker.apiUrl` |
+| `secretKey` | none | env `ARTRACKER_SECRET_KEY`, then Gradle property `artracker.secretKey` |
+| `uploadMapping` | `true` | `false` registers no task |
+| `failOnUploadError` | `false` | `true` fails the build when the upload fails |
+
+- One task per minified variant: `uploadArtracker<Variant>Mapping` (for example `uploadArtrackerFreeReleaseMapping`).
+  A variant with `isMinifyEnabled = false` has no mapping file and gets no task.
+- The mapping is uploaded under the variant's own `versionName` and `versionCode` (`POST /api/v1/sdk/releases/<versionName>/proguard?build=<versionCode>`).
+  The SDK reports `PackageInfo.versionName` as `app_version`, so the two match unless you pass `ARTrackerConfig.appVersion`
+  yourself: then the mapping is stored under a different version than your events, and nothing is deobfuscated.
+- **A secret key is required** (`art_sec_...`). A public key (`art_live_...`) is not accepted: the plugin warns and skips.
+  The secret key is never logged and is not an input of the task (so it is not part of any build-cache key).
+- If the URL or key is missing, the plugin warns `Artracker: ... skipping mapping upload` and the build succeeds. A failed
+  upload (server down, timeout, HTTP error) also only warns by default, so the host's build does not break when Artracker is down.
+- Works with the configuration cache and with product flavors.
 
 ## Known limitations & privacy notes
 

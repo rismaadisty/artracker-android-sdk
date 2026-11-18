@@ -15,6 +15,7 @@ bump sdkVersion + CHANGELOG  ->  scripts/verify-publication.sh  ->  merge  ->  g
                                        .github/workflows/publish.yml  (only trigger: a tag matching v*)
                                        verify:  tag == v<sdkVersion>, unit tests, local-Maven validation (+ consumer apps)
                                        publish: publishReleasePublicationToGitHubPackagesRepository   (needs verify)
+                                                + the symbols Gradle plugin (artracker-gradle-plugin), same version
 ```
 
 * The version has one source of truth: `val sdkVersion` in `artracker-sdk/build.gradle.kts` (also `BuildConfig.SDK_VERSION`,
@@ -22,6 +23,13 @@ bump sdkVersion + CHANGELOG  ->  scripts/verify-publication.sh  ->  merge  ->  g
   before building.
 * The workflow uses only the built-in `GITHUB_TOKEN` (`packages: write` in the publish job, read-only elsewhere). There is
   **no secret to create** and no credential in the repository.
+* The Gradle plugin (`artracker-gradle-plugin`, plugin id `id.art.tracker.symbols`) is published by the same workflow, to the
+  same registry, with the same version: its `build.gradle.kts` reads `val sdkVersion` from the SDK, so there is no second
+  number to bump. It publishes two artifacts: `id.art.tracker:artracker-gradle-plugin` and the plugin marker
+  `id.art.tracker.symbols:id.art.tracker.symbols.gradle.plugin`. The workflow runs its unit tests; its functional tests
+  (a real Android fixture build, needs `ANDROID_HOME` and network, 15 to 25 minutes the first time) are run by hand before
+  a release: `./gradlew -p artracker-gradle-plugin functionalTest`. To try the plugin without a release:
+  `./gradlew -p artracker-gradle-plugin publishToMavenLocal -Dmaven.repo.local=<dir>` and resolve it from that directory.
 * GitHub Packages is immutable per version: publishing `1.0.0` twice fails with `409`. A bad release is fixed with a new
   patch version (`1.0.1`); do not delete and reuse a number.
 

@@ -5,7 +5,15 @@ plugins {
 }
 
 group = "id.art.tracker"
-version = "1.0.3"
+// The plugin is released together with the SDK, with the same version and the same tag: read it from the single source of
+// truth (`val sdkVersion` in artracker-sdk/build.gradle.kts) instead of keeping a second copy.
+version = Regex("""val sdkVersion = "([^"]+)"""")
+    .find(file("../artracker-sdk/build.gradle.kts").readText())?.groupValues?.get(1)
+    ?: error("val sdkVersion not found in artracker-sdk/build.gradle.kts")
+
+java {
+    withSourcesJar()
+}
 
 kotlin {
     jvmToolchain(17)
@@ -60,4 +68,42 @@ tasks.register<Test>("functionalTest") {
     inputs.dir("src/main")
     maxParallelForks = 1
     testLogging { events("failed", "skipped") }
+}
+
+// Publishing to GitHub Packages, next to the SDK (same repository, same credentials, same `v*` tag; see .github/workflows/publish.yml).
+// Two publications come from `java-gradle-plugin`: the plugin jar (id.art.tracker:artracker-gradle-plugin) and the plugin
+// marker (id.art.tracker.symbols:id.art.tracker.symbols.gradle.plugin) that makes `plugins { id("id.art.tracker.symbols") }` resolve.
+//   - `publishToMavenLocal`: local validation (add -Dmaven.repo.local=<dir> to keep ~/.m2 untouched).
+//   - `publishAllPublicationsToGitHubPackagesRepository`: remote, run by the workflow on a tag.
+val githubRepository = providers.environmentVariable("GITHUB_REPOSITORY")
+    .orElse("rismaadisty/artracker-android-sdk")
+    .get()
+
+publishing {
+    publications.withType<MavenPublication>().configureEach {
+        pom {
+            name.set("Artracker symbols Gradle plugin")
+            description.set("Uploads the R8/ProGuard mapping.txt to Artracker after every minified Android build.")
+            url.set("https://github.com/$githubRepository")
+            scm {
+                url.set("https://github.com/$githubRepository")
+                connection.set("scm:git:https://github.com/$githubRepository.git")
+                developerConnection.set("scm:git:ssh://git@github.com/$githubRepository.git")
+            }
+            issueManagement {
+                system.set("GitHub Issues")
+                url.set("https://github.com/$githubRepository/issues")
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/$githubRepository")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(providers.environmentVariable("GITHUB_ACTOR")).orNull
+                password = providers.gradleProperty("gpr.key").orElse(providers.environmentVariable("GITHUB_TOKEN")).orNull
+            }
+        }
+    }
 }
