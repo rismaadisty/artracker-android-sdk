@@ -22,6 +22,7 @@ import id.art.tracker.BeforeSend
 import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.replay.ManualDispatcher
 import id.art.tracker.replay.ReplayController
+import id.art.tracker.replay.ReplaySink
 import id.art.tracker.testutil.FakeReplayBackend
 import id.art.tracker.testutil.testReplayController
 import id.art.tracker.transport.FlusherRegistry
@@ -532,6 +533,224 @@ class ARTrackerCoreTest {
         // Order inside the new session: session_start, then the screen it opens on.
         assertTrue(items.indexOf(items.named("session_start")[1]) < items.indexOf(views[1]))
     }
+
+    // region identify
+
+    private fun List<TelemetryItem>.identifies() = named("\$identify")
+
+    @Test
+    fun identify_fromAnonymous_keepsSession() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        val before = ARTracker.diagnostics().sessionId
+        ARTracker.identify("A")
+        val after = ARTracker.diagnostics().sessionId
+
+        val items = settle()
+        assertEquals(before, after)
+        assertEquals(0, items.named("session_end").size)
+        assertEquals(1, items.named("session_start").size)
+        val identify = items.identifies().single()
+        assertEquals("A", identify.userId)
+        assertEquals(before, identify.sessionId)
+    }
+
+    @Test
+    fun identify_userSwitch_rotatesSession() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.identify("A")
+        val oldId = ARTracker.diagnostics().sessionId!!
+        ARTracker.identify("B")
+        val newId = ARTracker.diagnostics().sessionId!!
+        assertNotEquals(oldId, newId)
+
+        val items = settle()
+        val firstEnd = items.indexOf(items.named("session_end").single())
+        val tail = items.drop(firstEnd).filter { it.name in setOf("session_end", "session_start", "\$identify") }
+        assertEquals(listOf("session_end", "session_start", "\$identify"), tail.map { it.name })
+        assertEquals("A", tail[0].userId)
+        assertEquals(oldId, tail[0].sessionId)
+        assertEquals("B", tail[1].userId)
+        assertEquals(newId, tail[1].sessionId)
+        assertEquals("B", tail[2].userId)
+        assertEquals(newId, tail[2].sessionId)
+    }
+
+    @Test
+    fun identify_sameUserSameTraits_emitsOnce_perProcess() {
+        val clock = FakeClock(1_700_000_000_000)
+        startCoreWith(clock, sessionTimeoutMs = 60_000)
+        repeat(3) { ARTracker.identify("A", mapOf("plan" to "pro")) }
+        assertEquals(1, settle().identifies().size)
+
+        ARTracker.identify("A", mapOf("plan" to "team"))
+        assertEquals(2, settle().identifies().size)
+
+        // A new process (a new core over the same stored user) has no in-memory state: it must emit again.
+        ARTracker.resetForTest()
+        seen.clear()
+        startCoreWith(clock, sessionTimeoutMs = 60_000)
+        ARTracker.identify("A", mapOf("plan" to "team"))
+        val items = settle()
+        assertEquals(1, items.identifies().size)
+        assertEquals(0, items.named("session_end").size)
+    }
+
+    @Test
+    fun identify_whileOptedOut_doesNotPoisonDedupe() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.optOut(true)
+        ARTracker.identify("A")
+        ARTracker.optOut(false)
+        ARTracker.identify("A")
+
+        val items = settle()
+        assertEquals(1, items.identifies().size)
+        assertEquals("A", items.identifies().single().userId)
+    }
+
+    @Test
+    fun userForSession_remembersSeveralEndedSessions() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.identify("A")
+        val sA = ARTracker.diagnostics().sessionId!!
+        ARTracker.identify("B")
+        val sB = ARTracker.diagnostics().sessionId!!
+        ARTracker.reset()
+        val sAnon = ARTracker.diagnostics().sessionId!!
+        ARTracker.identify("C")
+
+        assertEquals("A", core().userForSession(sA))
+        assertEquals("B", core().userForSession(sB))
+        assertEquals("C", core().userForSession(sAnon))
+    }
+
+    @Test
+    fun identify_afterOptOutDiscardedTheQueuedIdentify_sendsAgainOnceOptedBackIn() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.identify("A", mapOf("plan" to "pro"))
+        assertEquals(1, settle().identifies().size)
+        ARTracker.optOut(true) // discards what was queued and not yet sent
+        ARTracker.optOut(false)
+        ARTracker.identify("A", mapOf("plan" to "pro"))
+
+        assertEquals(2, settle().identifies().size)
+    }
+
+    @Test
+    fun identify_concurrentSwitchToTheSameUser_rotatesOnce() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        val rounds = 25
+        repeat(rounds) { i ->
+            ARTracker.identify("A$i")
+            val start = java.util.concurrent.CountDownLatch(1)
+            val threads = (0 until 6).map {
+                Thread { start.await(); ARTracker.identify("B$i", mapOf("n" to 1)) }.also(Thread::start)
+            }
+            start.countDown()
+            threads.forEach(Thread::join)
+        }
+
+        val items = settle()
+        // Per round: exactly one rotation (one session_end stamped with the previous user) and one $identify for B.
+        assertEquals(rounds, items.identifies().count { (it.userId ?: "").startsWith("B") })
+        val endsOfA = items.named("session_end").count { (it.userId ?: "").startsWith("A") }
+        assertEquals(rounds, endsOfA)
+        // The B -> A(next round) switches close one session each; a doubled rotation would add more.
+        assertEquals(rounds - 1, items.named("session_end").count { (it.userId ?: "").startsWith("B") })
+    }
+
+    @Test
+    fun userForSession_isThePreviousUserForTheSessionThatJustEnded() {
+        startCoreWith(FakeClock(1_700_000_000_000), sessionTimeoutMs = 60_000)
+        ARTracker.identify("A")
+        val oldId = ARTracker.diagnostics().sessionId!!
+        ARTracker.identify("B")
+        val newId = ARTracker.diagnostics().sessionId!!
+
+        assertEquals("A", core().userForSession(oldId))
+        assertEquals("B", core().userForSession(newId))
+        ARTracker.reset()
+        assertEquals("B", core().userForSession(newId))
+        assertEquals(null, core().userForSession(ARTracker.diagnostics().sessionId!!))
+    }
+
+    @Test
+    fun identify_userSwitchFromABackgroundThread_rotatesReplaySession() {
+        val sampled = CopyOnWriteArrayList<String>()
+        val dispatcher = ManualDispatcher()
+        val core = ARTrackerCore(
+            app,
+            configWith(replay = ReplayConfig(enabled = true, sampleRate = 1.0)),
+            replayFactory = { c, handler ->
+                testReplayController(c, handler, dispatcher, sampler = { id, _ -> sampled += id; true })
+            },
+            replaySink = ReplaySink { },
+        )
+        ARTrackerCore.install(core)
+        core.start()
+        ProcessLifecycleTestUtil.start()
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(TextView(activity).apply { text = "hello replay" })
+        val looper = shadowOf(Looper.getMainLooper())
+        looper.idleFor(java.time.Duration.ofMillis(1_000))
+        ARTracker.identify("A")
+        val oldId = ARTracker.diagnostics().sessionId!!
+
+        Thread { ARTracker.identify("B") }.also { it.start() }.join()
+        val newId = ARTracker.diagnostics().sessionId!!
+        looper.idle()
+        settle()
+        dispatcher.runAll()
+
+        assertNotEquals(oldId, newId)
+        assertEquals(newId, sampled.last())
+        assertEquals("B", core.userForSession(newId))
+        assertEquals("A", core.userForSession(oldId))
+    }
+
+    @Test
+    fun identify_userSwitch_rotatesReplaySession() {
+        val sampled = CopyOnWriteArrayList<String>()
+        val chunks = CopyOnWriteArrayList<NewReplayBatch>()
+        val dispatcher = ManualDispatcher()
+        val core = ARTrackerCore(
+            app,
+            configWith(replay = ReplayConfig(enabled = true, sampleRate = 1.0)),
+            replayFactory = { c, handler ->
+                testReplayController(c, handler, dispatcher, sampler = { id, _ -> sampled += id; true })
+            },
+            replaySink = ReplaySink { chunks += it },
+        )
+        ARTrackerCore.install(core)
+        core.start()
+        ProcessLifecycleTestUtil.start()
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(TextView(activity).apply { text = "hello replay" })
+        val looper = shadowOf(Looper.getMainLooper())
+        looper.idleFor(java.time.Duration.ofMillis(1_000))
+
+        ARTracker.identify("A")
+        val oldId = ARTracker.diagnostics().sessionId!!
+        core.replayController!!.captureFrame()
+        dispatcher.runAll()
+
+        ARTracker.identify("B")
+        val newId = ARTracker.diagnostics().sessionId!!
+        assertNotEquals(oldId, newId)
+        looper.idle()
+        settle()
+        dispatcher.runAll()
+        assertEquals(newId, sampled.last())
+
+        core.replayController!!.captureFrame()
+        dispatcher.runAll()
+        core.replayController!!.flushChunks()
+        dispatcher.runAll()
+        assertTrue("a chunk of the new session was produced", chunks.any { it.sessionId == newId })
+        assertTrue("no chunk of the new session carries the old id", chunks.filter { it.userId == "B" }.all { it.sessionId == newId })
+    }
+
+    // endregion
 
     @Test
     fun shortBackground_sameSession_noDuplicateScreenView() {

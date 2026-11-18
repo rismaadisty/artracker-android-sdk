@@ -42,7 +42,7 @@ internal object ReplayControllerFactory {
         val kit = ScreenshotKit(
             capturer = ScreenshotCapturer(BitmapPool(), MaskCollector(policy, composeMask), mainHandler, pixelCopy = pixelCopy),
             encoder = ScreenshotEncoder(),
-            chunker = ScreenChunker(sink, core.clock, core.config.environment, userId = { core.identity.userId }),
+            chunker = ScreenChunker(sink, core.clock, core.config.environment, userId = core::userForSession),
         )
         return ReplayController.create(core, kit, mainHandler)
     }

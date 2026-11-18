@@ -51,7 +51,8 @@ internal class ScreenChunker(
     private val sink: ReplaySink,
     private val clock: Clock,
     private val environment: String,
-    private val userId: () -> String?,
+    /** The user of a SESSION (not "whoever is signed in now"): a late frame of an ended session keeps its user. */
+    private val userId: (String) -> String?,
     private val maxGzipBytes: Int = DEFAULT_MAX_GZIP_BYTES,
     private val windowMs: Long = DEFAULT_WINDOW_MS,
 ) {
@@ -60,6 +61,13 @@ internal class ScreenChunker(
     private val frames = ArrayList<ScreenFrame>()
     private val touches = ArrayList<ScreenTouch>()
     private var sessionId: String? = null
+
+    /**
+     * The user when the open chunk started. A chunk is stamped with it, not with whoever is signed in when it closes:
+     * after a user switch the old session's chunk closes only on the new session's first frame. An anonymous chunk
+     * may adopt the user who signs in before it closes (same session).
+     */
+    private var openUser: String? = null
     private var estimated = 0
     private var openedAtMs = 0L
     private var firstTs = Long.MAX_VALUE
@@ -138,6 +146,7 @@ internal class ScreenChunker(
         val last = lastTs
         val flagged = hasError
         val rageFlagged = hasRageClick
+        val chunkUser = openUser ?: userId(session)
         reset()
 
         if (seqSession != session) {
@@ -162,7 +171,7 @@ internal class ScreenChunker(
             firstTsMs = first,
             lastTsMs = last,
             hasError = flagged,
-            userId = userId(),
+            userId = chunkUser,
             environment = environment,
             format = ReplayFormat.SCREEN_V1,
             hasRageClick = rageFlagged,
@@ -186,6 +195,7 @@ internal class ScreenChunker(
     private fun open(sessionId: String) {
         if (frames.isEmpty()) {
             this.sessionId = sessionId
+            openUser = userId(sessionId)
             openedAtMs = clock.nowMs()
             hasError = errorPending
             errorPending = false
@@ -199,6 +209,7 @@ internal class ScreenChunker(
         frames.clear()
         touches.clear()
         sessionId = null
+        openUser = null
         estimated = 0
         firstTs = Long.MAX_VALUE
         lastTs = Long.MIN_VALUE

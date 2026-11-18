@@ -2,6 +2,7 @@ package id.art.tracker.transport
 
 import androidx.annotation.VisibleForTesting
 import id.art.tracker.BeforeSend
+import id.art.tracker.ItemType
 import id.art.tracker.LogLevel
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.Clock
@@ -338,10 +339,16 @@ internal class EventPipeline(
      */
     private fun prepare(unmerged: TelemetryItem, globals: GlobalSnapshot): StoredItem? {
         return try {
-            val original = try {
-                globals.applyTo(unmerged)
-            } catch (e: Exception) {
+            // `$identify` carries the traits only: merged globals would end up in the stored user traits.
+            val isIdentify = unmerged.type == ItemType.EVENT && unmerged.name == "\$identify"
+            val original = if (isIdentify) {
                 unmerged
+            } else {
+                try {
+                    globals.applyTo(unmerged)
+                } catch (e: Exception) {
+                    unmerged
+                }
             }
             val hook = beforeSend
             val item = if (hook == null) {
