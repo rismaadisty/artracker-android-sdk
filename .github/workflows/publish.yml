@@ -61,6 +61,11 @@ jobs:
         # Android SDK and a long fixture build, so they are not part of the release gate; run them locally (docs/releasing.md).
         run: ./gradlew --stacktrace -p artracker-gradle-plugin test
 
+      - name: Symbols Gradle plugin publication check
+        # Publishes the plugin and its marker into a throw-away local repository, so a publication error shows up here,
+        # before anything is sent to GitHub Packages.
+        run: ./gradlew --stacktrace -p artracker-gradle-plugin publishToMavenLocal -Dmaven.repo.local="$RUNNER_TEMP/plugin-m2"
+
       - name: Validate the publication in a local Maven repository
         # Publishes to build/verify-m2 (never to GitHub), checks aar/pom/module/dependencies, then builds throw-away
         # consumer apps (AGP 9 minified, and AGP 8 + Kotlin 2.0.21) that resolve the artifact only from that repository.
@@ -113,6 +118,29 @@ jobs:
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-plugin:
+    # A separate job: if it fails after the SDK is already published, "Re-run failed jobs" retries only this one
+    # (re-running the SDK publish would stop at 409 and never reach the plugin).
+    name: Publish the symbols Gradle plugin to GitHub Packages
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Publish the symbols Gradle plugin
         # The plugin jar and its plugin marker (id.art.tracker.symbols), same repository and version as the SDK.

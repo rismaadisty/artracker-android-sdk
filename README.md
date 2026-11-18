@@ -485,8 +485,8 @@ The public API (`ARTracker`, `ARTrackerConfig`, ...) is deliberately **not** kep
 is used.
 
 Obfuscated builds: the SDK sends stack traces as they are; the dashboard deobfuscates them with the `mapping.txt` of that
-release, which the [Gradle plugin below](#upload-mappingtxt-automatically-gradle-plugin) uploads after every minified
-build. Screen names default to the class
+release. The [Gradle plugin below](#upload-mappingtxt-automatically-gradle-plugin) uploads that file after every minified
+build (it needs a backend that accepts it: until then the upload only warns). Screen names default to the class
 simple name, so a Fragment created in code, or a Compose destination, can show up as an obfuscated name such as `a`;
 use `@ARTrackerScreenName("...")`, `ARTracker.screen("...")` or a `-keepnames` rule for such classes. Activities
 declared in the manifest are kept by AGP's own rules.
@@ -524,7 +524,7 @@ pluginManagement {
 // build.gradle.kts of the app module
 plugins {
     id("com.android.application")
-    id("id.art.tracker.symbols") version "1.0.3" // use the SDK version
+    id("id.art.tracker.symbols") version "<sdk-version>" // same version as the SDK; first published after 1.0.3
 }
 
 artracker {

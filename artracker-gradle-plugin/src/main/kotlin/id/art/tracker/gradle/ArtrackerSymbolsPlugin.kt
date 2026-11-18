@@ -32,7 +32,10 @@ public class ArtrackerSymbolsPlugin : Plugin<Project> {
                 // No minification means no mapping file: nothing to upload, nothing to register.
                 if ((variant as? ApplicationVariant)?.isMinifyEnabled != true) return@onVariants
 
-                val output = variant.outputs.single { it.outputType == VariantOutputConfiguration.OutputType.SINGLE }
+                // ABI or density splits have no SINGLE output: use the universal one, else the first.
+                val output = variant.outputs.firstOrNull { it.outputType == VariantOutputConfiguration.OutputType.SINGLE }
+                    ?: variant.outputs.firstOrNull { it.outputType == VariantOutputConfiguration.OutputType.UNIVERSAL }
+                    ?: variant.outputs.first()
                 val capitalized = variant.name.replaceFirstChar { it.uppercase() }
                 val upload = project.tasks.register("uploadArtracker${capitalized}Mapping", UploadMappingTask::class.java) { task ->
                     task.description = "Uploads the ${variant.name} mapping.txt to Artracker."

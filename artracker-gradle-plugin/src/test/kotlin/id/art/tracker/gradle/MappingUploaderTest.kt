@@ -106,4 +106,24 @@ class MappingUploaderTest {
         val failed = assertInstanceOf(UploadResult.Failed::class.java, result)
         assertTrue("topsecret" !in failed.reason)
     }
+
+    @Test fun `a key with a control character fails without echoing the key and without a request`() {
+        val url = serve(201)
+        val result = MappingUploader().upload(url, "art_sec_abc\ndef", "1.0", 1, mappingFile("a -> b:"))
+        val failed = assertInstanceOf(UploadResult.Failed::class.java, result)
+        assertTrue("art_sec_abc" !in failed.reason && "def" !in failed.reason, failed.reason)
+        assertEquals(null, seen.get())
+    }
+
+    @Test fun `a server that never answers fails within the request timeout`() {
+        val s = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        s.createContext("/") { Thread.sleep(10_000) }
+        s.start()
+        server = s
+        val started = System.nanoTime()
+        val result = MappingUploader(timeout = java.time.Duration.ofSeconds(1))
+            .upload("http://127.0.0.1:${s.address.port}", "art_sec_x", "1.0", 1, mappingFile("a -> b:"))
+        assertInstanceOf(UploadResult.Failed::class.java, result)
+        assertTrue((System.nanoTime() - started) < 8_000_000_000L)
+    }
 }

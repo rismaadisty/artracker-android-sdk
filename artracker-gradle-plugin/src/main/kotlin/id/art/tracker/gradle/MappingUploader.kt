@@ -28,10 +28,16 @@ public sealed interface UploadResult {
  * gzip body. It never throws for a network or server problem: the caller decides whether a [UploadResult.Failed] fails the build.
  */
 public class MappingUploader(
-    private val http: HttpClient = HttpClient.newHttpClient(),
+    // A connect timeout keeps an unreachable host (packets dropped, no refusal) from blocking the build for the whole request timeout.
+    private val http: HttpClient = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build(),
     private val timeout: Duration = Duration.ofMinutes(5),
 ) {
     public fun upload(apiUrl: String, secretKey: String, versionName: String, versionCode: Long, mapping: File): UploadResult {
+        // Checked first, and its text never goes into a message: the JDK echoes an invalid header value in its exception,
+        // which would put the secret into the build log.
+        if (secretKey.isEmpty() || !secretKey.all { it in '\u0021'..'\u007E' }) {
+            return UploadResult.Failed("the secret key is empty or contains characters that are not allowed in an HTTP header")
+        }
         if (!mapping.isFile) return UploadResult.Failed("mapping file not found: ${mapping.path}")
 
         val gz = Files.createTempFile("artracker-mapping-", ".txt.gz")
@@ -71,5 +77,6 @@ public class MappingUploader(
 
     private companion object {
         const val MAX_BODY_IN_REASON = 500
+        val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(30)
     }
 }

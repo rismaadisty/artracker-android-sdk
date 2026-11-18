@@ -42,7 +42,7 @@ class PluginFunctionalTest {
 
     @AfterEach fun stop() { if (::server.isInitialized) server.stop(0) }
 
-    private fun writeFixture(artrackerBlock: String) {
+    private fun writeFixture(artrackerBlock: String, extraAndroid: String = "") {
         val pluginDir = System.getProperty("artracker.pluginDir")
         File(project, "settings.gradle.kts").writeText(
             """
@@ -64,6 +64,7 @@ class PluginFunctionalTest {
                 namespace = "fixture.app"
                 compileSdk = 34
                 defaultConfig { applicationId = "fixture.app"; minSdk = 24; targetSdk = 34; versionCode = 7; versionName = "1.0" }
+                $extraAndroid
                 flavorDimensions += "tier"
                 productFlavors {
                     create("free") { dimension = "tier"; versionName = "1.0-free" }
@@ -104,6 +105,16 @@ class PluginFunctionalTest {
         assertEquals("/api/v1/sdk/releases/1.0-free/proguard", hits[0].path)
         assertEquals("build=7&file=mapping.txt", hits[0].query)
         assertEquals(secret, hits[0].key)
+    }
+
+    @Test fun `abi splits configure and upload once under the universal output`() {
+        writeFixture(
+            configured(),
+            extraAndroid = "splits { abi { isEnable = true; reset(); include(\"arm64-v8a\", \"x86_64\"); isUniversalApk = true } }",
+        )
+        val result = runner("assembleFreeRelease").build()
+        assertTrue("Artracker: mapping for 1.0-free uploaded" in result.output, result.output)
+        assertEquals(1, hits.size)
     }
 
     @Test fun `assembleFreeDebug registers no upload task`() {
