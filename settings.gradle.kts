@@ -1,4 +1,6 @@
 pluginManagement {
+    // The symbols plugin (artracker-gradle-plugin) is built from source when a build applies id("id.art.tracker.symbols").
+    includeBuild("artracker-gradle-plugin")
     repositories {
         google {
             content {
