@@ -6,7 +6,7 @@ plugins {
 
 // Single source of truth for the SDK version: it feeds BuildConfig.SDK_VERSION (User-Agent, envelope `sdk.version`)
 // and the Maven publication below. Bump it here (and in CHANGELOG.md) before tagging a release.
-val sdkVersion = "1.0.3"
+val sdkVersion = "1.0.4-SNAPSHOT"
 
 android {
     namespace = "id.art.tracker.sdk"
@@ -124,7 +124,8 @@ val printSdkVersion by tasks.registering {
 // Credentials are never committed. They come from the Gradle properties `gpr.user` / `gpr.key`
 // (~/.gradle/gradle.properties) or from the environment (`GITHUB_ACTOR` / `GITHUB_TOKEN`, provided by GitHub Actions).
 // Publishing needs a token with `write:packages` (the workflow's GITHUB_TOKEN with `packages: write` is enough).
-// GitHub Packages never overwrites a published version: a version can be published only once.
+// GitHub Packages never overwrites a published release version: it can be published only once. `-SNAPSHOT` versions
+// are the exception (each publish becomes a new timestamped build); the workflow publishes them only via workflow_dispatch.
 afterEvaluate {
     // "owner/repo" of the GitHub repository. GitHub Actions sets GITHUB_REPOSITORY; the default is this repository.
     val githubRepository = providers.environmentVariable("GITHUB_REPOSITORY")

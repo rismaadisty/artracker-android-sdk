@@ -1,9 +1,9 @@
-# Builds, tests and publishes id.art.tracker:artracker-android to GitHub Packages when a version tag is pushed.
+# Builds, tests and publishes id.art.tracker:artracker-android to GitHub Packages. Two triggers:
 #
-#   git tag v1.0.0 && git push origin v1.0.0
-#
-# The tag must equal "v" + the `sdkVersion` in artracker-sdk/build.gradle.kts. Nothing else triggers this workflow and
-# there is no manual trigger, so a publish always corresponds to a tag.
+#   * Release: push a version tag.   git tag v1.0.0 && git push origin v1.0.0
+#     The tag must equal "v" + the `sdkVersion` in artracker-sdk/build.gradle.kts, and that version must NOT be a -SNAPSHOT.
+#   * Snapshot: run this workflow by hand (Actions, Publish to GitHub Packages, Run workflow) on the branch to publish.
+#     `sdkVersion` must end in -SNAPSHOT; a release version is refused. Can be repeated: every run is a new snapshot build.
 # Credentials: only the workflow's own GITHUB_TOKEN (scoped to `packages: write` in the publish job). No secret has to be
 # created and nothing is stored in the repository. See docs/releasing.md.
 name: Publish to GitHub Packages
@@ -12,6 +12,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 # Default for every job: read-only. The publish job raises it for itself.
 permissions:
@@ -25,6 +26,7 @@ concurrency:
 env:
   # Passed through the environment (not interpolated into the scripts below) so a crafted tag name cannot inject commands.
   TAG_NAME: ${{ github.ref_name }}
+  EVENT_NAME: ${{ github.event_name }}
 
 jobs:
   verify:
@@ -44,14 +46,26 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Tag must match the SDK version
+      - name: Version must fit the trigger (tag = release, manual run = snapshot)
         run: |
           sdk_version="$(./gradlew -q :artracker-sdk:printSdkVersion | tail -n1 | tr -d '[:space:]')"
-          if [[ "$TAG_NAME" != "v$sdk_version" ]]; then
-            echo "::error::Tag '$TAG_NAME' does not match the SDK version 'v$sdk_version' (artracker-sdk/build.gradle.kts)."
-            exit 1
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$sdk_version" != *-SNAPSHOT ]]; then
+              echo "::error::A manual run publishes snapshots only, but the SDK version is '$sdk_version' (artracker-sdk/build.gradle.kts). Release versions are published by pushing a tag."
+              exit 1
+            fi
+            echo "Publishing snapshot $sdk_version from $TAG_NAME"
+          else
+            if [[ "$sdk_version" == *-SNAPSHOT ]]; then
+              echo "::error::Tag '$TAG_NAME' cannot release the snapshot version '$sdk_version'. Set a release version first, or run the workflow by hand to publish a snapshot."
+              exit 1
+            fi
+            if [[ "$TAG_NAME" != "v$sdk_version" ]]; then
+              echo "::error::Tag '$TAG_NAME' does not match the SDK version 'v$sdk_version' (artracker-sdk/build.gradle.kts)."
+              exit 1
+            fi
+            echo "Releasing $sdk_version from tag $TAG_NAME"
           fi
-          echo "Releasing $sdk_version from tag $TAG_NAME"
 
       - name: Build and unit tests
         run: ./gradlew --stacktrace :artracker-sdk:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug
