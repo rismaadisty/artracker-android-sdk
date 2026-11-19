@@ -79,8 +79,19 @@ artracker-sdk/src/main/java/id/art/tracker/
 │   ├─ AppLifecycleObserver.kt  ProcessLifecycleOwner → foreground/background
 │   ├─ ActivityTracker.kt       ActivityLifecycleCallbacks → screen_view, window attach
 │   ├─ FragmentTracker.kt       FragmentLifecycleCallbacks (opsional, compileOnly)
-│   ├─ AppStartTracker.kt       Cold start → app_start (sekali per proses; DecorViewFirstFrame = frame pertama)
+│   ├─ AppStartTracker.kt       Cold start (sekali per proses) + fase + alasan drop; DecorViewFirstFrame = frame pertama
+│   ├─ WarmHotStartTracker.kt   Warm dan hot start; aktif hanya setelah di-arm oleh core
+│   ├─ StartPhases.kt           Fase kontigu (murni): coldPhases, warmPhases, hotPhases, splitProcessToInit
+│   ├─ StartInfoSource.kt       Timestamp ApplicationStartInfo (API 35+) di balik fun interface
+│   ├─ AppStartItem.kt          Atribut item perf `app_start`
 │   └─ ComposeNavTracker.kt     helper NavController → screen_view (opsional)
+├─ appstart/
+│   ├─ StartupProfiler.kt       Thread sampler `artracker-startup-sampler`: stack main thread tiap 10 ms sampai frame pertama
+│   ├─ IntervalPolicy.kt        Interval adaptif 10 → 20 → 40 ms bila biaya rata-rata sampel > 1 ms
+│   ├─ StackSampleBuffer.kt     Dedup frame/stack, batas 1000 sampel dan 128 frame (murni)
+│   ├─ ProfilePayload.kt        JSON profil + gzip
+│   ├─ ProfileStore.kt          File profil tertunda: ≤3 file, ≤3 hari, ≤5 percobaan
+│   └─ ProfileUploader.kt       Mengunggah file ke /api/v1/app-start/profiles (tidak pernah bersamaan)
 ├─ replay/
 │   ├─ ReplayController.kt      Start/stop, sampling, mengatur jadwal capture
 │   ├─ ReplayControllerFactory.kt  Merakit ScreenshotKit (Compose hanya bila ada)
@@ -147,7 +158,8 @@ artracker-sdk/src/main/java/id/art/tracker/
 | Proses foreground/background | `ProcessLifecycleOwner` (`lifecycle-process`) | `session`/`app_foreground`, `app_background`; memicu flush + jadwal WorkManager saat background; jeda replay |
 | Activity | `Application.ActivityLifecycleCallbacks` | `event`/`screen_view` `{screen, previous, type:"activity"}`; memberi tahu `ReplayController` bahwa root window berganti (→ frame berikutnya dipaksa terkirim) |
 | Fragment | `FragmentManager.FragmentLifecycleCallbacks` (recursive), didaftarkan di `onActivityCreated` bila activity adalah `FragmentActivity`. Dependensi `compileOnly` + cek kelas saat runtime | `screen_view` `{type:"fragment"}` |
-| Cold start | `AppStartTracker` (`Process.getStartUptimeMillis` → `OnDrawListener` frame pertama, lalu `postAtFrontOfQueue`) | `event` `app_start` `{type:"cold", duration_ms, first_screen}` |
+| Cold start | `AppStartTracker` (`Process.getStartUptimeMillis` → `OnDrawListener` frame pertama, lalu `postAtFrontOfQueue`) | `perf` `app_start` `{type:"cold", duration_ms, phases, first_screen, trampoline, profiled, …}` |
+| Warm / hot start | `WarmHotStartTracker` (di-arm oleh core: proses dimulai di background atau Activity pertama terlambat → warm; setiap kembali dari background → hot atau warm) | `perf` `app_start` `{type:"warm"|"hot", …}` |
 | Compose | Compose tidak punya lifecycle per layar. Disediakan `ARTracker.trackNavController(navController)` (listener `OnDestinationChangedListener`) **dan** `ARTracker.screen("Checkout")` manual | `screen_view` `{type:"compose"}` |
 
 Nama layar default: `activity.javaClass.simpleName`, bisa ditimpa lewat `@ARTrackerScreenName("…")` atau `config.screenNameResolver`.
@@ -439,7 +451,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | `identify()` | `event` | `$identify` | traits → attributes |
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
-| Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; sekali per proses, hanya bila proses dimulai untuk menampilkan Activity |
+| Start aplikasi | `perf` | `app_start` | `{v, platform, start_id, type:"cold"|"warm"|"hot", duration_ms, phases:[{name, ms}], first_screen, trampoline, profiled, build?, device}`; menggantikan `event` `app_start` yang lama (tidak lagi dikirim). Profil stack (opt-in) dikirim terpisah ke `POST /api/v1/app-start/profiles` |
 | Sesi | `session` | `session_start` / `session_end` | metadata perangkat (+ `build_id` bila ada) |
 | Replay | *(bukan item ingest)* | chunk `artracker-screen-v1` lewat Session Replay API | ≤5 MiB gzip per upload (chunk 2 MB) |
 | Crash JVM | `log` | `fatal`, name `crash` | dikirim pada launch berikutnya (+ `build_id` bila sudah terbaca) |

@@ -96,4 +96,16 @@ class PlaygroundSettingsTest {
         assertEquals(id.art.tracker.ReplayQuality.LOW, c.replay.quality)
         assertEquals(1.0, c.replay.framesPerSecond, 0.0)
     }
+
+    @Test
+    fun startupProfilingIsOnInDebugBuildsOnly_atAFullRate() {
+        val debug = PlaygroundSettings.DEFAULT.toConfig("http://localhost:1", key, debug = true).appStart
+        assertTrue(debug.enabled)
+        assertTrue(debug.profiling)
+        assertEquals(1.0, debug.profileSampleRate, 0.0)
+
+        val release = PlaygroundSettings.DEFAULT.toConfig("http://localhost:1", key, debug = false).appStart
+        assertTrue("measurement stays on", release.enabled)
+        assertFalse(release.profiling)
+    }
 }

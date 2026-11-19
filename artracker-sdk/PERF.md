@@ -299,7 +299,62 @@ on an API 30 emulator showed the same guard dropping 2 to 3 of 5 launches (first
 failing on the one guard made 1 s too tight, so `MAX_FIRST_CREATE_DELAY_MS` is now **10 s** (test
 `aSlowDeviceFirstActivityAfterInit_isStillACountedColdStart`). The foreground check at `init` still excludes pushes, services and
 WorkManager. Every silent drop now logs why (`app_start not reported: ...`, debug logging). `app_start` against a trusted launch
-time, and a rerun of the five launches on the physical device with the new threshold, stay **unverified**.
+time, and a rerun of the five launches on the physical device with the new threshold, stay **unverified**. (Profiling overhead on the device: see "App start profiling overhead".)
+
+## App start profiling overhead
+
+`AppStartConfig(profiling = true)` samples the main thread stack from `init` to the first frame (`StartupProfiler`). Targets:
+the mean cost of one sample <= 500 us, and the median `am start -W` `TotalTime` with profiling on within 5 % of the median
+with it off.
+
+**Device:** Samsung SM-S921B, Android 17 (API 37), charging at 77-92 %, 28 degrees C. **Build:** release variant of the sample
+app (`isMinifyEnabled = false`, signed with the debug key to install it), the SDK at this commit. Both runs have SDK debug
+logging on, to read the profiler's own log line, and the sample's default settings (replay and performance monitoring on,
+sink/offline endpoint profile, so nothing leaves the device); the two builds differ **only** in `profiling` (`false` / `true`,
+`profileSampleRate = 1.0`). One warm-up launch, then 10 cold starts each, `adb shell am force-stop id.art.tracker`, 3 s
+pause, `adb shell am start -W -n id.art.tracker/.MainActivity`.
+
+| Run | `TotalTime` per launch (ms) | Median | Min / max |
+| --- | --- | --- | --- |
+| Profiling off | 210, 206, 227, 204, 198, 205, 206, 193, 208, 223 | **206 ms** | 193 / 227 |
+| Profiling on | 200, 188, 193, 208, 211, 205, 199, 205, 200, 204 | **202 ms** | 188 / 211 |
+
+The median differs by -4 ms (-1.9 %): within the 5 % target, and below the run-to-run spread of either set (about 30 ms), so
+this measurement cannot tell the profiler from noise; it shows no cost large enough to see in 10 launches.
+
+The profiler's own log line (`startup profile: N samples, interval X ms, mean cost Y us`) for the 10 launches with profiling on:
+
+| Launch | Samples | Final interval | Mean cost per sample |
+| --- | --- | --- | --- |
+| 1 | 12 | 10 ms | 507 us |
+| 2 | 8 | 20 ms | 1563 us |
+| 3 | 12 | 10 ms | 411 us |
+| 4 | 13 | 10 ms | 203 us |
+| 5 | 8 | 20 ms | 1598 us |
+| 6 | 13 | 10 ms | 186 us |
+| 7 | 12 | 10 ms | 237 us |
+| 8 | 12 | 10 ms | 485 us |
+| 9 | 12 | 10 ms | 246 us |
+| 10 | 12 | 10 ms | 339 us |
+
+**The mean-cost target is not met on this device.** The mean of the ten launch means is **578 us** (target 500 us); the median
+launch is **375 us**, and 7 of 10 launches are under 500 us. Two launches (2 and 5) cost about 1.6 ms per sample, which is
+over the 1 ms back-off threshold, so the interval doubled to 20 ms for them (the adaptive interval doing what it is for). A
+launch takes only 8 to 13 samples, so one slow read weighs a lot in a launch mean; the cause of the two slow launches (a
+`Thread.getStackTrace` of the main thread while it was busy class-loading, a CPU frequency step) was not investigated. The
+`TotalTime` result above is the end-to-end figure and it stays inside the target. Not measured: a mid-range or low-end device,
+profiling with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the profile upload.
+
+To repeat it: build the sample twice (release, `signingConfig` set to the debug key, `AppStartConfig(profiling = false)` and
+`AppStartConfig(profiling = true, profileSampleRate = 1.0)`), then for each build
+
+```
+adb install -r app-release.apk
+adb shell am force-stop id.art.tracker && adb shell am start -W -n id.art.tracker/.MainActivity   # warm-up
+adb logcat -c
+for i in $(seq 10); do adb shell am force-stop id.art.tracker; sleep 3; adb shell am start -W -n id.art.tracker/.MainActivity | grep TotalTime; sleep 3; done
+adb logcat -d -s ARTracker:V | grep "startup profile"    # needs debug = true
+```
 
 ## Device context fields
 

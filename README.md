@@ -132,6 +132,7 @@ SDK uninitialised and every other call a no-op; each validation error is logged 
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
 | `sessionTimeoutMs` | `1_800_000` | Timeout (30 min) counted from the last **user input** (touch, key, return to foreground), minimum 1000. SDK activity (events, API calls, replay uploads, reading the session id) never extends a session, and a session only rotates on the next user input; it never lasts more than 24 h. The unit is milliseconds: `sessionTimeoutMs = 1800` is 1.8 s, not 30 min. iOS: the iOS SDK does not expose this yet (its timeout is a fixed 30 min); the planned `ARTrackerConfig.sessionTimeout` will be in **seconds** (default `1800`), clamped to a 1 s minimum instead of rejected. iOS sessions do not survive a process restart and emit no `session_start` / `session_end` items |
 | `performance` | `PerformanceConfig(enabled = false, sampleIntervalMs = 1_000, trackFrames = true)` | Session profiling, opt-in. `sampleIntervalMs` must be 500..10_000, otherwise the config is invalid. See "Performance monitoring" |
+| `appStart` | `AppStartConfig(enabled = true, profiling = false, profileSampleRate = 0.1, inAppPackages = emptySet())` | Cold, warm and hot start measurement (on by default) and the opt-in startup profiler. `profileSampleRate` must be in 0.0..1.0, otherwise the config is invalid. See "App start" |
 | `beforeSend` | `null` | `BeforeSend { item -> item }`: modify an item, or return `null` to drop it. Runs before the item is queued |
 
 ## API
@@ -412,6 +413,52 @@ while it kills cached processes).
 `perf.thermal_change {from, to}` reports thermal state changes. Opting out discards the buffered samples. To measure what profiling costs, see
 `artracker-sdk/PERF.md` section 4.
 
+## App start
+
+On by default (`AppStartConfig(enabled = true)`). The SDK measures every start of the app and sends one `perf` item named
+`app_start` per start, with a phase breakdown. `enabled = false` registers nothing: no tracker, no profiler, no callback.
+
+| `type` | What it is | Starts at | Phases (contiguous, in order) |
+| --- | --- | --- | --- |
+| `cold` | the process was created for this launch | the process start (`Process.getStartUptimeMillis()`) | `process_to_init`, `application_on_create`, `activity_create`, `first_draw` |
+| `warm` | the process was alive, the Activity was created again | the Activity's `onActivityPreCreated` (API 29+) or `onActivityCreated` | `activity_create`, `first_draw` |
+| `hot` | the process and the Activity were alive, the Activity was only started again | `onActivityStarted` | `activity_start`, `first_draw` |
+
+The phases sum to `duration_ms` exactly (the backend tolerates 5 ms) and a phase of 0 ms is kept. On Android 15 (API 35)
+and later `process_to_init` is replaced by `bind_application`, `content_providers` and `app_on_create_pre_init`, taken
+from `ApplicationStartInfo`; when the system gives no answer within 2 s the cold start keeps `process_to_init`. The item's
+timestamp is the wall-clock time the start began, not the time it was sent. Values that cannot be read (`build`, a
+`device` field) are omitted, never 0. `trampoline: true` means a first Activity (a splash) finished before the one that was
+measured drew; `activity_create` then begins at the splash. `first_screen` is the name of the Activity that drew first.
+
+A start is not reported when the number would mislead: the app goes to the background before the first frame, a warm or
+hot start takes more than 10 s, a cold start more than 60 s, or `init` ran after the first Activity was created (so no
+cold start; and no warm or hot start either until the app has been in the background once). A process that was started in
+the background (a broadcast, WorkManager, a push), or whose first Activity comes more than 10 s after `init`, has no cold
+start: its first Activity is reported as a **warm** start. Call `ARTracker.init` first in `Application.onCreate`: time
+spent before it still counts in the duration (`process_to_init`), but it has no stacks in a profile.
+
+### Startup profile
+
+Opt-in: `AppStartConfig(profiling = true, profileSampleRate = 0.1)`. Only cold starts are profiled, and whether this
+process is profiled is decided once, at `init` (`random < profileSampleRate`). A sampler thread named
+`artracker-startup-sampler` reads the main thread's stack every 10 ms (it backs off to 20, then 40 ms when a sample costs
+more than 1 ms on average) until the first frame, until the app goes to the background, or until 10 s after the process
+start, whichever is first. At most 1000 samples are kept, and at most 128 frames per stack (the frames nearest the root
+are dropped). A start that is not reported, or an SDK that is disabled (opt-out, or the 401 kill switch) while the app
+starts, discards its profile.
+
+The profile is a gzip JSON document of de-duplicated frames and stacks (class, method, line and file names only: no
+arguments, no values), written to `filesDir/artracker/appstart` and posted to `{endpoint}/api/v1/app-start/profiles`
+with the same key and headers as ingest. Serialising, compression, file I/O and the upload never run on the main thread
+or on the thread that feeds the ingest queue. At most 3 profiles wait on the device (the oldest is evicted), a file older
+than 3 days or one that failed 5 times is deleted, and opting out deletes them all. `profiled: true` on the item tells
+the dashboard a profile exists for `start_id`.
+
+`inAppPackages` lists package prefixes, besides the app's own package, that the dashboard treats as your code.
+Frames of a minified release build are obfuscated: upload `mapping.txt` (see "Upload `mapping.txt` automatically") or the
+profile cannot be read. What profiling costs is in `artracker-sdk/PERF.md`, section "App start profiling overhead".
+
 ## Crash, ANR and offline behaviour
 
 - **Crash**: an uncaught-exception handler is installed at `init` and always calls the previous handler (Crashlytics
@@ -459,7 +506,7 @@ while it kills cached processes).
 | `identify()` | `event` | `$identify` | the bounded traits become the attributes (no global properties); a repeated identical call is not sent; a different user rotates the session |
 | Activity/Fragment/Compose screen | `event` | `screen_view` | `{screen, previous, type}` |
 | Foreground/background | `event` | `app_foreground` / `app_background` | |
-| Cold start | `event` | `app_start` | `{type:"cold", duration_ms, first_screen}`; once per process, only when the process was started to show an Activity |
+| App start | `perf` | `app_start` | `{v, platform, start_id, type:"cold"\|"warm"\|"hot", duration_ms, phases:[{name, ms}], first_screen, trampoline, profiled, build?, device}`; see "App start". It replaces the former `event` named `app_start`, which is no longer sent |
 | Session | `session` | `session_start` / `session_end` | device metadata (+ `build_id` when the manifest sets one) |
 | Replay | *(not an ingest item)* | `artracker-screen-v1` screenshot chunk, via the Session Replay API | at most 5 MiB gzipped per upload (chunks 2 MB) |
 | JVM crash | `log` | `fatal`, name `crash` | sent on the next launch (+ `build_id` when known) |
@@ -560,14 +607,14 @@ Read these before shipping to production.
 - The ANR watchdog (API 24–29) sees a main thread blocked for 5 s or more, not the system's ANR dialog, and an app that
   recovers before 5 s is not reported. Its items are `error`, not `fatal`, because the process does not necessarily
   die. It is not a way to measure jank: it only fires on a hang of 5 s or more.
-- `app_start` measures the **cold start** only: from the process start to the first drawn frame of the first Activity.
-  Warm and hot starts are not measured. A process that was started in the background (a broadcast, WorkManager, a
-  push) and opened by the user later reports nothing (a first Activity created more than 10 s after `init` is not a
-  start; the gap is taken from `init`, so slow work done before `init` in `Application.onCreate` does not hide a genuine slow start). Nothing is
-  reported either when `init` runs after the first Activity was created, when the first Activity finished or paused
-  before drawing and the next one is created more than 2 s later, when the process was not in the foreground at
-  `init` (this also covers a launch with the screen off or under the keyguard), and when the duration is above 60 s.
-  It is always on and has no setting.
+- `app_start` reports cold, warm and hot starts (see "App start"). A cold start is reported only when the process was
+  started to show an Activity: nothing is reported when `init` runs after the first Activity was created, when the first
+  Activity finished or paused before drawing and the next one is created more than 2 s later, when the app goes to the
+  background before the first frame, or when the duration is above 60 s. A process that was started in the background
+  (a broadcast, WorkManager, a push) or whose first Activity is created more than 10 s after `init` (this also covers a
+  launch with the screen off or under the keyguard) reports that first Activity as a warm start. The gap is taken from
+  `init`, so slow work done before `init` in `Application.onCreate` does not hide a genuine slow start. It is on by default;
+  `AppStartConfig(enabled = false)` turns it off.
 - Global properties apply to items enqueued **after** the call, and a call before `init` is ignored. **Crash, ANR and
   native crash items never carry them**: a JVM crash is written when the process dies and sent by the next process, and
   ANR / native crash exits are reported by a later process, whose properties do not describe them. If you need the

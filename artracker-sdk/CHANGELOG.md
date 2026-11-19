@@ -7,6 +7,16 @@ versions follow semantic versioning.
 
 ### Added
 
+- **Warm and hot start measurement, with phases.** `app_start` now covers cold, warm and hot starts, each with a
+  contiguous phase breakdown (`process_to_init`, `application_on_create`, `activity_create`, `first_draw` for a cold
+  start; on API 35+ `process_to_init` is split into `bind_application`, `content_providers` and `app_on_create_pre_init`
+  from `ApplicationStartInfo`). A process started in the background, or whose first Activity comes more than 10 s after
+  `init`, reports that Activity as a warm start. New config `AppStartConfig(enabled = true, profiling = false,
+  profileSampleRate = 0.1, inAppPackages = emptySet())`; `enabled = false` registers nothing.
+- **Startup profiler (opt-in).** `AppStartConfig(profiling = true)` samples the main thread stack every 10 ms (adaptive,
+  up to 40 ms) during a sampled fraction of cold starts, until the first frame (at most 10 s), and uploads the profile to
+  `POST /api/v1/app-start/profiles`. At most 3 profiles wait on the device; opt-out deletes them. Readable in a release
+  build only with the uploaded `mapping.txt` (the Gradle plugin).
 - **Gradle plugin `id.art.tracker.symbols`** (module `artracker-gradle-plugin`, released with the SDK under the same
   version): after every minified Android build it uploads the R8/ProGuard `mapping.txt` to Artracker, one
   `uploadArtracker<Variant>Mapping` task per minified variant, so crashes in the dashboard are deobfuscated. It needs a
@@ -15,6 +25,13 @@ versions follow semantic versioning.
   automatically".
 - `scripts/measure-size.sh`: one reproducible size table (AAR and `classes.jar` bytes, dex method ids, release APK delta
   with and without the SDK). Current figures are in `artracker-sdk/PERF.md` section 4.
+
+### Changed
+
+- **`app_start` is now a `perf` item; the `event` of the same name is no longer sent.** Its attributes are
+  `{v, platform, start_id, type, duration_ms, phases, first_screen, trampoline, profiled, build?, device}` (see the README,
+  section "App start"). Dashboards and queries that read the `app_start` event must read the `perf` item instead.
+  The item's timestamp is now the time the start began, not the time it was sent.
 
 ## [1.0.3] - 2026-11-17
 
