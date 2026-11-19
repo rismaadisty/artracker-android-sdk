@@ -21,6 +21,32 @@ internal object NoStartInfo : StartInfoSource {
 }
 
 private const val START_INFO_TIMEOUT_MS = 2_000L
+
+/**
+ * The race between the platform's answer and the timeout: whichever comes first delivers, the other does nothing.
+ * Only a timeout removes the listener; after an answer the platform has already dropped it, and removing it from inside
+ * its dispatch loop would make `ActivityManager` skip the next listener (the host's own).
+ */
+internal class StartInfoCompletion(
+    private val removeListener: () -> Unit,
+    private val cancelTimeout: () -> Unit,
+    private val onResult: (StartupTimestamps?) -> Unit,
+) {
+    private val done = AtomicBoolean(false)
+
+    /** The platform answered (or registering failed, with null). */
+    fun answered(result: StartupTimestamps?) {
+        if (!done.compareAndSet(false, true)) return
+        cancelTimeout()
+        onResult(result)
+    }
+
+    fun timedOut() {
+        if (!done.compareAndSet(false, true)) return
+        removeListener()
+        onResult(null)
+    }
+}
 private const val NANOS_PER_MS = 1_000_000L
 
 /**
@@ -36,26 +62,23 @@ internal class ApplicationStartInfoSource(
     override fun request(onResult: (StartupTimestamps?) -> Unit) {
         val manager = runCatching { app.getSystemService(ActivityManager::class.java) }.getOrNull()
         if (manager == null) return onResult(null)
-        val done = AtomicBoolean(false)
         val listenerRef = AtomicReference<Consumer<ApplicationStartInfo>?>(null)
         val timeoutRef = AtomicReference<Runnable?>(null)
-
-        fun complete(result: StartupTimestamps?) {
-            if (!done.compareAndSet(false, true)) return
-            timeoutRef.get()?.let(mainHandler::removeCallbacks)
-            listenerRef.get()?.let { runCatching { manager.removeApplicationStartInfoCompletionListener(it) } }
-            onResult(result)
-        }
-
-        val timeout = Runnable { complete(null) }
-        val listener = Consumer<ApplicationStartInfo> { info -> complete(runCatching { timestampsOf(info) }.getOrNull()) }
+        val completion = StartInfoCompletion(
+            removeListener = { listenerRef.get()?.let { runCatching { manager.removeApplicationStartInfoCompletionListener(it) } } },
+            cancelTimeout = { timeoutRef.get()?.let(mainHandler::removeCallbacks) },
+            onResult = onResult,
+        )
+        val timeout = Runnable { completion.timedOut() }
+        val listener = Consumer<ApplicationStartInfo> { info -> completion.answered(runCatching { timestampsOf(info) }.getOrNull()) }
         timeoutRef.set(timeout)
         listenerRef.set(listener)
         try {
             mainHandler.postDelayed(timeout, START_INFO_TIMEOUT_MS)
-            manager.addApplicationStartInfoCompletionListener({ it.run() }, listener)
+            // Off the binder thread: the callback runs inside ActivityManager's dispatch, which holds its lock.
+            manager.addApplicationStartInfoCompletionListener({ mainHandler.post(it) }, listener)
         } catch (t: Throwable) {
-            complete(null)
+            completion.answered(null)
         }
     }
 
