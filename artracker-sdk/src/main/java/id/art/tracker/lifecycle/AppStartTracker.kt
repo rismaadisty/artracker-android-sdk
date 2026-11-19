@@ -57,10 +57,11 @@ internal class AppStartTracker(
         if (done) return@guard
         if (!heardFirstCallback) {
             heardFirstCallback = true
-            if (!startedInForeground) return@guard finish()
-            if (uptime() - initUptimeMs > MAX_FIRST_CREATE_DELAY_MS) return@guard finish()
+            if (!startedInForeground) return@guard drop("the process was not in the foreground at init")
+            val gap = uptime() - initUptimeMs
+            if (gap > MAX_FIRST_CREATE_DELAY_MS) return@guard drop("the first Activity came ${gap}ms after init (max $MAX_FIRST_CREATE_DELAY_MS)")
         } else if (uptime() - lastEventUptimeMs > MAX_NEXT_CREATE_DELAY_MS) {
-            return@guard finish() // too long after the last event: not the same launch
+            return@guard drop("the next Activity came more than $MAX_NEXT_CREATE_DELAY_MS ms after the last event") // not the same launch
         }
         cancelHook() // a newer Activity replaces a candidate that has not drawn yet
         candidate = WeakReference(activity)
@@ -92,7 +93,7 @@ internal class AppStartTracker(
 
     /** The app went to the background before the first frame: nothing is reported, now or later. */
     fun onAppBackground() = guard {
-        if (!done) finish()
+        if (!done) drop("the app went to the background before the first frame")
     }
 
     /** The first thing heard was not `onActivityCreated`: `init` came late. True when this call ended the work. */
@@ -101,7 +102,7 @@ internal class AppStartTracker(
         lastEventUptimeMs = uptime()
         if (heardFirstCallback) return false
         heardFirstCallback = true
-        finish()
+        drop("init ran after the first Activity was created")
         return true
     }
 
@@ -122,6 +123,8 @@ internal class AppStartTracker(
             } catch (t: Throwable) {
                 SdkLog.w("reporting the app start failed", t)
             }
+        } else {
+            SdkLog.d("app_start not reported: duration ${duration}ms is outside 0..$MAX_DURATION_MS")
         }
         finish()
     }
@@ -134,6 +137,12 @@ internal class AppStartTracker(
         } catch (t: Throwable) {
             SdkLog.w("cancelling the first frame wait failed", t)
         }
+    }
+
+    /** Gives up on purpose, and says why in the debug log: a missing `app_start` is otherwise impossible to diagnose. */
+    private fun drop(reason: String) {
+        SdkLog.d("app_start not reported: $reason")
+        finish()
     }
 
     private fun finish() {
