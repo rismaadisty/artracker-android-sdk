@@ -99,6 +99,7 @@ internal class AppStartTracker(
             return@guard drop(ColdStartDrop.NEXT_ACTIVITY_TOO_LATE, "the next Activity came more than $MAX_NEXT_CREATE_DELAY_MS ms after the last event")
         }
         cancelHook() // a newer Activity replaces a candidate that has not drawn yet
+        if (candidate != null) trampoline = true // replaced without a pause or destroy first (a router that finished in onCreate)
         candidate = WeakReference(activity)
         if (firstCreateUptimeMs == null) firstCreateUptimeMs = uptime()
         lastEventUptimeMs = uptime()

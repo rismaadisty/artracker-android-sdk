@@ -221,6 +221,149 @@ class WarmHotStartTrackerTest {
     }
 
     @Test
+    fun warmStartThroughARouter_createdWhilePending_takesOverAndKeepsTheAnchor() {
+        // Review: the router calls startActivity(Main) and finish() in onCreate; Main is created before the router's
+        // destroy arrives. The start was lost, and a later screen was reported as a 4 s warm start.
+        val t = tracker()
+        t.arm()
+        val router = activity()
+        val main = activity()
+        now = 1_000
+        t.onActivityCreated(router, null)
+        now = 1_100
+        t.onActivityCreated(main, null)
+        now = 1_150
+        t.onActivityDestroyed(router)
+        now = 1_200
+        t.onActivityResumed(main)
+        now = 1_300
+        hook.requests.single().second()
+
+        val s = starts.single()
+        assertEquals(StartType.WARM, s.type)
+        assertEquals(300L, s.durationMs)
+        assertEquals(1_000L, s.anchorUptimeMs)
+    }
+
+    @Test
+    fun aRouterThatFinishesIntoAnExistingActivity_doesNotReportALaterScreenAsAStart() {
+        val t = tracker()
+        t.arm()
+        val router = activity()
+        val existing = activity()
+        now = 1_000
+        t.onActivityCreated(router, null)
+        now = 1_010
+        t.onActivityDestroyed(router)
+        now = 1_100
+        t.onActivityResumed(existing) // not created: the start cannot be attributed
+        now = 5_000
+        val detail = activity()
+        t.onActivityCreated(detail, null)
+        t.onActivityResumed(detail)
+
+        assertTrue(hook.requests.isEmpty())
+        assertTrue(starts.isEmpty())
+    }
+
+    @Test
+    fun hotStartThatLaunchesAnotherScreenBeforeDrawing_cancelsTheWaitOnPause() {
+        val t = tracker()
+        t.arm()
+        val a = activity()
+        now = 2_000
+        t.onActivityStarted(a)
+        now = 2_010
+        t.onActivityResumed(a)
+        now = 2_020
+        t.onActivityPaused(a)
+
+        assertEquals(1, hook.cancels)
+    }
+
+    @Test
+    fun hotStartThatLaunchesALockScreen_isNotReportedWhenTheUserReturnsMuchLater() {
+        // Review: A is started and launches a PIN screen before drawing; 6 s later A resumes and draws. That is think
+        // time, not a start.
+        val t = tracker()
+        t.arm()
+        val a = activity()
+        now = 2_000
+        t.onActivityStarted(a)
+        now = 2_010
+        t.onActivityResumed(a)
+        now = 2_020
+        t.onActivityPaused(a)
+        now = 8_000
+        t.onActivityResumed(a)
+
+        assertEquals("only the first resume asked for a frame", 1, hook.requests.size)
+        assertTrue(starts.isEmpty())
+    }
+
+    @Test
+    fun hotStartThatLaunchesANewScreenBeforeDrawing_measuresTheNewScreenFromTheSameAnchor() {
+        val t = tracker()
+        t.arm()
+        val a = activity()
+        val pin = activity()
+        now = 2_000
+        t.onActivityStarted(a)
+        now = 2_010
+        t.onActivityResumed(a)
+        now = 2_020
+        t.onActivityPaused(a)
+        now = 2_100
+        t.onActivityCreated(pin, null)
+        now = 2_150
+        t.onActivityResumed(pin)
+        now = 2_200
+        hook.requests.last().second()
+
+        val s = starts.single()
+        assertEquals(StartType.HOT, s.type)
+        assertEquals(200L, s.durationMs)
+        assertEquals(2_000L, s.anchorUptimeMs)
+    }
+
+    @Test
+    fun aHandoffNotTakenWithinTheWindow_dropsTheStart() {
+        val t = tracker()
+        t.arm()
+        val first = activity()
+        val second = activity()
+        now = 1_000
+        t.onActivityCreated(first, null)
+        now = 1_010
+        t.onActivityDestroyed(first)
+        now = 1_010 + WarmHotStartTracker.MAX_HANDOFF_MS + 1
+        t.onActivityCreated(second, null)
+        t.onActivityResumed(second)
+
+        assertTrue(hook.requests.isEmpty())
+        assertTrue(starts.isEmpty())
+    }
+
+    @Test
+    fun aHandoffTakenExactlyAtTheWindow_isMeasured() {
+        val t = tracker()
+        t.arm()
+        val first = activity()
+        val second = activity()
+        now = 1_000
+        t.onActivityCreated(first, null)
+        now = 1_010
+        t.onActivityDestroyed(first)
+        now = 1_010 + WarmHotStartTracker.MAX_HANDOFF_MS
+        t.onActivityCreated(second, null)
+        t.onActivityResumed(second)
+        now = 3_100
+        hook.requests.single().second()
+
+        assertEquals(StartType.WARM, starts.single().type)
+    }
+
+    @Test
     fun aStart_throwingOnAppStart_doesNotEscape() {
         val t = WarmHotStartTracker({ now }, hook) { error("boom") }
         t.arm()

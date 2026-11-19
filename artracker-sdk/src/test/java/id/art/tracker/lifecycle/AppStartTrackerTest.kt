@@ -379,6 +379,27 @@ class AppStartTrackerTest {
     }
 
     @Test
+    fun aRouterReplacedByTheNextActivityBeforeItsDestroy_isStillATrampoline() {
+        // Review: the router finishes in onCreate and starts Main; Main is created before the router's destroy arrives,
+        // so the router is replaced, never paused or destroyed first. first_screen is Main, so the flag must be true.
+        now = 10_300
+        val t = tracker()
+        val router = Robolectric.buildActivity(SplashActivity::class.java).get()
+        val main = Robolectric.buildActivity(PlainActivity::class.java).get()
+        now = 11_800
+        t.onActivityCreated(router, null)
+        now = 11_900
+        t.onActivityCreated(main, null)
+        now = 12_000
+        t.onActivityResumed(main)
+        now = 12_200
+        hook.requests.single().onFrame()
+
+        assertTrue(starts.single().trampoline)
+        assertEquals("PlainActivity", starts.single().firstScreen)
+    }
+
+    @Test
     fun aReportedStart_callsOnDoneWithNull() {
         tracker()
         now = 10_100
