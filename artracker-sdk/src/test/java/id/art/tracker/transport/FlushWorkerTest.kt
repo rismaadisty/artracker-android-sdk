@@ -43,6 +43,8 @@ class FlushWorkerTest {
     fun setUp() {
         FlusherRegistry.current = null
         FlusherRegistry.replay = null
+        FlusherRegistry.profiles = null
+        profileDir().deleteRecursively()
         context.deleteDatabase("artracker.db")
         context.deleteDatabase(ReplayStore.DB_NAME)
     }
@@ -59,6 +61,8 @@ class FlushWorkerTest {
         ARTracker.resetForTest()
         FlusherRegistry.current = null
         FlusherRegistry.replay = null
+        FlusherRegistry.profiles = null
+        profileDir().deleteRecursively()
         runCatching { server.shutdown() }
         runCatching { backend.shutdown() }
         context.deleteDatabase(ReplayStore.DB_NAME)
@@ -251,6 +255,68 @@ class FlushWorkerTest {
         assertEquals(ListenableWorker.Result.success(), doWork())
 
         assertTrue(!context.getDatabasePath(ReplayStore.DB_NAME).exists())
+    }
+
+    // --- startup profiles ---
+
+    private fun profileDir() = java.io.File(context.filesDir, id.art.tracker.appstart.ProfileStore.DIR)
+
+    private fun profileStore() = id.art.tracker.appstart.ProfileStore(profileDir(), Clock.SYSTEM)
+
+    @Test
+    fun worker_withARegisteredProfileUploader_usesIt_andRetriesOnAFailure() {
+        profileStore().write("p1", byteArrayOf(1, 2, 3))
+        var sent = 0
+        FlusherRegistry.profiles = id.art.tracker.appstart.ProfileUploader(
+            profileStore(),
+            { sent++; SendResult.NetworkError(java.io.IOException("offline")) },
+            KillSwitch(InMemoryStore(), Clock.SYSTEM),
+        )
+
+        assertEquals(ListenableWorker.Result.retry(), doWork())
+        assertEquals(1, sent)
+    }
+
+    @Test
+    fun worker_inAFreshProcess_uploadsPendingProfilesToTheProfilesEndpoint() {
+        server.start()
+        server.enqueue(MockResponse().setResponseCode(202))
+        TransportConfigStore(SharedPrefsStore(context, TransportConfigStore.PREFS_NAME))
+            .save(server.url("/").toString().trimEnd('/'), "art_live_" + "k".repeat(32), "staging", "9.9")
+        profileStore().write("p1", byteArrayOf(1, 2, 3))
+
+        assertEquals(ListenableWorker.Result.success(), doWork())
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("/api/v1/app-start/profiles", request.path)
+        assertTrue(profileStore().pending().isEmpty())
+    }
+
+    @Test
+    fun worker_withoutProfileFiles_sendsNothingAndCreatesNoDirectory() {
+        server.start()
+        TransportConfigStore(SharedPrefsStore(context, TransportConfigStore.PREFS_NAME))
+            .save(server.url("/").toString().trimEnd('/'), "art_live_" + "k".repeat(32), "staging", "9.9")
+
+        assertEquals(ListenableWorker.Result.success(), doWork())
+
+        assertTrue(!profileDir().exists())
+        assertTrue(server.requestCount == 0 || server.takeRequest(100, TimeUnit.MILLISECONDS)?.path != "/api/v1/app-start/profiles")
+    }
+
+    @Test
+    fun liveCore_withoutARegisteredProfileUploader_leavesTheProfilesToTheCore() {
+        server.start()
+        profileStore().write("p1", byteArrayOf(1, 2, 3))
+        ARTracker.init(
+            context as android.app.Application,
+            ARTrackerConfig(endpoint = server.url("/").toString().trimEnd('/'), apiKey = "art_live_" + "k".repeat(32), environment = "staging"),
+        )
+        FlusherRegistry.profiles = null
+
+        doWork()
+
+        assertEquals(1, profileStore().pending().size)
     }
 
     private fun flusher(queue: ItemQueue, clock: Clock, send: () -> SendResult) = Flusher(

@@ -3,6 +3,8 @@ package id.art.tracker.transport
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import id.art.tracker.appstart.ProfileStore
+import id.art.tracker.appstart.ProfileUploader
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.Clock
 import id.art.tracker.core.KillSwitch
@@ -23,6 +25,10 @@ internal object FlusherRegistry {
     /** The live [ReplayFlusher]; set when the core first needs the replay queue, so absent if replay was never used. */
     @Volatile
     var replay: ReplayFlusher? = null
+
+    /** The live startup profile uploader; set by the core when profile files exist (or once one is written). */
+    @Volatile
+    var profiles: ProfileUploader? = null
 }
 
 /**
@@ -39,7 +45,8 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
                 val registered = FlusherRegistry.current
                 val ingest = if (registered != null) registered.flushAll() else config?.let { runStandalone(it) }
                 val replay = flushReplay(config)
-                result(ingest, replay)
+                val profiles = flushProfiles(config)
+                result(ingest, replay, profiles)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -122,7 +129,28 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Corouti
         }
     }
 
-    /** The worst outcome of the two queues decides: a failed or paused one is retried by WorkManager. */
+    /**
+     * Uploads pending startup profiles, after ingest. The live process's [ProfileUploader] is reused; in a fresh process one
+     * is built from the saved configuration, but only when the profile directory holds files. Null when there is nothing
+     * to upload.
+     */
+    private fun flushProfiles(config: TransportConfigStore.Saved?): FlushOutcome? {
+        FlusherRegistry.profiles?.let { return it.uploadAll() }
+        // A live core uploads its own profiles; a second uploader beside it would race on the same files.
+        if (ARTrackerCore.instanceOrNull() != null) return null
+        config ?: return null
+        val clock = Clock.SYSTEM
+        val store = ProfileStore(java.io.File(applicationContext.filesDir, ProfileStore.DIR), clock)
+        if (!store.hasFiles()) return null
+        val uploader = ProfileUploader(
+            store = store,
+            sender = IngestClient(config.endpoint, config.apiKey, path = IngestEndpoint.PROFILES_PATH),
+            killSwitch = KillSwitch(SharedPrefsStore(applicationContext, TransportConfigStore.PREFS_NAME), clock),
+        )
+        return uploader.uploadAll()
+    }
+
+    /** The worst outcome of the queues decides: a failed or paused one is retried by WorkManager. */
     private fun result(vararg outcomes: FlushOutcome?): Result =
         if (outcomes.any { it == FlushOutcome.FAILED || it == FlushOutcome.PAUSED }) Result.retry() else Result.success()
 }
