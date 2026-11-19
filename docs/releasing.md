@@ -12,7 +12,7 @@ updating).
 ```
 bump sdkVersion + CHANGELOG  ->  scripts/verify-publication.sh  ->  merge  ->  git tag vX.Y.Z  ->  git push origin vX.Y.Z
                                                                                         |
-                                       .github/workflows/publish.yml  (only trigger: a tag matching v*)
+                                       .github/workflows/publish.yml  (triggers: a tag matching v* = release; manual run = snapshot)
                                        verify:  tag == v<sdkVersion>, unit tests, local-Maven validation (+ consumer apps)
                                        publish: publishReleasePublicationToGitHubPackagesRepository   (needs verify)
                                                 + the symbols Gradle plugin (artracker-gradle-plugin), same version
@@ -30,8 +30,23 @@ bump sdkVersion + CHANGELOG  ->  scripts/verify-publication.sh  ->  merge  ->  g
   (a real Android fixture build, needs `ANDROID_HOME` and network, 15 to 25 minutes the first time) are run by hand before
   a release: `./gradlew -p artracker-gradle-plugin functionalTest`. To try the plugin without a release:
   `./gradlew -p artracker-gradle-plugin publishToMavenLocal -Dmaven.repo.local=<dir>` and resolve it from that directory.
-* GitHub Packages is immutable per version: publishing `1.0.0` twice fails with `409`. A bad release is fixed with a new
+* GitHub Packages is immutable per release version: publishing `1.0.0` twice fails with `409`. A bad release is fixed with a new
   patch version (`1.0.1`); do not delete and reuse a number.
+
+## Publishing a snapshot (development builds)
+
+While the SDK is in development, publish a `-SNAPSHOT` instead of cutting a release. No tag is involved.
+
+1. Keep `sdkVersion` in `artracker-sdk/build.gradle.kts` at `<next version>-SNAPSHOT` (currently `1.0.4-SNAPSHOT`).
+2. *Actions, Publish to GitHub Packages, Run workflow*, and pick the branch to build. The same `verify` gate runs
+   (tests, local-Maven validation, consumer apps), then the SDK and the symbols Gradle plugin are published.
+3. A snapshot can be published again and again: each run is stored as a new timestamped build under the same
+   `1.0.4-SNAPSHOT` version. Consumers use `id.art.tracker:artracker-android:1.0.4-SNAPSHOT` and, to pick up a newer build,
+   refresh dependencies (`./gradlew --refresh-dependencies`).
+4. The guard is two-way: a manual run refuses a version that is not `-SNAPSHOT`, and a `v*` tag refuses a `-SNAPSHOT`
+   version. Releases still go only through a tag (next section). `README.md` and `github-packages.md` keep naming the
+   last stable release (`1.0.3`); do not point consumers at a snapshot there.
+5. When the work is ready for a release, replace `-SNAPSHOT` with the final number (`1.0.4`) and follow *Cutting a release*.
 
 ## Validate locally first (no remote involved)
 
