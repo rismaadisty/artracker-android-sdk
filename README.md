@@ -12,7 +12,7 @@ Version `1.0.3`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 > | Sample app builds (`:app:assembleDebug`, R8-minified `:app:assembleRelease`) | **Verified** |
 > | Run on a device or emulator | **Partly.** Screenshot replay was run on **one physical device** (OPPO CPH2387, Android 14 / API 34) through instrumented tests (see "Tests"); Chucker delivery was checked on Android 14 too (see "Custom transport"). No emulator, no other device or API level (24-25 and the `View.draw` path included), no minified app |
 > | End to end against the backend | **NOT run.** Checklist: [`docs/e2e-manual-test.md`](docs/e2e-manual-test.md) |
-> | Performance | **Screenshot replay measured once** (5 min of scrolling, `STANDARD`, 2 fps, debug build): 16.91 MB uploaded against the 25 MB limit, and no jank increase measured; the jank metric is saturated on that debug build, see [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). `init` <= 2 ms and background CPU < 1 % are **NOT measured**. AAR size: 398621 bytes (release, not minified) |
+> | Performance | **Screenshot replay measured once** (5 min of scrolling, `STANDARD`, 2 fps, debug build): 16.91 MB uploaded against the 25 MB limit, and no jank increase measured; the jank metric is saturated on that debug build, see [`artracker-sdk/PERF.md`](artracker-sdk/PERF.md). `init` <= 2 ms and background CPU < 1 % are **NOT measured**. AAR size: 634428 bytes (release, not minified; measured 2026-11-19 with `scripts/measure-size.sh`, table in [`PERF.md`](artracker-sdk/PERF.md)) |
 > | Playback of replay chunks in the dashboard | **Not played.** Mask, scale and visual match were checked against `UiAutomation` screenshots on the device |
 > | Instrumented tests | Screenshot replay: **run on the device above** (`ScreenshotFlowTest`, `ScreenshotScreensTest`, `ScreenshotBudgetTest`) *before* wireframe mode and the remote replay config were removed; after that change `app/src/androidTest` compiles but was **NOT re-run** (the touch/replay-chunk helpers now read `artracker-screen-v1` chunks). Offline crash then relaunch on a device is **NOT written/run** |
 > | R8 with the consumer rules | Sample app minified build and a stand-alone R8 run without the optional libraries: **verified to succeed**. A minified app **executed** on a device, or a real AGP app without those libraries: **NOT run** (see "ProGuard / R8") |
@@ -562,8 +562,8 @@ Read these before shipping to production.
   die. It is not a way to measure jank: it only fires on a hang of 5 s or more.
 - `app_start` measures the **cold start** only: from the process start to the first drawn frame of the first Activity.
   Warm and hot starts are not measured. A process that was started in the background (a broadcast, WorkManager, a
-  push) and opened by the user later reports nothing (a first Activity created more than 1 s after `init` is not a
-  start; the gap is taken from `init`, so a slow `Application.onCreate` does not hide a genuine slow start). Nothing is
+  push) and opened by the user later reports nothing (a first Activity created more than 10 s after `init` is not a
+  start; the gap is taken from `init`, so slow work done before `init` in `Application.onCreate` does not hide a genuine slow start). Nothing is
   reported either when `init` runs after the first Activity was created, when the first Activity finished or paused
   before drawing and the next one is created more than 2 s later, when the process was not in the foreground at
   `init` (this also covers a launch with the screen off or under the keyguard), and when the duration is above 60 s.

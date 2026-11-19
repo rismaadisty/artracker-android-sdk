@@ -87,12 +87,26 @@ class AppStartTrackerTest {
     @Test
     fun firstCreateLongAfterProcessStartEmitsNothing() {
         val t = tracker()
-        now = processStart + 1_001
+        now = processStart + AppStartTracker.MAX_FIRST_CREATE_DELAY_MS + 1
         Robolectric.buildActivity(PlainActivity::class.java).setup()
 
         assertTrue(starts.isEmpty())
         assertTrue(t.isDone)
         assertTrue("the hook is never asked", hook.requests.isEmpty())
+    }
+
+    @Test
+    fun aSlowDeviceFirstActivityAfterInit_isStillACountedColdStart() {
+        // Measured on a physical device (debug, non-AOT) 1.45 s after init, and 1.1 to 6 s on a loaded emulator, in a
+        // process that was in the foreground at init: a user launch, not a push, so it must be reported.
+        val t = tracker()
+        now = processStart + 1_450
+        Robolectric.buildActivity(PlainActivity::class.java).setup()
+        now += 300
+        hook.requests.single().onFrame()
+
+        assertEquals(listOf(AppStart(1_750, "PlainActivity")), starts)
+        assertTrue(t.isDone)
     }
 
     @Test

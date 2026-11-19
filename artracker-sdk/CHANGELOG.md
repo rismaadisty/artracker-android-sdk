@@ -13,6 +13,8 @@ versions follow semantic versioning.
   secret key (`art_sec_...`), never breaks the build when Artracker is unreachable (unless `failOnUploadError = true`)
   and works with the configuration cache. The SDK itself is unchanged. See the README, section "Upload `mapping.txt`
   automatically".
+- `scripts/measure-size.sh`: one reproducible size table (AAR and `classes.jar` bytes, dex method ids, release APK delta
+  with and without the SDK). Current figures are in `artracker-sdk/PERF.md` section 4.
 
 ## [1.0.3] - 2026-11-17
 
@@ -243,8 +245,8 @@ on a device, emulator or against a backend**: see "Verification status" and the 
 ### Artifact
 
 - Coordinates `id.art.tracker:artracker-android:0.1.0`, `minSdk 24`.
-- Release AAR size, measured on 2026-11-06 with `./gradlew :artracker-sdk:assembleRelease`: **398621 bytes**
-  (about 389 KiB), not minified (`artracker-sdk/PERF.md` section 4 has the same figure).
+- Release AAR size at 0.1.0 (historical, measured on 2026-11-06 with `./gradlew :artracker-sdk:assembleRelease`):
+  not minified. The current size is in `artracker-sdk/PERF.md` section 4.
 - Runtime dependencies in the POM: `kotlin-stdlib`, `kotlinx-coroutines-android`, `androidx.work:work-runtime-ktx`,
   `androidx.lifecycle:lifecycle-process`, `androidx.core:core-ktx`. OkHttp, Compose, Fragment and Navigation are not
   dependencies.
