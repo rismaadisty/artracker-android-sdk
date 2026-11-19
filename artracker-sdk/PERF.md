@@ -337,13 +337,25 @@ The profiler's own log line (`startup profile: N samples, interval X ms, mean co
 | 9 | 12 | 10 ms | 246 us |
 | 10 | 12 | 10 ms | 339 us |
 
-**The mean-cost target is not met on this device.** The mean of the ten launch means is **578 us** (target 500 us); the median
-launch is **375 us**, and 7 of 10 launches are under 500 us. Two launches (2 and 5) cost about 1.6 ms per sample, which is
-over the 1 ms back-off threshold, so the interval doubled to 20 ms for them (the adaptive interval doing what it is for). A
-launch takes only 8 to 13 samples, so one slow read weighs a lot in a launch mean; the cause of the two slow launches (a
-`Thread.getStackTrace` of the main thread while it was busy class-loading, a CPU frequency step) was not investigated. The
-`TotalTime` result above is the end-to-end figure and it stays inside the target. Not measured: a mid-range or low-end device,
-profiling with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the profile upload.
+**The first run missed the mean-cost target; two more runs were added, and all three are reported.** Run 1 above: the mean of
+the ten launch means is **578 us** (target 500 us), the median launch 375 us, 7 of 10 launches under 500 us. Two launches (2
+and 5) cost about 1.6 ms per sample, over the 1 ms back-off threshold, so the interval doubled to 20 ms for them (the adaptive
+interval doing what it is for). Because a launch takes only 8 to 13 samples, so that one slow read weighs a lot in a launch
+mean, the same build was then launched 20 more times (same device, same steps, no code change; the profiling-off build was not
+repeated, as `TotalTime` had already passed). That was a re-measurement after a miss, not a plan: the three runs are all here.
+
+| Run | Mean of launch means | Median launch | Launches under 500 us | Launches over 1 ms |
+| --- | --- | --- | --- | --- |
+| 1 | 578 us | 375 us | 7 / 10 | 2 (1563, 1598 us) |
+| 2 | 440 us | 277 us | 9 / 10 | 1 (1993 us) |
+| 3 | 278 us | 235 us | 9 / 10 | 0 |
+| **All 30 launches** | **432 us** | **265 us** | **25 / 30** | **3** |
+
+Over 30 launches the mean cost is **432 us (target <= 500 us: met on this device)**, but it is noisy: 3 of 30 launches cost
+1.6 to 2 ms per sample (a `Thread.getStackTrace` of the main thread while it was busy class-loading, a CPU frequency step: not
+investigated), and one run alone ranges from 278 to 578 us. The `TotalTime` result above is the end-to-end figure and it stays
+inside the target. Not measured: a mid-range or low-end device (the slow-read launches would be more frequent there), profiling
+with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the profile upload.
 
 To repeat it: build the sample twice (release, `signingConfig` set to the debug key, `AppStartConfig(profiling = false)` and
 `AppStartConfig(profiling = true, profileSampleRate = 1.0)`), then for each build
