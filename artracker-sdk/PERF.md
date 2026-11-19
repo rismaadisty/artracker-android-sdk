@@ -337,25 +337,30 @@ The profiler's own log line (`startup profile: N samples, interval X ms, mean co
 | 9 | 12 | 10 ms | 246 us |
 | 10 | 12 | 10 ms | 339 us |
 
-**The first run missed the mean-cost target; two more runs were added, and all three are reported.** Run 1 above: the mean of
-the ten launch means is **578 us** (target 500 us), the median launch 375 us, 7 of 10 launches under 500 us. Two launches (2
-and 5) cost about 1.6 ms per sample, over the 1 ms back-off threshold, so the interval doubled to 20 ms for them (the adaptive
-interval doing what it is for). Because a launch takes only 8 to 13 samples, so that one slow read weighs a lot in a launch
-mean, the same build was then launched 20 more times (same device, same steps, no code change; the profiling-off build was not
-repeated, as `TotalTime` had already passed). That was a re-measurement after a miss, not a plan: the three runs are all here.
+**The mean-cost acceptance criterion was NOT met.** The plan's protocol is one run of 10 cold starts with the mean cost
+<= 500 us; run 1 above gave **578 us** (median launch 375 us, 7 of 10 launches under 500 us). Two launches (2 and 5) cost about
+1.6 ms per sample, over the 1 ms back-off threshold, so the interval doubled to 20 ms for them (the adaptive interval doing
+what it is for). The median `TotalTime` criterion (<= 5 %) was met: -1.9 %.
+
+Because a launch takes only 8 to 13 samples, one slow read weighs a lot in a launch mean, so the same build was launched 20
+more times (same device and steps, no code change). This was done **after** the miss and is supplementary evidence, not a
+replacement for the protocol; pooling runs is not what the plan defines as acceptance.
 
 | Run | Mean of launch means | Median launch | Launches under 500 us | Launches over 1 ms |
 | --- | --- | --- | --- | --- |
-| 1 | 578 us | 375 us | 7 / 10 | 2 (1563, 1598 us) |
-| 2 | 440 us | 277 us | 9 / 10 | 1 (1993 us) |
-| 3 | 278 us | 235 us | 9 / 10 | 0 |
-| **All 30 launches** | **432 us** | **265 us** | **25 / 30** | **3** |
+| 1 (the protocol) | 578 us | 375 us | 7 / 10 | 2 (1563, 1598 us) |
+| 2 (after the miss) | 440 us | 277 us | 9 / 10 | 1 (1993 us) |
+| 3 (after the miss) | 278 us | 235 us | 9 / 10 | 0 |
+| Runs 1-3 pooled (30 launches) | 432 us | 265 us | 25 / 30 | 3 |
 
-Over 30 launches the mean cost is **432 us (target <= 500 us: met on this device)**, but it is noisy: 3 of 30 launches cost
-1.6 to 2 ms per sample (a `Thread.getStackTrace` of the main thread while it was busy class-loading, a CPU frequency step: not
-investigated), and one run alone ranges from 278 to 578 us. The `TotalTime` result above is the end-to-end figure and it stays
-inside the target. Not measured: a mid-range or low-end device (the slow-read launches would be more frequent there), profiling
-with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the profile upload.
+The spread says the number is dominated by rare slow reads (3 of 30 launches cost 1.6 to 2 ms per sample: a
+`Thread.getStackTrace` of the main thread while it was busy class-loading, a CPU frequency step; not investigated), and one
+run alone ranges from 278 to 578 us. The sampler was **accepted with the criterion unmet**, as an explicit decision recorded
+in the final report of the work: profiling is opt-in (`profiling = false` by default), the typical launch is well under
+500 us, and the end-to-end `TotalTime` cost is not measurable in 10 launches. Whoever owns the target can change it,
+re-measure on a mid-range device, or tune the sampler. Not measured: a mid-range or low-end device (slow reads would be more
+frequent there), profiling with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the
+profile upload.
 
 To repeat it: build the sample twice (release, `signingConfig` set to the debug key, `AppStartConfig(profiling = false)` and
 `AppStartConfig(profiling = true, profileSampleRate = 1.0)`), then for each build
