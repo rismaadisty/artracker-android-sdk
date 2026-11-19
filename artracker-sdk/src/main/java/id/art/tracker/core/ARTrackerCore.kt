@@ -17,6 +17,13 @@ import id.art.tracker.TelemetryItem
 import id.art.tracker.telemetryItemFromJson
 import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.lifecycle.AppLifecycleObserver
+import id.art.tracker.appstart.LooperMainStack
+import id.art.tracker.appstart.ProfileDecision
+import id.art.tracker.appstart.ProfilePayload
+import id.art.tracker.appstart.ProfileResult
+import id.art.tracker.appstart.ProfileStore
+import id.art.tracker.appstart.ProfileUploader
+import id.art.tracker.appstart.StartupProfiler
 import id.art.tracker.lifecycle.AppStart
 import id.art.tracker.lifecycle.AppStartTracker
 import id.art.tracker.lifecycle.ColdStartDrop
@@ -65,11 +72,13 @@ import id.art.tracker.transport.EventStore
 import id.art.tracker.transport.Flusher
 import id.art.tracker.transport.FlusherRegistry
 import id.art.tracker.transport.IngestClient
+import id.art.tracker.transport.IngestEndpoint
 import id.art.tracker.transport.PayloadEncoder
 import id.art.tracker.transport.ReplayClient
 import id.art.tracker.transport.ReplayFlusher
 import id.art.tracker.transport.ReplayKicker
 import id.art.tracker.transport.ReplayStore
+import id.art.tracker.transport.Sender
 import id.art.tracker.transport.TransportConfigStore
 import id.art.tracker.transport.WorkManagerScheduler
 import java.io.File
@@ -118,6 +127,12 @@ internal class ARTrackerCore(
     private val warmHotFactory: ((onAppStart: (AppStart) -> Unit) -> WarmHotStartTracker?)? = null,
     /** Where API 35+ start timestamps come from; null = `ApplicationStartInfo` on API 35+, nothing below. */
     private val startInfoSource: StartInfoSource? = null,
+    /** Builds the startup profiler for a process started at the given uptime (tests inject fakes); null = the real one. */
+    private val profilerFactory: ((processStartUptimeMs: Long) -> StartupProfiler)? = null,
+    /** Whether this process is profiled is `random() < appStart.profileSampleRate`; tests inject a fixed value. */
+    private val profileRandom: () -> Double = Math::random,
+    /** Uploads startup profiles (tests inject one); null = [IngestClient] posting to `/api/v1/app-start/profiles`. */
+    private val profileSender: Sender? = null,
     /**
      * Builds the ANR watchdog from the callback the core gives it (tests inject one with a fake clock and no real
      * thread); null = the real one, which exists only on API 24-29 (from API 30 `ApplicationExitInfo` reports ANRs).
@@ -414,6 +429,7 @@ internal class ARTrackerCore(
         // A 401 stops replay at once (it would otherwise notice at its next flush tick) and schedules the way back.
         killSwitch.onTrip = { until ->
             runCatching { replay?.onDisabledChanged() }
+            discardProfiler() // a profile of a start the SDK may no longer report
             scheduleResume(until)
         }
         scope.launch { leftoverItems = maintainQueueAndSaveTransportConfig() }
@@ -452,6 +468,7 @@ internal class ARTrackerCore(
             // Items left by a previous run (including a crash) are sent right away; a fresh queue is not flushed.
             if (leftoverItems) pipeline.flushNow()
         }
+        startProfiler() // before the tracker: it samples from the very beginning of init
         startAppStartTracker() // before the Activity tracker: it must hear the very first onActivityCreated
         app.registerActivityLifecycleCallbacks(activityTracker)
         // Before the process observer: the foreground it replays then finds the controller in place.
@@ -525,6 +542,7 @@ internal class ARTrackerCore(
         runCatching {
             val onDone = { drop: ColdStartDrop? ->
                 appStart?.let { runCatching { app.unregisterActivityLifecycleCallbacks(it) } }
+                if (drop != null) discardProfiler() // a start that is not reported keeps no profile
                 // A process that was not started for the user (or whose first Activity came much later) has no cold
                 // start: its first Activity is a warm start. The cold tracker is registered first, so this arrives
                 // inside the same onActivityCreated dispatch, before the warm/hot tracker's own callback.
@@ -576,32 +594,133 @@ internal class ARTrackerCore(
 
     /**
      * A cold start first asks the platform for its own timestamps (API 35+, off the main thread), splits
-     * `process_to_init` with them when it has them, and emits from the answer; warm and hot starts emit at once.
+     * `process_to_init` with them when it has them, and emits from the answer; warm and hot starts emit at once. The
+     * profile of a cold start (if it is profiled) is taken from the sampler here and stored after the item is emitted.
      */
     private fun reportAppStart(start: AppStart) {
-        if (isDisabled()) return
-        if (start.type != StartType.COLD) return emitAppStart(start)
+        if (isDisabled()) {
+            if (start.type == StartType.COLD) discardProfiler()
+            return
+        }
+        val startId = UuidV7.generate(clock.nowMs())
+        if (start.type != StartType.COLD) return emitAppStart(start, startId, profiled = false)
+        val profile = takeProfile()
         startInfo.request { timestamps ->
             runCatching {
-                emitAppStart(if (timestamps == null) start else start.copy(phases = splitProcessToInit(start.phases, timestamps)))
+                val phased = if (timestamps == null) start else start.copy(phases = splitProcessToInit(start.phases, timestamps))
+                emitAppStart(phased, startId, profiled = profile != null)
+                if (profile != null && !isDisabled()) storeProfile(startId, profile)
             }.onFailure { SdkLog.w("emitting the app start failed", it) }
         }
     }
 
     /** The item is stamped with the wall-clock time of the start anchor, not with the time it is emitted. */
-    private fun emitAppStart(start: AppStart) {
+    private fun emitAppStart(start: AppStart, startId: String, profiled: Boolean) {
         if (isDisabled()) return
         val nowMs = clock.nowMs()
         val attrs = appStartAttributes(
             start = start,
-            startId = UuidV7.generate(nowMs),
-            profiled = false,
+            startId = startId,
+            profiled = profiled,
             build = device.appBuild.takeIf { it > 0 }?.toString(),
             device = appStartDevice,
         )
         val anchorWallMs = nowMs - (SystemClock.uptimeMillis() - start.anchorUptimeMs)
         emit(items.perf(attrs, name = "app_start").copy(timestampMs = anchorWallMs))
     }
+
+    // region startup profile
+
+    @Volatile
+    private var profiler: StartupProfiler? = null
+
+    /** Decided once per process, here: `appStart.enabled && profiling && random < profileSampleRate`. */
+    private fun startProfiler() {
+        if (isDisabled() || !ProfileDecision.shouldProfile(config.appStart, profileRandom)) return
+        runCatching {
+            val processStart = Process.getStartUptimeMillis()
+            val p = profilerFactory?.invoke(processStart)
+                ?: StartupProfiler(LooperMainStack, SystemClock::uptimeMillis, System::nanoTime, processStart)
+            profiler = p
+            p.start()
+        }.onFailure { SdkLog.w("startup profiling unavailable", it) }
+    }
+
+    /** Stops the sampler and throws its samples away; safe to call at any time, any number of times. */
+    private fun discardProfiler() {
+        val p = profiler ?: return
+        profiler = null
+        runCatching { p.discard() }
+    }
+
+    /** Stops the sampler and hands over its profile (null when it sampled nothing). The core no longer owns it. */
+    private fun takeProfile(): ProfileResult? {
+        val p = profiler ?: return null
+        profiler = null
+        return runCatching { p.stop() }.onFailure { SdkLog.w("stopping the startup sampler failed", it) }.getOrNull()
+    }
+
+    private val profileStore: ProfileStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        ProfileStore(java.io.File(app.filesDir, ProfileStore.DIR), clock)
+    }
+    private val profileUploaderLazy = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        ProfileUploader(
+            profileStore,
+            profileSender ?: IngestClient(config.endpoint, config.apiKey, path = IngestEndpoint.PROFILES_PATH),
+            killSwitch,
+        ).also { FlusherRegistry.profiles = it }
+    }
+    private val profileUploader: ProfileUploader by profileUploaderLazy
+
+    /** Last launched profile housekeeping, awaited by [awaitIdle]; each one waits for the one before it. */
+    @Volatile
+    private var profileJob: Job? = null
+
+    /**
+     * Serialises, compresses, stores and uploads a profile. On [Dispatchers.IO], not on [scope]: serialising and the HTTP
+     * upload must neither run on the main thread nor hold up the single thread that feeds the ingest queue.
+     */
+    private fun storeProfile(startId: String, profile: ProfileResult) {
+        launchProfileWork {
+            if (isDisabled()) return@launchProfileWork
+            SdkLog.d(
+                "startup profile: ${profile.buffer.sampleCount} samples, interval ${profile.intervalMs} ms, " +
+                    "mean cost ${profile.meanCostMicros} us",
+            )
+            val json = ProfilePayload.json(
+                startId = startId,
+                intervalMs = profile.intervalMs,
+                appPackages = (listOf(app.packageName) + config.appStart.inAppPackages).distinct(),
+                buffer = profile.buffer,
+                appVersion = device.appVersion,
+                build = device.appBuild.takeIf { it > 0 }?.toString(),
+                environment = config.environment,
+            )
+            if (profileStore.write(startId, ProfilePayload.gzip(json))) profileUploader.uploadAll()
+        }
+    }
+
+    /** Uploads profiles left by an earlier launch (offline, a failed attempt); nothing happens when there are none. */
+    private fun uploadPendingProfiles() {
+        launchProfileWork {
+            if (!isDisabled() && profileStore.hasFiles()) profileUploader.uploadAll()
+        }
+    }
+
+    /** Opting out discards what was recorded earlier: a stored profile must not be sent after opting back in. */
+    private fun clearProfiles() {
+        launchProfileWork { profileStore.clear() }
+    }
+
+    private fun launchProfileWork(block: () -> Unit) {
+        val previous = profileJob
+        profileJob = scope.launch(Dispatchers.IO) {
+            runCatching { previous?.join() }
+            runCatching(block).onFailure { SdkLog.w("startup profile work failed", it) }
+        }
+    }
+
+    // endregion
 
     /** Creates the monitor and registers the memory callbacks; nothing else (no thread, no loop) until foreground. */
     private fun startPerformance() {
@@ -775,6 +894,8 @@ internal class ARTrackerCore(
         // Only when replay data exists: touching the lazy store would create the database. The flusher is created too
         // (it registers itself in FlusherRegistry), so the background worker reuses it instead of building a second one.
         if (replayDatabaseExists()) runCatching { replayFlusher }.onFailure { SdkLog.w("opening replay store failed", it) }
+        // Same for startup profiles: the worker reuses the live uploader (and its lock) instead of building a second one.
+        runCatching { if (profileStore.hasFiles()) profileUploader }.onFailure { SdkLog.w("opening the profile store failed", it) }
         runCatching {
             TransportConfigStore(transportPrefs).save(
                 endpoint = config.endpoint,
@@ -975,6 +1096,8 @@ internal class ARTrackerCore(
             stopPerfLoop()
             runCatching { perf?.discard() }
             runCatching { perf?.onBackground() } // stops the frame source; its flush finds nothing
+            discardProfiler()
+            clearProfiles()
             clearReplayBatches()
         } else if (foreground) {
             pipeline.startTimer()
@@ -1037,6 +1160,7 @@ internal class ARTrackerCore(
     internal fun onBackground() {
         foreground = false
         runCatching { appStart?.onAppBackground() } // no app_start for a start that never reached its first frame
+        discardProfiler() // and no profile for it
         // The next time the user comes back is a hot start (or a warm one, if the OS killed the Activity meanwhile).
         runCatching { warmHot?.let { it.onAppBackground(); it.arm() } }
         // Stops capture, unwraps windows and flushes the open replay chunk: nothing replay-related runs in background.
@@ -1054,6 +1178,7 @@ internal class ARTrackerCore(
             scope.launch { scheduler.scheduleFlush() }
         }
         session.onBackground()
+        if (active) uploadPendingProfiles()
     }
 
     // endregion
@@ -1078,6 +1203,7 @@ internal class ARTrackerCore(
         persistJob?.join()
         backgroundInitJob?.join()
         replayJob?.join()
+        profileJob?.join()
         pipeline.awaitIdle()
     }
 
@@ -1089,6 +1215,7 @@ internal class ARTrackerCore(
         runCatching { watchdog?.stop() }
         runCatching { appStart?.let(app::unregisterActivityLifecycleCallbacks) }
         runCatching { warmHot?.let(app::unregisterActivityLifecycleCallbacks) }
+        discardProfiler()
         runCatching { app.unregisterActivityLifecycleCallbacks(activityTracker) }
         runCatching { activityTracker.detachAll() }
         runCatching { navTracker.clear() }
@@ -1102,6 +1229,7 @@ internal class ARTrackerCore(
         scope.cancel()
         if (FlusherRegistry.current === flusher) FlusherRegistry.current = null
         if (replayFlusherLazy.isInitialized() && FlusherRegistry.replay === replayFlusherLazy.value) FlusherRegistry.replay = null
+        if (profileUploaderLazy.isInitialized() && FlusherRegistry.profiles === profileUploaderLazy.value) FlusherRegistry.profiles = null
         if (replayStoreLazy.isInitialized()) replayStoreLazy.value.close()
         queue.close()
     }

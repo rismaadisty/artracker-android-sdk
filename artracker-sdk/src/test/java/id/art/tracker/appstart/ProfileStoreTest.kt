@@ -144,6 +144,21 @@ class ProfileStoreTest {
     }
 
     @Test
+    fun clear_deletesProfilesAndTempFiles_butNotOtherFiles() {
+        val store = store()
+        store.write("a", bytes)
+        store.write("b", bytes)
+        val tmpFile = File(dir, "x.tmp").also { it.writeBytes(byteArrayOf(1)) }
+        val other = File(dir, "notes.txt").also { it.writeText("x") }
+
+        store.clear()
+
+        assertTrue(store.pending().isEmpty())
+        assertFalse(tmpFile.exists())
+        assertTrue(other.exists())
+    }
+
+    @Test
     fun hasFiles_reflectsTheDirectory() {
         val store = store()
         assertFalse(store.hasFiles())

@@ -84,6 +84,12 @@ internal class ProfileStore(private val dir: File, private val clock: Clock) {
         if (p.file.renameTo(renamed)) renamed.setLastModified(modified)
     }
 
+    /** Deletes every profile file and temp file (opt-out: nothing recorded earlier may be sent later). */
+    @Synchronized
+    fun clear() {
+        dir.listFiles()?.filter { NAME.matches(it.name) || it.name.endsWith(TMP) }?.forEach { it.delete() }
+    }
+
     /** True when the directory holds any profile file (cheap: no deletion, no sorting). */
     fun hasFiles(): Boolean = dir.listFiles()?.any { NAME.matches(it.name) } == true
 
