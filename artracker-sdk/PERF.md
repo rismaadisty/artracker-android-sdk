@@ -355,8 +355,8 @@ replacement for the protocol; pooling runs is not what the plan defines as accep
 
 The spread says the number is dominated by rare slow reads (3 of 30 launches cost 1.6 to 2 ms per sample: a
 `Thread.getStackTrace` of the main thread while it was busy class-loading, a CPU frequency step; not investigated), and one
-run alone ranges from 278 to 578 us. The sampler was **accepted with the criterion unmet**, as an explicit decision recorded
-in the final report of the work: profiling is opt-in (`profiling = false` by default), the typical launch is well under
+run alone ranges from 278 to 578 us. The sampler was **accepted with the criterion unmet**: the repository owner was asked
+and chose "accept as is" (a waiver of the plan's criterion, 2026-11-19; the plan itself was not changed). Reasons: profiling is opt-in (`profiling = false` by default), the typical launch is well under
 500 us, and the end-to-end `TotalTime` cost is not measurable in 10 launches. Whoever owns the target can change it,
 re-measure on a mid-range device, or tune the sampler. Not measured: a mid-range or low-end device (slow reads would be more
 frequent there), profiling with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the
