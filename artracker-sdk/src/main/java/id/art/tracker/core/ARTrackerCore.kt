@@ -19,6 +19,7 @@ import id.art.tracker.lifecycle.ActivityTracker
 import id.art.tracker.lifecycle.AppLifecycleObserver
 import id.art.tracker.lifecycle.AppStart
 import id.art.tracker.lifecycle.AppStartTracker
+import id.art.tracker.lifecycle.ColdStartDrop
 import id.art.tracker.lifecycle.DecorViewFirstFrame
 import id.art.tracker.lifecycle.NavTracker
 import id.art.tracker.lifecycle.ScreenTracker
@@ -104,7 +105,7 @@ internal class ARTrackerCore(
      * Builds the cold start tracker from the two callbacks the core gives it (tests inject one with a fake first-frame
      * hook and clock); null = the real one, measured from the process start to the first drawn frame.
      */
-    private val appStartFactory: ((onAppStart: (AppStart) -> Unit, onDone: () -> Unit) -> AppStartTracker?)? = null,
+    private val appStartFactory: ((onAppStart: (AppStart) -> Unit, onDone: (ColdStartDrop?) -> Unit) -> AppStartTracker?)? = null,
     /**
      * Builds the ANR watchdog from the callback the core gives it (tests inject one with a fake clock and no real
      * thread); null = the real one, which exists only on API 24-29 (from API 30 `ApplicationExitInfo` reports ANRs).
@@ -499,7 +500,7 @@ internal class ARTrackerCore(
     private fun startAppStartTracker() {
         if (isDisabled()) return
         runCatching {
-            val onDone = { appStart?.let { runCatching { app.unregisterActivityLifecycleCallbacks(it) } }; Unit }
+            val onDone = { _: ColdStartDrop? -> appStart?.let { runCatching { app.unregisterActivityLifecycleCallbacks(it) } }; Unit }
             val tracker = (appStartFactory ?: ::createAppStartTracker)(::reportAppStart, onDone) ?: return@runCatching
             appStart = tracker
             app.registerActivityLifecycleCallbacks(tracker)
@@ -510,7 +511,7 @@ internal class ARTrackerCore(
      * The real tracker. "In the foreground at init" is read once from the process importance (a binder call, no disk
      * I/O): a process started by a broadcast, a service or WorkManager is not, and reports no `app_start`.
      */
-    private fun createAppStartTracker(onAppStart: (AppStart) -> Unit, onDone: () -> Unit): AppStartTracker {
+    private fun createAppStartTracker(onAppStart: (AppStart) -> Unit, onDone: (ColdStartDrop?) -> Unit): AppStartTracker {
         val foregroundAtInit = runCatching {
             val info = ActivityManager.RunningAppProcessInfo()
             ActivityManager.getMyMemoryState(info)

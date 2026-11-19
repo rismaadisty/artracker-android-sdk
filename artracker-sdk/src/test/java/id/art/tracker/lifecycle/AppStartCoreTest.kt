@@ -70,7 +70,7 @@ class AppStartCoreTest {
 
     /** A core whose tracker uses the fake hook and the test clock; null factory = the real one. */
     private fun startCore(fake: Boolean = true): ARTrackerCore {
-        val factory: ((( AppStart) -> Unit, () -> Unit) -> AppStartTracker?)? = if (fake) {
+        val factory: (((AppStart) -> Unit, (ColdStartDrop?) -> Unit) -> AppStartTracker?)? = if (fake) {
             { onAppStart, onDone -> AppStartTracker(10_000L, true, { now }, hook, onAppStart, onDone) }
         } else {
             null

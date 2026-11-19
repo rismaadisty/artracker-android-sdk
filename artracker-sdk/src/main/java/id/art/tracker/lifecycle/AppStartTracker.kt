@@ -6,8 +6,29 @@ import android.os.Bundle
 import id.art.tracker.core.SdkLog
 import java.lang.ref.WeakReference
 
-/** A measured cold start: [durationMs] from the process start to the first drawn frame of [firstScreen]. */
-internal data class AppStart(val durationMs: Long, val firstScreen: String)
+/**
+ * A measured start: [durationMs] from its anchor to the first drawn frame of [firstScreen]. [phases] are contiguous and
+ * sum to [durationMs]. [trampoline] is true when a first Activity was given up (a splash) before [firstScreen] drew.
+ * [anchorUptimeMs] is the `SystemClock.uptimeMillis` of the anchor (the process start for a cold start).
+ */
+internal data class AppStart(
+    val type: StartType,
+    val durationMs: Long,
+    val firstScreen: String,
+    val phases: List<Phase>,
+    val trampoline: Boolean,
+    val anchorUptimeMs: Long,
+)
+
+/** Why a cold start was not reported. */
+internal enum class ColdStartDrop {
+    NOT_FOREGROUND_AT_INIT,
+    LATE_FIRST_ACTIVITY,
+    INIT_AFTER_FIRST_ACTIVITY,
+    NEXT_ACTIVITY_TOO_LATE,
+    BACKGROUND_BEFORE_FRAME,
+    OUT_OF_RANGE,
+}
 
 /** Calls back once the first frame of an Activity is drawn. `await` returns a function that cancels the wait. */
 internal fun interface FirstFrameHook {
@@ -18,7 +39,8 @@ internal fun interface FirstFrameHook {
 /**
  * One-shot measurement of the cold start: from `Process.getStartUptimeMillis()` to the first frame of the first
  * Activity that gets drawn. Registered as `ActivityLifecycleCallbacks` by `ARTrackerCore.start()`; it releases itself
- * ([onDone]) as soon as it has reported or decided not to, so it reports at most once per process.
+ * ([onDone], with the [ColdStartDrop] reason, or null when it reported) as soon as it has reported or decided not to,
+ * so it reports at most once per process.
  *
  * It reports nothing, on purpose, when the number would mislead:
  * - the first lifecycle callback it hears is not `onActivityCreated`: `init` ran after the first Activity was created;
@@ -41,7 +63,7 @@ internal class AppStartTracker(
     private val uptime: () -> Long,
     private val firstFrame: FirstFrameHook,
     private val onAppStart: (AppStart) -> Unit,
-    private val onDone: () -> Unit,
+    private val onDone: (drop: ColdStartDrop?) -> Unit,
 ) : Application.ActivityLifecycleCallbacks {
     /** The clock at creation, which is `init`: the first Activity must follow it closely. */
     private val initUptimeMs = uptime()
@@ -49,22 +71,36 @@ internal class AppStartTracker(
     private var done = false
     private var heardFirstCallback = false
     private var candidate: WeakReference<Activity>? = null
+
+    /** When the first Activity of the process began to be created (the first one, even if it is given up). */
+    private var firstCreateUptimeMs: Long? = null
+    private var resumedUptimeMs: Long? = null
+    private var trampoline = false
     private var cancelWait: (() -> Unit)? = null
 
     val isDone: Boolean get() = done
+
+    /** API 29+: the earliest sign of the first Activity, so `application_on_create` ends where the Activity begins. */
+    override fun onActivityPreCreated(activity: Activity, savedInstanceState: Bundle?) = guard {
+        if (!done && firstCreateUptimeMs == null) firstCreateUptimeMs = uptime()
+    }
 
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = guard {
         if (done) return@guard
         if (!heardFirstCallback) {
             heardFirstCallback = true
-            if (!startedInForeground) return@guard drop("the process was not in the foreground at init")
+            if (!startedInForeground) return@guard drop(ColdStartDrop.NOT_FOREGROUND_AT_INIT, "the process was not in the foreground at init")
             val gap = uptime() - initUptimeMs
-            if (gap > MAX_FIRST_CREATE_DELAY_MS) return@guard drop("the first Activity came ${gap}ms after init (max $MAX_FIRST_CREATE_DELAY_MS)")
+            if (gap > MAX_FIRST_CREATE_DELAY_MS) {
+                return@guard drop(ColdStartDrop.LATE_FIRST_ACTIVITY, "the first Activity came ${gap}ms after init (max $MAX_FIRST_CREATE_DELAY_MS)")
+            }
         } else if (uptime() - lastEventUptimeMs > MAX_NEXT_CREATE_DELAY_MS) {
-            return@guard drop("the next Activity came more than $MAX_NEXT_CREATE_DELAY_MS ms after the last event") // not the same launch
+            // not the same launch
+            return@guard drop(ColdStartDrop.NEXT_ACTIVITY_TOO_LATE, "the next Activity came more than $MAX_NEXT_CREATE_DELAY_MS ms after the last event")
         }
         cancelHook() // a newer Activity replaces a candidate that has not drawn yet
         candidate = WeakReference(activity)
+        if (firstCreateUptimeMs == null) firstCreateUptimeMs = uptime()
         lastEventUptimeMs = uptime()
     }
 
@@ -72,6 +108,7 @@ internal class AppStartTracker(
         if (skipIfNotTheFirstCallback()) return@guard
         if (candidate?.get() !== activity) return@guard
         cancelHook()
+        resumedUptimeMs = uptime()
         cancelWait = firstFrame.await(activity) { onFrame(activity) }
     }
 
@@ -93,7 +130,7 @@ internal class AppStartTracker(
 
     /** The app went to the background before the first frame: nothing is reported, now or later. */
     fun onAppBackground() = guard {
-        if (!done) drop("the app went to the background before the first frame")
+        if (!done) drop(ColdStartDrop.BACKGROUND_BEFORE_FRAME, "the app went to the background before the first frame")
     }
 
     /** The first thing heard was not `onActivityCreated`: `init` came late. True when this call ended the work. */
@@ -102,7 +139,7 @@ internal class AppStartTracker(
         lastEventUptimeMs = uptime()
         if (heardFirstCallback) return false
         heardFirstCallback = true
-        drop("init ran after the first Activity was created")
+        drop(ColdStartDrop.INIT_AFTER_FIRST_ACTIVITY, "init ran after the first Activity was created")
         return true
     }
 
@@ -110,23 +147,32 @@ internal class AppStartTracker(
         if (done || candidate?.get() !== activity) return
         cancelHook()
         candidate = null // a splash or a rotation: wait for the next Activity that is created
+        trampoline = true
     }
 
     private fun onFrame(activity: Activity) = guard {
         // A callback of a candidate that was given up, or of a tracker that is done, is stale.
         if (done || candidate?.get() !== activity) return@guard
         cancelWait = null // it fired: nothing left to cancel
-        val duration = uptime() - processStartUptimeMs
+        val frameMs = uptime()
+        val duration = frameMs - processStartUptimeMs
         if (duration in 0..MAX_DURATION_MS) {
             try {
-                onAppStart(AppStart(duration, screenNameOf(activity.javaClass)))
+                val phases = coldPhases(
+                    processStartMs = processStartUptimeMs,
+                    initMs = initUptimeMs,
+                    firstCreateMs = firstCreateUptimeMs ?: frameMs,
+                    resumedMs = resumedUptimeMs ?: frameMs,
+                    frameMs = frameMs,
+                )
+                onAppStart(AppStart(StartType.COLD, duration, screenNameOf(activity.javaClass), phases, trampoline, processStartUptimeMs))
             } catch (t: Throwable) {
                 SdkLog.w("reporting the app start failed", t)
             }
+            finish(null)
         } else {
-            SdkLog.d("app_start not reported: duration ${duration}ms is outside 0..$MAX_DURATION_MS")
+            drop(ColdStartDrop.OUT_OF_RANGE, "duration ${duration}ms is outside 0..$MAX_DURATION_MS")
         }
-        finish()
     }
 
     private fun cancelHook() {
@@ -140,17 +186,17 @@ internal class AppStartTracker(
     }
 
     /** Gives up on purpose, and says why in the debug log: a missing `app_start` is otherwise impossible to diagnose. */
-    private fun drop(reason: String) {
-        SdkLog.d("app_start not reported: $reason")
-        finish()
+    private fun drop(reason: ColdStartDrop, why: String) {
+        SdkLog.d("app_start not reported: $why")
+        finish(reason)
     }
 
-    private fun finish() {
+    private fun finish(drop: ColdStartDrop?) {
         done = true
         cancelHook()
         candidate = null
         try {
-            onDone()
+            onDone(drop)
         } catch (t: Throwable) {
             SdkLog.w("releasing the app start tracker failed", t)
         }
