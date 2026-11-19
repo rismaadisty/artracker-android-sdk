@@ -21,8 +21,16 @@ import id.art.tracker.lifecycle.AppStart
 import id.art.tracker.lifecycle.AppStartTracker
 import id.art.tracker.lifecycle.ColdStartDrop
 import id.art.tracker.lifecycle.DecorViewFirstFrame
+import id.art.tracker.lifecycle.AppStartDevice
+import id.art.tracker.lifecycle.ApplicationStartInfoSource
 import id.art.tracker.lifecycle.NavTracker
+import id.art.tracker.lifecycle.NoStartInfo
 import id.art.tracker.lifecycle.ScreenTracker
+import id.art.tracker.lifecycle.StartInfoSource
+import id.art.tracker.lifecycle.StartType
+import id.art.tracker.lifecycle.WarmHotStartTracker
+import id.art.tracker.lifecycle.appStartAttributes
+import id.art.tracker.lifecycle.splitProcessToInit
 import id.art.tracker.perf.AndroidDeviceProbe
 import id.art.tracker.perf.ConnectivityNetworkProbe
 import id.art.tracker.perf.DeviceProbe
@@ -106,6 +114,10 @@ internal class ARTrackerCore(
      * hook and clock); null = the real one, measured from the process start to the first drawn frame.
      */
     private val appStartFactory: ((onAppStart: (AppStart) -> Unit, onDone: (ColdStartDrop?) -> Unit) -> AppStartTracker?)? = null,
+    /** Builds the warm/hot start tracker from the callback the core gives it (tests inject a fake hook and clock). */
+    private val warmHotFactory: ((onAppStart: (AppStart) -> Unit) -> WarmHotStartTracker?)? = null,
+    /** Where API 35+ start timestamps come from; null = `ApplicationStartInfo` on API 35+, nothing below. */
+    private val startInfoSource: StartInfoSource? = null,
     /**
      * Builds the ANR watchdog from the callback the core gives it (tests inject one with a fake clock and no real
      * thread); null = the real one, which exists only on API 24-29 (from API 30 `ApplicationExitInfo` reports ANRs).
@@ -490,20 +502,41 @@ internal class ARTrackerCore(
         }.onFailure { SdkLog.w("reporting a blocked main thread failed", it) }
     }
 
-    /** One-shot cold start measurement; not created at all while the SDK is disabled. */
+    /** One-shot cold start measurement; not created at all while the SDK or `appStart` is disabled. */
     @Volatile
     private var appStart: AppStartTracker? = null
+
+    /** Warm and hot starts, registered right after the cold tracker; armed by [onDone] below and on every background. */
+    @Volatile
+    private var warmHot: WarmHotStartTracker? = null
 
     @androidx.annotation.VisibleForTesting
     internal val appStartTracker: AppStartTracker? get() = appStart
 
+    @androidx.annotation.VisibleForTesting
+    internal val warmHotTracker: WarmHotStartTracker? get() = warmHot
+
+    private val startInfo: StartInfoSource by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        startInfoSource ?: if (Build.VERSION.SDK_INT >= 35) ApplicationStartInfoSource(app, mainHandler) else NoStartInfo
+    }
+
     private fun startAppStartTracker() {
-        if (isDisabled()) return
+        if (!config.appStart.enabled || isDisabled()) return
         runCatching {
-            val onDone = { _: ColdStartDrop? -> appStart?.let { runCatching { app.unregisterActivityLifecycleCallbacks(it) } }; Unit }
-            val tracker = (appStartFactory ?: ::createAppStartTracker)(::reportAppStart, onDone) ?: return@runCatching
-            appStart = tracker
-            app.registerActivityLifecycleCallbacks(tracker)
+            val onDone = { drop: ColdStartDrop? ->
+                appStart?.let { runCatching { app.unregisterActivityLifecycleCallbacks(it) } }
+                // A process that was not started for the user (or whose first Activity came much later) has no cold
+                // start: its first Activity is a warm start. The cold tracker is registered first, so this arrives
+                // inside the same onActivityCreated dispatch, before the warm/hot tracker's own callback.
+                if (drop == ColdStartDrop.NOT_FOREGROUND_AT_INIT || drop == ColdStartDrop.LATE_FIRST_ACTIVITY) warmHot?.arm()
+            }
+            val cold = (appStartFactory ?: ::createAppStartTracker)(::reportAppStart, onDone) ?: return@runCatching
+            val warm = (warmHotFactory ?: ::createWarmHotTracker)(::reportAppStart)
+            appStart = cold
+            warmHot = warm
+            app.registerActivityLifecycleCallbacks(cold)
+            warm?.let(app::registerActivityLifecycleCallbacks)
+            scope.launch { runCatching { appStartDevice } } // read once, off the main thread
         }.onFailure { SdkLog.w("app start measurement unavailable", it) }
     }
 
@@ -527,9 +560,47 @@ internal class ARTrackerCore(
         )
     }
 
+    private fun createWarmHotTracker(onAppStart: (AppStart) -> Unit): WarmHotStartTracker =
+        WarmHotStartTracker(SystemClock::uptimeMillis, DecorViewFirstFrame, onAppStart)
+
+    /** Device facts of every `app_start` item; the RAM size is a binder call, so it is read once and cached. */
+    private val appStartDevice: AppStartDevice by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        val probe = AndroidDeviceProbe(app)
+        AppStartDevice(
+            model = runCatching { Build.MODEL }.getOrNull()?.takeIf { it.isNotBlank() },
+            osVersion = runCatching { Build.VERSION.RELEASE }.getOrNull()?.takeIf { it.isNotBlank() },
+            ramMb = runCatching { probe.ramMb() }.getOrNull(),
+            cores = runCatching { probe.cores() }.getOrNull(),
+        )
+    }
+
+    /**
+     * A cold start first asks the platform for its own timestamps (API 35+, off the main thread), splits
+     * `process_to_init` with them when it has them, and emits from the answer; warm and hot starts emit at once.
+     */
     private fun reportAppStart(start: AppStart) {
         if (isDisabled()) return
-        emit(items.event("app_start", linkedMapOf("type" to "cold", "duration_ms" to start.durationMs, "first_screen" to start.firstScreen)))
+        if (start.type != StartType.COLD) return emitAppStart(start)
+        startInfo.request { timestamps ->
+            runCatching {
+                emitAppStart(if (timestamps == null) start else start.copy(phases = splitProcessToInit(start.phases, timestamps)))
+            }.onFailure { SdkLog.w("emitting the app start failed", it) }
+        }
+    }
+
+    /** The item is stamped with the wall-clock time of the start anchor, not with the time it is emitted. */
+    private fun emitAppStart(start: AppStart) {
+        if (isDisabled()) return
+        val nowMs = clock.nowMs()
+        val attrs = appStartAttributes(
+            start = start,
+            startId = UuidV7.generate(nowMs),
+            profiled = false,
+            build = device.appBuild.takeIf { it > 0 }?.toString(),
+            device = appStartDevice,
+        )
+        val anchorWallMs = nowMs - (SystemClock.uptimeMillis() - start.anchorUptimeMs)
+        emit(items.perf(attrs, name = "app_start").copy(timestampMs = anchorWallMs))
     }
 
     /** Creates the monitor and registers the memory callbacks; nothing else (no thread, no loop) until foreground. */
@@ -966,6 +1037,8 @@ internal class ARTrackerCore(
     internal fun onBackground() {
         foreground = false
         runCatching { appStart?.onAppBackground() } // no app_start for a start that never reached its first frame
+        // The next time the user comes back is a hot start (or a warm one, if the OS killed the Activity meanwhile).
+        runCatching { warmHot?.let { it.onAppBackground(); it.arm() } }
         // Stops capture, unwraps windows and flushes the open replay chunk: nothing replay-related runs in background.
         runCatching { replay?.onAppBackground() }
         val active = !isDisabled()
@@ -1015,6 +1088,7 @@ internal class ARTrackerCore(
         onMain { mainHandler.removeCallbacks(resumeAfterTrip) }
         runCatching { watchdog?.stop() }
         runCatching { appStart?.let(app::unregisterActivityLifecycleCallbacks) }
+        runCatching { warmHot?.let(app::unregisterActivityLifecycleCallbacks) }
         runCatching { app.unregisterActivityLifecycleCallbacks(activityTracker) }
         runCatching { activityTracker.detachAll() }
         runCatching { navTracker.clear() }
