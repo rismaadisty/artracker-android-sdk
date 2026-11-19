@@ -137,18 +137,22 @@ absence, `/proc/<pid>/stat` (utime + stime) was read twice, 170 s apart, in the 
 
 ## 4. Release AAR size (MEASURED)
 
-Measured on 2026-11-19 at commit `c899596` (SDK `1.0.4-SNAPSHOT`) with `bash scripts/measure-size.sh`. The same script and
+Measured on 2026-11-19 (SDK `1.0.4-SNAPSHOT`: code of `908a9ba` plus the `MAX_FIRST_CREATE_DELAY_MS` change in the commit that adds this table; harness `822597e`) with `bash scripts/measure-size.sh`. The same script and
 definitions are meant to be copied by the iOS SDK so the two can be compared: raw artifact bytes, release APK delta with
 and without the SDK (R8 on), and dex method ids added.
 
 | Metric | Value |
 | --- | --- |
-| AAR bytes | 633988 |
-| classes.jar bytes | 671591 |
-| SDK dex methods | 3328 |
+| AAR bytes | 634428 |
+| classes.jar bytes | 672037 |
+| SDK dex methods | 3329 |
 | Release APK bytes without SDK | 14569 |
 | Release APK bytes with SDK | 258495 |
 | APK delta bytes | 243926 |
+
+The APK delta is a **lower bound**: the consumer app calls only `ARTracker.init` with `ReplayConfig(enabled = false)`, so R8 removes
+what that app never reaches (event tracking, `identify`, flush, and probably screenshot replay). An app that uses more of the SDK pays more.
+State "init only, replay off" next to this number when comparing it with iOS.
 
 How the APK numbers are made: `scripts/consumer-check` is built as a minified release (R8 with the consumer rules packaged
 in the AAR) twice, `-PsdkMode=none` and `-PsdkMode=full`, resolving the SDK only from a throw-away Maven repository. The
@@ -169,7 +173,7 @@ $ANDROID_HOME/build-tools/<version>/dexdump -f /tmp/aar-dex/classes.dex > /tmp/a
 
 | Metric | Value |
 | --- | --- |
-| Methods in the SDK dex (before the host app's R8) | **3328** method ids, d8 of `classes.jar` from the release AAR at `c899596` (build-tools 37.0.0; the unresolved `okhttp3` / `androidx.work` desugaring warnings are expected: they are compileOnly / separate libraries) |
+| Methods in the SDK dex (before the host app's R8) | **3329** method ids, d8 of `classes.jar` from the same release AAR, default min-api (build-tools 37.0.0; the default min-api adds desugaring helper methods, so state that definition when comparing with iOS; the unresolved `okhttp3` / `androidx.work` desugaring warnings are expected: they are compileOnly / separate libraries) |
 
 ## Not measured here (summary)
 
@@ -290,8 +294,12 @@ Five cold starts of the debug sample sent `screen_view`, `app_foreground`, `app_
 `app_start`**. The log shows why: process start 13:07:45.4, `init` ran at 13:07:48.0 (a 2.6 s gap before `Application.onCreate`:
 debug, non-AOT, ColorOS), the first Activity was created at 13:07:49.5, 1.45 s after `init`, over
 `AppStartTracker.MAX_FIRST_CREATE_DELAY_MS` (1000 ms), so the tracker finished without reporting, by design. On a slow
-device or debug build with a long gap between `init` and the first Activity the event is never sent. Whether a 1 s window
-is right is a product decision (not changed here); `app_start` against a trusted launch time stays **unverified on a device**.
+device or debug build with a long gap between `init` and the first Activity the event is never sent. A later check
+on an API 30 emulator showed the same guard dropping 2 to 3 of 5 launches (first Activity 1.1 to 6 s after `init`). Two environments
+failing on the one guard made 1 s too tight, so `MAX_FIRST_CREATE_DELAY_MS` is now **10 s** (test
+`aSlowDeviceFirstActivityAfterInit_isStillACountedColdStart`). The foreground check at `init` still excludes pushes, services and
+WorkManager. Every silent drop now logs why (`app_start not reported: ...`, debug logging). `app_start` against a trusted launch
+time, and a rerun of the five launches on the physical device with the new threshold, stay **unverified**.
 
 ## Device context fields
 

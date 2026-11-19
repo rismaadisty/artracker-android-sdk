@@ -74,8 +74,11 @@ fi
 build_apk() { # <mode> -> prints the APK byte size
   local mode="$1"
   # `clean` first: stale classes from the other mode would otherwise be dexed into this APK.
+  # `set -e` does not reach inside the $(build_apk ...) that calls this, so a failing build must stop the script itself,
+  # and an APK left by the previous mode must never be mistaken for this one's.
+  rm -rf scripts/consumer-check/app/build/outputs/apk/release
   ./gradlew -q -p scripts/consumer-check clean :app:assembleRelease -PsdkMode="$mode" \
-    -PartrackerRepo="$REPO_DIR" -PartrackerVersion="$VERSION" >&2
+    -PartrackerRepo="$REPO_DIR" -PartrackerVersion="$VERSION" >&2 || fail "consumer-check build failed (sdkMode=$mode)"
   local apk
   apk="$(ls scripts/consumer-check/app/build/outputs/apk/release/*.apk | head -n1)"
   [[ -s "$apk" ]] || fail "no release APK for sdkMode=$mode"

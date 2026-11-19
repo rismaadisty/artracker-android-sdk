@@ -165,8 +165,13 @@ internal class AppStartTracker(
     }
 
     companion object {
-        /** A first Activity created later than this after `init` means the process was not started to show it. */
-        const val MAX_FIRST_CREATE_DELAY_MS = 1_000L
+        /**
+         * A first Activity created later than this after `init` means the process was not started to show it. It was 1 s,
+         * which dropped real user launches: 1.45 s on a physical debug device and 1.1 to 6 s on a loaded emulator (see
+         * PERF.md). The foreground check at `init` already excludes pushes, services and WorkManager; this one only has
+         * to catch a process that was foreground at `init` and shown to the user much later.
+         */
+        const val MAX_FIRST_CREATE_DELAY_MS = 10_000L
 
         /** After an Activity was given up, the next one must be created within this long of the last lifecycle event. */
         const val MAX_NEXT_CREATE_DELAY_MS = 2_000L
