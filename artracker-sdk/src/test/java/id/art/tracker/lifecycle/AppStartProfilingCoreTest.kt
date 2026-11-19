@@ -96,7 +96,7 @@ class AppStartProfilingCoreTest {
         appStart: AppStartConfig = AppStartConfig(profiling = true, profileSampleRate = 1.0),
         random: Double = 0.0,
         foreground: Boolean = true,
-        profileSender: Sender = Sender { uploaded += it; SendResult.Accepted },
+        profileSender: Sender? = Sender { uploaded += it; SendResult.Accepted },
         ingestSender: id.art.tracker.ARTrackerSender? = null,
     ): ARTrackerCore {
         val c = ARTrackerCore(
@@ -204,6 +204,24 @@ class AppStartProfilingCoreTest {
 
         assertEquals(0, profilerFactoryCalls)
         assertTrue(!samplerAlive())
+    }
+
+    @Test
+    fun aHostSender_alsoCarriesTheProfileUpload() {
+        // Review: a host that pins certificates or must proxy all traffic passes an ARTrackerSender; the profile upload
+        // may not bypass it with a direct HttpURLConnection.
+        val urls = CopyOnWriteArrayList<String>()
+        startCore(
+            profileSender = null,
+            ingestSender = id.art.tracker.ARTrackerSender { request ->
+                urls += request.url
+                SendResponse(202)
+            },
+        )
+        coldStartReported()
+        settle()
+
+        assertTrue("the profile went through the host sender: $urls", urls.any { it.endsWith("/api/v1/app-start/profiles") })
     }
 
     @Test

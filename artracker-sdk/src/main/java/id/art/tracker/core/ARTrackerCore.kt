@@ -680,7 +680,10 @@ internal class ARTrackerCore(
     private val profileUploaderLazy = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         ProfileUploader(
             profileStore,
-            profileSender ?: IngestClient(config.endpoint, config.apiKey, path = IngestEndpoint.PROFILES_PATH),
+            // The host's transport (pinning, a proxy) carries the profile too, exactly like ingest and replay.
+            profileSender
+                ?: config.network.sender?.let { CustomSenderAdapter(it, config.endpoint, config.apiKey, path = IngestEndpoint.PROFILES_PATH) }
+                ?: IngestClient(config.endpoint, config.apiKey, path = IngestEndpoint.PROFILES_PATH),
             killSwitch,
         ).also { FlusherRegistry.profiles = it }
     }

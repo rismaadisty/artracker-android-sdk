@@ -208,7 +208,7 @@ of the SDK: your app must provide it.
 
 By default the SDK sends its requests with `HttpURLConnection`: no extra dependency and nothing to configure. To send
 them through your own HTTP stack, pass an `ARTrackerSender` in `NetworkConfig`; it carries the ingest batches and the
-session replay upload (`chunk-url`, the `PUT` to the signed URL, `chunk-ack`). The API is **experimental**
+session replay upload (`chunk-url`, the `PUT` to the signed URL, `chunk-ack`) and the startup profile upload (`/api/v1/app-start/profiles`). The API is **experimental**
 (`@OptIn(ExperimentalARTrackerApi::class)`). `ARTrackerOkHttpSender` wraps an `OkHttpClient`, so whatever interceptors
 that client has (Chucker, a certificate pinner, a proxy, custom timeouts) apply to the SDK's own requests too:
 
