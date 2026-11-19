@@ -32,6 +32,7 @@ import id.art.tracker.lifecycle.AppStartDevice
 import id.art.tracker.lifecycle.ApplicationStartInfoSource
 import id.art.tracker.lifecycle.NavTracker
 import id.art.tracker.lifecycle.NoStartInfo
+import id.art.tracker.lifecycle.redactionSafeId
 import id.art.tracker.lifecycle.ScreenTracker
 import id.art.tracker.lifecycle.StartInfoSource
 import id.art.tracker.lifecycle.StartType
@@ -133,6 +134,8 @@ internal class ARTrackerCore(
     private val profileRandom: () -> Double = Math::random,
     /** Uploads startup profiles (tests inject one); null = [IngestClient] posting to `/api/v1/app-start/profiles`. */
     private val profileSender: Sender? = null,
+    /** Whether the process is in the foreground at init; null = read from the process importance. */
+    private val foregroundAtInit: (() -> Boolean)? = null,
     /**
      * Builds the ANR watchdog from the callback the core gives it (tests inject one with a fake clock and no real
      * thread); null = the real one, which exists only on API 24-29 (from API 30 `ApplicationExitInfo` reports ANRs).
@@ -563,14 +566,9 @@ internal class ARTrackerCore(
      * I/O): a process started by a broadcast, a service or WorkManager is not, and reports no `app_start`.
      */
     private fun createAppStartTracker(onAppStart: (AppStart) -> Unit, onDone: (ColdStartDrop?) -> Unit): AppStartTracker {
-        val foregroundAtInit = runCatching {
-            val info = ActivityManager.RunningAppProcessInfo()
-            ActivityManager.getMyMemoryState(info)
-            info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
-        }.getOrDefault(false)
         return AppStartTracker(
             processStartUptimeMs = Process.getStartUptimeMillis(),
-            startedInForeground = foregroundAtInit,
+            startedInForeground = processForegroundAtInit,
             uptime = SystemClock::uptimeMillis,
             firstFrame = DecorViewFirstFrame,
             onAppStart = onAppStart,
@@ -580,6 +578,20 @@ internal class ARTrackerCore(
 
     private fun createWarmHotTracker(onAppStart: (AppStart) -> Unit): WarmHotStartTracker =
         WarmHotStartTracker(SystemClock::uptimeMillis, DecorViewFirstFrame, onAppStart)
+
+    /**
+     * "In the foreground at init", read once from the process importance (a binder call, no disk I/O); shared by the
+     * cold tracker and the profiler gate so both agree.
+     */
+    private val processForegroundAtInit: Boolean by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        runCatching {
+            foregroundAtInit?.invoke() ?: run {
+                val info = ActivityManager.RunningAppProcessInfo()
+                ActivityManager.getMyMemoryState(info)
+                info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+            }
+        }.getOrDefault(false)
+    }
 
     /** Device facts of every `app_start` item; the RAM size is a binder call, so it is read once and cached. */
     private val appStartDevice: AppStartDevice by lazy(LazyThreadSafetyMode.PUBLICATION) {
@@ -602,7 +614,7 @@ internal class ARTrackerCore(
             if (start.type == StartType.COLD) discardProfiler()
             return
         }
-        val startId = UuidV7.generate(clock.nowMs())
+        val startId = redactionSafeId { UuidV7.generate(clock.nowMs()) }
         if (start.type != StartType.COLD) return emitAppStart(start, startId, profiled = false)
         val profile = takeProfile()
         startInfo.request { timestamps ->
@@ -637,6 +649,8 @@ internal class ARTrackerCore(
     /** Decided once per process, here: `appStart.enabled && profiling && random < profileSampleRate`. */
     private fun startProfiler() {
         if (isDisabled() || !ProfileDecision.shouldProfile(config.appStart, profileRandom)) return
+        // A process started by a push, a broadcast or WorkManager can never report a cold start: do not sample it.
+        if (config.appStart.enabled && !processForegroundAtInit) return
         runCatching {
             val processStart = Process.getStartUptimeMillis()
             val p = profilerFactory?.invoke(processStart)

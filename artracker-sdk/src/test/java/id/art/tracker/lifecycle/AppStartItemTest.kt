@@ -1,7 +1,9 @@
 package id.art.tracker.lifecycle
 
+import id.art.tracker.privacy.AttributeRedactor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class AppStartItemTest {
@@ -73,5 +75,27 @@ class AppStartItemTest {
     fun anEmptyDeviceIsOmitted() {
         val attrs = appStartAttributes(start, "id", false, build = null, device = AppStartDevice(null, null, null, null))
         assertFalse(attrs.containsKey("device"))
+    }
+
+    @Test
+    fun aStartIdTheRedactorWouldMangle_isNeverUsed() {
+        // Review: about 0.2 % of UUIDv7 ids hold a Luhn-valid run of digits that the card pattern masks, which breaks
+        // the join between the item and its profile.
+        val mangled = "01a50440-8527-7708-b7eb-3f9c2d1e4a6b"
+        val clean = "0190c2d4-1111-7222-8333-444455556666"
+        assertNotEquals("premise: the redactor changes this id", mangled, AttributeRedactor.redactString(mangled))
+        val ids = ArrayDeque(listOf(mangled, clean))
+
+        assertEquals(clean, redactionSafeId { ids.removeFirst() })
+    }
+
+    @Test
+    fun aGeneratorThatNeverYieldsASafeId_stillReturns() {
+        val mangled = "01a50440-8527-7708-b7eb-3f9c2d1e4a6b"
+        var calls = 0
+
+        redactionSafeId { calls++; mangled }
+
+        assertEquals(16, calls)
     }
 }

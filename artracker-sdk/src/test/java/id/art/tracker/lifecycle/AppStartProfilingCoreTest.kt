@@ -110,6 +110,7 @@ class AppStartProfilingCoreTest {
             },
             profileRandom = { random },
             profileSender = profileSender,
+            foregroundAtInit = { foreground },
         )
         ARTrackerCore.install(c)
         c.start()
@@ -192,6 +193,16 @@ class AppStartProfilingCoreTest {
         assertEquals(false, start.attributes["profiled"])
         assertEquals(0, profilerFactoryCalls)
         assertTrue(uploaded.isEmpty())
+        assertTrue(!samplerAlive())
+    }
+
+    @Test
+    fun aProcessNotInTheForegroundAtInit_neverStartsTheSampler() {
+        // Review: a process started by a push, a broadcast or WorkManager can never report a cold start; sampling the
+        // main thread every 10 ms there is pure cost, and its buffer would stay in memory until an Activity shows up.
+        startCore(foreground = false)
+
+        assertEquals(0, profilerFactoryCalls)
         assertTrue(!samplerAlive())
     }
 
