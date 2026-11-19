@@ -362,6 +362,22 @@ re-measure on a mid-range device, or tune the sampler. Not measured: a mid-range
 frequent there), profiling with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the
 profile upload.
 
+**Where the cost comes from (investigated after the miss, same device).** A temporary build logged the cost of every single
+read (not committed). Over 15 launches: 209 samples, mean 353 us, median 227 us; **13 samples (6.2 %) cost 1 to 3.3 ms and
+make up 34 % of the total cost**; without them the mean is 248 us. The slow reads are isolated (only 2 pairs in a row, 0 to 3
+per launch), so the mean of a 13-sample launch swings with whether one landed in it. Two levers were considered:
+
+- *Back off after one slow read.* Not built: with isolated spikes it would mostly take fewer cheap samples, which raises
+  the mean per sample (reasoning from the distribution, not measured).
+- *A higher priority for the sampler thread* (`THREAD_PRIORITY_FOREGROUND`, to cut wake-up latency). Built and measured, then
+  **removed**: in an interleaved A/B of 20 launches per arm, reads of 1 ms or more were 7.0 % of samples with it against 3.5 %
+  without, the worst read 10.7 ms against 2.8 ms, and the mean 364 us against 223 us per sample.
+
+No code change was made: the spikes look like thread-suspension latency of the platform, which the sampler cannot control.
+These investigation builds log one line per sample (outside the timed region) and are not the acceptance protocol; their
+unmodified-sampler results (mean of launch means 349 us over 15 launches, 307 us over the 20 baseline launches of the A/B)
+are context, like runs 2 and 3, not a substitute for run 1.
+
 To repeat it: build the sample twice (release, `signingConfig` set to the debug key, `AppStartConfig(profiling = false)` and
 `AppStartConfig(profiling = true, profileSampleRate = 1.0)`), then for each build
 
