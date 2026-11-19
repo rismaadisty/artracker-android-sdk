@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:label="consumer-check" />
+    <!-- Naming the Application keeps its init call (and the SDK code it reaches) alive through R8, like a real host app. -->
+    <application
+        android:name=".ConsumerCheckApp"
+        android:label="consumer-check" />
 </manifest>
