@@ -1,6 +1,7 @@
 package id.art.tracker.playground.settings
 
 import id.art.tracker.ARTrackerConfig
+import id.art.tracker.AppStartConfig
 import id.art.tracker.ARTrackerSender
 import id.art.tracker.BeforeSend
 import id.art.tracker.ExperimentalARTrackerApi
@@ -81,6 +82,8 @@ data class PlaygroundSettings(
             beforeSend = beforeSend,
             // Session profiling follows the debug toggle: on for debug builds, off otherwise.
             performance = PerformanceConfig(enabled = debug),
+            // Startup profiling follows the debug toggle too, at a 100 % rate so every cold start leaves a profile.
+            appStart = AppStartConfig(profiling = debug, profileSampleRate = 1.0),
         )
 
     companion object {

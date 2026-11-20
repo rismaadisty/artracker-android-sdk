@@ -16,6 +16,7 @@ class ARTrackerConfigTest {
         sessionTimeoutMs: Long = 1_800_000,
         replay: ReplayConfig = ReplayConfig(),
         network: NetworkConfig = NetworkConfig(),
+        appStart: AppStartConfig = AppStartConfig(),
     ) = ARTrackerConfig(
         endpoint = endpoint,
         apiKey = apiKey,
@@ -23,6 +24,7 @@ class ARTrackerConfigTest {
         sessionTimeoutMs = sessionTimeoutMs,
         replay = replay,
         network = network,
+        appStart = appStart,
     )
 
     private fun keyOfLength(n: Int) = "art_live_" + "a".repeat(n - "art_live_".length)
@@ -208,5 +210,36 @@ class ARTrackerConfigTest {
         assertTrue(notAfterIdle.toString(), "replay.dormantAfterMs must be > replay.idleAfterMs" in notAfterIdle)
         val before = config(replay = ReplayConfig(idleAfterMs = 30_000, dormantAfterMs = 10_000)).validate()
         assertTrue(before.toString(), "replay.dormantAfterMs must be > replay.idleAfterMs" in before)
+    }
+
+    @Test
+    fun appStart_defaultsMeasureAndDoNotProfile() {
+        val c = config().appStart
+        assertTrue(c.enabled)
+        assertFalse(c.profiling)
+        assertEquals(0.1, c.profileSampleRate, 0.0)
+        assertTrue(c.inAppPackages.isEmpty())
+    }
+
+    @Test
+    fun builder_carriesAppStart() {
+        val built = ARTrackerConfig.Builder(endpoint, validKey)
+            .appStart(AppStartConfig(enabled = false, profiling = true, profileSampleRate = 0.5, inAppPackages = setOf("com.example")))
+            .build()
+        assertFalse(built.appStart.enabled)
+        assertTrue(built.appStart.profiling)
+        assertEquals(0.5, built.appStart.profileSampleRate, 0.0)
+        assertEquals(setOf("com.example"), built.appStart.inAppPackages)
+    }
+
+    @Test
+    fun appStart_profileSampleRateOutside0to1_isInvalid() {
+        val message = "appStart.profileSampleRate must be between 0.0 and 1.0"
+        for (rate in listOf(1.5, -0.1, Double.NaN)) {
+            val errors = config(appStart = AppStartConfig(profileSampleRate = rate)).validate()
+            assertTrue("$rate -> $errors", message in errors)
+        }
+        assertTrue(config(appStart = AppStartConfig(profileSampleRate = 1.0)).validate().isEmpty())
+        assertTrue(config(appStart = AppStartConfig(profileSampleRate = 0.0)).validate().isEmpty())
     }
 }

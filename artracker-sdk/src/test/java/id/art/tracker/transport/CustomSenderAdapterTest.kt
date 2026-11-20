@@ -43,6 +43,23 @@ class CustomSenderAdapterTest {
     }
 
     @Test
+    fun aPathOtherThanIngest_isTheRequestUrl() {
+        // Review: startup profiles go to /api/v1/app-start/profiles and must travel through the host's own transport too.
+        val recorder = answering(202)
+        CustomSenderAdapter(recorder, "https://ingest.example.com", key, path = IngestEndpoint.PROFILES_PATH).send(body)
+
+        assertEquals("https://ingest.example.com/api/v1/app-start/profiles", recorder.requests.single().url)
+    }
+
+    @Test
+    fun withoutAPath_theUrlIsIngest() {
+        val recorder = answering(202)
+        adapter(recorder).send(body)
+
+        assertEquals("https://ingest.example.com/api/v1/ingest", recorder.requests.single().url)
+    }
+
+    @Test
     fun status2xx_isAccepted() {
         for (status in listOf(200, 202, 204)) assertEquals("status $status", SendResult.Accepted, result(status))
     }

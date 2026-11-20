@@ -299,7 +299,95 @@ on an API 30 emulator showed the same guard dropping 2 to 3 of 5 launches (first
 failing on the one guard made 1 s too tight, so `MAX_FIRST_CREATE_DELAY_MS` is now **10 s** (test
 `aSlowDeviceFirstActivityAfterInit_isStillACountedColdStart`). The foreground check at `init` still excludes pushes, services and
 WorkManager. Every silent drop now logs why (`app_start not reported: ...`, debug logging). `app_start` against a trusted launch
-time, and a rerun of the five launches on the physical device with the new threshold, stay **unverified**.
+time, and a rerun of the five launches on the physical device with the new threshold, stay **unverified**. (Profiling overhead on the device: see "App start profiling overhead".)
+
+## App start profiling overhead
+
+`AppStartConfig(profiling = true)` samples the main thread stack from `init` to the first frame (`StartupProfiler`). Targets:
+the mean cost of one sample <= 500 us, and the median `am start -W` `TotalTime` with profiling on within 5 % of the median
+with it off.
+
+**Device:** Samsung SM-S921B, Android 17 (API 37), charging at 77-92 %, 28 degrees C. **Build:** release variant of the sample
+app (`isMinifyEnabled = false`, signed with the debug key to install it), the SDK at this commit. Both runs have SDK debug
+logging on, to read the profiler's own log line, and the sample's default settings (replay and performance monitoring on,
+sink/offline endpoint profile, so nothing leaves the device); the two builds differ **only** in `profiling` (`false` / `true`,
+`profileSampleRate = 1.0`). One warm-up launch, then 10 cold starts each, `adb shell am force-stop id.art.tracker`, 3 s
+pause, `adb shell am start -W -n id.art.tracker/.MainActivity`.
+
+| Run | `TotalTime` per launch (ms) | Median | Min / max |
+| --- | --- | --- | --- |
+| Profiling off | 210, 206, 227, 204, 198, 205, 206, 193, 208, 223 | **206 ms** | 193 / 227 |
+| Profiling on | 200, 188, 193, 208, 211, 205, 199, 205, 200, 204 | **202 ms** | 188 / 211 |
+
+The median differs by -4 ms (-1.9 %): within the 5 % target, and below the run-to-run spread of either set (about 30 ms), so
+this measurement cannot tell the profiler from noise; it shows no cost large enough to see in 10 launches.
+
+The profiler's own log line (`startup profile: N samples, interval X ms, mean cost Y us`) for the 10 launches with profiling on:
+
+| Launch | Samples | Final interval | Mean cost per sample |
+| --- | --- | --- | --- |
+| 1 | 12 | 10 ms | 507 us |
+| 2 | 8 | 20 ms | 1563 us |
+| 3 | 12 | 10 ms | 411 us |
+| 4 | 13 | 10 ms | 203 us |
+| 5 | 8 | 20 ms | 1598 us |
+| 6 | 13 | 10 ms | 186 us |
+| 7 | 12 | 10 ms | 237 us |
+| 8 | 12 | 10 ms | 485 us |
+| 9 | 12 | 10 ms | 246 us |
+| 10 | 12 | 10 ms | 339 us |
+
+**The mean-cost acceptance criterion was NOT met.** The plan's protocol is one run of 10 cold starts with the mean cost
+<= 500 us; run 1 above gave **578 us** (median launch 375 us, 7 of 10 launches under 500 us). Two launches (2 and 5) cost about
+1.6 ms per sample, over the 1 ms back-off threshold, so the interval doubled to 20 ms for them (the adaptive interval doing
+what it is for). The median `TotalTime` criterion (<= 5 %) was met: -1.9 %.
+
+Because a launch takes only 8 to 13 samples, one slow read weighs a lot in a launch mean, so the same build was launched 20
+more times (same device and steps, no code change). This was done **after** the miss and is supplementary evidence, not a
+replacement for the protocol; pooling runs is not what the plan defines as acceptance.
+
+| Run | Mean of launch means | Median launch | Launches under 500 us | Launches over 1 ms |
+| --- | --- | --- | --- | --- |
+| 1 (the protocol) | 578 us | 375 us | 7 / 10 | 2 (1563, 1598 us) |
+| 2 (after the miss) | 440 us | 277 us | 9 / 10 | 1 (1993 us) |
+| 3 (after the miss) | 278 us | 235 us | 9 / 10 | 0 |
+| Runs 1-3 pooled (30 launches) | 432 us | 265 us | 25 / 30 | 3 |
+
+The spread says the number is dominated by rare slow reads (3 of 30 launches cost 1.6 to 2 ms per sample: a
+`Thread.getStackTrace` of the main thread while it was busy class-loading, a CPU frequency step; not investigated), and one
+run alone ranges from 278 to 578 us. The sampler was **accepted with the criterion unmet**: the repository owner was asked
+and chose "accept as is" (a waiver of the plan's criterion, 2026-11-19; the plan itself was not changed). Reasons: profiling is opt-in (`profiling = false` by default), the typical launch is well under
+500 us, and the end-to-end `TotalTime` cost is not measurable in 10 launches. Whoever owns the target can change it,
+re-measure on a mid-range device, or tune the sampler. Not measured: a mid-range or low-end device (slow reads would be more
+frequent there), profiling with a longer startup (a splash, a heavy `Application.onCreate`), Perfetto, the cost of the
+profile upload.
+
+**Where the cost comes from (investigated after the miss, same device).** A temporary build logged the cost of every single
+read (not committed). Over 15 launches: 209 samples, mean 353 us, median 227 us; **13 samples (6.2 %) cost 1 to 3.3 ms and
+make up 34 % of the total cost**; without them the mean is 248 us. The slow reads are isolated (only 2 pairs in a row, 0 to 3
+per launch), so the mean of a 13-sample launch swings with whether one landed in it. Two levers were considered:
+
+- *Back off after one slow read.* Not built: with isolated spikes it would mostly take fewer cheap samples, which raises
+  the mean per sample (reasoning from the distribution, not measured).
+- *A higher priority for the sampler thread* (`THREAD_PRIORITY_FOREGROUND`, to cut wake-up latency). Built and measured, then
+  **removed**: in an interleaved A/B of 20 launches per arm, reads of 1 ms or more were 7.0 % of samples with it against 3.5 %
+  without, the worst read 10.7 ms against 2.8 ms, and the mean 364 us against 223 us per sample.
+
+No code change was made: the spikes look like thread-suspension latency of the platform, which the sampler cannot control.
+These investigation builds log one line per sample (outside the timed region) and are not the acceptance protocol; their
+unmodified-sampler results (mean of launch means 349 us over 15 launches, 307 us over the 20 baseline launches of the A/B)
+are context, like runs 2 and 3, not a substitute for run 1.
+
+To repeat it: build the sample twice (release, `signingConfig` set to the debug key, `AppStartConfig(profiling = false)` and
+`AppStartConfig(profiling = true, profileSampleRate = 1.0)`), then for each build
+
+```
+adb install -r app-release.apk
+adb shell am force-stop id.art.tracker && adb shell am start -W -n id.art.tracker/.MainActivity   # warm-up
+adb logcat -c
+for i in $(seq 10); do adb shell am force-stop id.art.tracker; sleep 3; adb shell am start -W -n id.art.tracker/.MainActivity | grep TotalTime; sleep 3; done
+adb logcat -d -s ARTracker:V | grep "startup profile"    # needs debug = true
+```
 
 ## Device context fields
 

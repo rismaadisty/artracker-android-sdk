@@ -16,6 +16,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
     public val sessionTimeoutMs: Long = 1_800_000,
     public val beforeSend: BeforeSend? = null,
     public val performance: PerformanceConfig = PerformanceConfig(),
+    public val appStart: AppStartConfig = AppStartConfig(),
 ) {
     /** Fluent builder for Java callers. */
     public class Builder(private val endpoint: String, private val apiKey: String) {
@@ -29,6 +30,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
         private var sessionTimeoutMs: Long = 1_800_000
         private var beforeSend: BeforeSend? = null
         private var performance: PerformanceConfig = PerformanceConfig()
+        private var appStart: AppStartConfig = AppStartConfig()
 
         public fun environment(value: String): Builder = apply { environment = value }
         public fun appVersion(value: String?): Builder = apply { appVersion = value }
@@ -40,6 +42,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
         public fun sessionTimeoutMs(value: Long): Builder = apply { sessionTimeoutMs = value }
         public fun beforeSend(value: BeforeSend?): Builder = apply { beforeSend = value }
         public fun performance(value: PerformanceConfig): Builder = apply { performance = value }
+        public fun appStart(value: AppStartConfig): Builder = apply { appStart = value }
 
         public fun build(): ARTrackerConfig = ARTrackerConfig(
             endpoint = endpoint,
@@ -54,6 +57,7 @@ public class ARTrackerConfig @JvmOverloads constructor(
             sessionTimeoutMs = sessionTimeoutMs,
             beforeSend = beforeSend,
             performance = performance,
+            appStart = appStart,
         )
     }
 }
@@ -93,6 +97,23 @@ public class PerformanceConfig @JvmOverloads constructor(
     public val enabled: Boolean = false,
     public val sampleIntervalMs: Long = 1_000,
     public val trackFrames: Boolean = true,
+)
+
+/**
+ * App start measurement and profiling.
+ *
+ * With [enabled] (the default) the SDK measures cold, warm and hot starts and sends each as a `perf` item named
+ * `app_start`, with a phase breakdown. Set it to false and no tracker, profiler or callback is registered.
+ *
+ * With [profiling] (off by default) a fraction [profileSampleRate] (0.0..1.0) of cold starts also samples the main
+ * thread stack every 10 ms until the first frame (at most 10 s) and uploads the profile. The decision is made once per
+ * process. [inAppPackages] are package prefixes, besides the app's own package, that the dashboard treats as app code.
+ */
+public class AppStartConfig @JvmOverloads constructor(
+    public val enabled: Boolean = true,
+    public val profiling: Boolean = false,
+    public val profileSampleRate: Double = 0.1,
+    public val inAppPackages: Set<String> = emptySet(),
 )
 
 /** Privacy masking settings. */
@@ -170,6 +191,9 @@ internal fun ARTrackerConfig.validate(): List<String> {
     }
     if (!(network.sampleRate in 0.0..1.0)) {
         errors += "network.sampleRate must be between 0.0 and 1.0"
+    }
+    if (!(appStart.profileSampleRate in 0.0..1.0)) {
+        errors += "appStart.profileSampleRate must be between 0.0 and 1.0"
     }
     return errors
 }

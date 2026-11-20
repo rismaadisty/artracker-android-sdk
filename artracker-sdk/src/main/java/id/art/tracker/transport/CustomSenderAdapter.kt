@@ -14,8 +14,9 @@ internal class CustomSenderAdapter(
     private val delegate: ARTrackerSender,
     endpoint: String,
     private val apiKey: String,
+    path: String = IngestEndpoint.INGEST_PATH,
 ) : Sender {
-    private val url: String? = IngestEndpoint.url(endpoint)?.toString()
+    private val url: String? = IngestEndpoint.url(endpoint, path)?.toString()
     private val keyUsable: Boolean = IngestEndpoint.keyUsable(apiKey)
 
     override fun send(gzipBody: ByteArray): SendResult {

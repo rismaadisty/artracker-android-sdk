@@ -7,9 +7,12 @@ import java.net.URL
 internal object IngestEndpoint {
     const val INGEST_PATH = "/api/v1/ingest"
 
-    /** `{endpoint}/api/v1/ingest`, or null when [endpoint] is not a valid http(s) URL (it can then never succeed). */
-    fun url(endpoint: String): URL? =
-        runCatching { URL(endpoint.trimEnd('/') + INGEST_PATH) }
+    /** Where startup profiles go; the same host, key and headers as ingest. */
+    const val PROFILES_PATH = "/api/v1/app-start/profiles"
+
+    /** `{endpoint}{path}` (ingest by default), or null when [endpoint] is not a valid http(s) URL (it can then never succeed). */
+    fun url(endpoint: String, path: String = INGEST_PATH): URL? =
+        runCatching { URL(endpoint.trimEnd('/') + path) }
             .getOrNull()
             ?.takeIf { it.protocol == "http" || it.protocol == "https" }
 
