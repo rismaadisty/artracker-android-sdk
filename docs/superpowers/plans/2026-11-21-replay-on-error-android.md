@@ -4,7 +4,7 @@
 
 **Goal:** Save user data quota: by default replay records into a rolling on-device buffer and uploads only the last ~60 s around a crash, an ANR or a logged error, instead of the whole session.
 
-**Architecture:** A new per-session `RecordingMode` (`FULL` = today's behavior, `BUFFER` = new). In `BUFFER` mode `ScreenChunker` closes 5 s chunks flagged `held`; `ReplayStore` keeps held rows (state 0, `seq = -1`) trimmed to 60 s / 8 chunks per session and never hands them to the uploader. A trigger promotes the session's held rows to ready (allocating `seq` in `first_ts` order) and opens a 30 s follow-up window. Crashes and API 30+ ANRs are handled at the next launch: held rows created before this process started are promoted if the previous run crashed, otherwise dropped.
+**Architecture:** A new per-session `RecordingMode` (`FULL` = today's behavior, `BUFFER` = new). In `BUFFER` mode `ScreenChunker` closes 5 s chunks flagged `held`; `ReplayStore` keeps held rows (state 0, `seq = -1`) trimmed to 60 s / 13 chunks per session and never hands them to the uploader. A trigger promotes the session's held rows to ready (allocating `seq` in `first_ts` order) and opens a 30 s follow-up window. Crashes and API 30+ ANRs are handled at the next launch: held rows created before this process started are promoted if the previous run crashed, otherwise dropped.
 
 **Tech Stack:** Kotlin, SQLite (`SQLiteOpenHelper`), JUnit4 + Robolectric (`FakeClock`, `ManualDispatcher`, `testReplayController`, `testScreenshotKit` from `testutil`).
 
@@ -19,7 +19,7 @@
 - `ReplayConfig.sampleRate` default changes `0.1` → `0.0`; new `ReplayConfig.onErrorSampleRate: Double = 1.0`, added as the **last** constructor parameter (`@JvmOverloads` positional callers keep compiling), validated `0.0..1.0` with message `"replay.onErrorSampleRate must be between 0.0 and 1.0"`. `explicitApi()` is on: every new public member needs an explicit `public`.
 - Mode per session: `sampleRate` hit → `FULL`; else `onErrorSampleRate` hit (sampled on `sessionId + ":on-error"`) → `BUFFER`; else not recorded. `startReplay()` (manual) → always `FULL`.
 - `BUFFER_WINDOW_MS = 5_000` (chunk window in BUFFER mode); FULL keeps `ScreenChunker.DEFAULT_WINDOW_MS = 10_000`.
-- `HELD_WINDOW_MS = 60_000`, `MAX_HELD_PER_SESSION = 8`.
+- `HELD_WINDOW_MS = 60_000`, `MAX_HELD_PER_SESSION = 13` (12 × 5 s + the trigger chunk; was 8, fixed in the final review).
 - `FOLLOW_UP_MS = 30_000` after a logged-error trigger.
 - `MAX_ERROR_TRIGGERS_PER_SESSION = 3`, `MIN_TRIGGER_GAP_MS = 60_000`.
 - Triggers: items of level `ERROR`/`FATAL` accepted by the pipeline whose `timestampMs >=` the core's process start time (this covers the API 24–29 watchdog ANR); at launch: `CrashRecovery.recover(...) > 0` or an exit item named `anr` / `native_crash`.
@@ -103,7 +103,7 @@ Run: `./gradlew :artracker-sdk:testDebugUnitTest --tests 'id.art.tracker.ARTrack
 - Produces:
   - `NewReplayBatch.held: Boolean = false` (new last constructor parameter)
   - on `ReplayQueue`: `fun promote(sessionId: String): Int`, `fun promoteHeldBefore(cutoffMs: Long): Int`, `fun dropHeld(sessionId: String): Int`, `fun dropHeldBefore(cutoffMs: Long): Int` (return = rows affected; never throw, 0 on storage failure, like the other hot-path methods)
-  - `ReplayStore` constructor gains `heldWindowMs: Long = HELD_WINDOW_MS`, `maxHeldPerSession: Int = MAX_HELD_PER_SESSION` (after `maxAttempts`, before `dbName`, so update the test helper `store(...)`); constants `HELD_WINDOW_MS = 60_000L`, `MAX_HELD_PER_SESSION = 8` in its companion
+  - `ReplayStore` constructor gains `heldWindowMs: Long = HELD_WINDOW_MS`, `maxHeldPerSession: Int = MAX_HELD_PER_SESSION` (after `maxAttempts`, before `dbName`, so update the test helper `store(...)`); constants `HELD_WINDOW_MS = 60_000L`, `MAX_HELD_PER_SESSION = 8` (13 after the final review) in its companion
 
 - [ ] **Step 1: Write the failing tests** (extend the `batch(...)` helper with `held: Boolean = false`)
 

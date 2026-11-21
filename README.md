@@ -296,8 +296,9 @@ Priority: password > explicit unmask > explicit mask or masked ancestor / custom
 ## Session replay
 
 Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.0` (full-session recording, deterministic per session id; it was `0.1` before the replay-on-error
-change, so set it explicitly to keep full replay), `onErrorSampleRate = 1.0` (buffer mode, see below),
-`framesPerSecond = 1.0` and `quality = ReplayQuality.STANDARD`. `ARTracker.startReplay()` / `stopReplay()` override the
+change: to keep the old behavior exactly, set `sampleRate = 0.1, onErrorSampleRate = 0.0`), `onErrorSampleRate = 1.0` (buffer mode, see below),
+`framesPerSecond = 1.0` and `quality = ReplayQuality.STANDARD`. With `enabled = true` and these defaults every session is
+now captured on the device (in buffer mode), and only uploaded around problems. `ARTracker.startReplay()` / `stopReplay()` override the
 sampling at runtime. A replay is a sequence of **real screenshots of the app, masked on the device**; there is no other
 mode and the SDK reads no replay setting from the server.
 
@@ -316,13 +317,15 @@ replay = ReplayConfig(
 
 - **Replay on error (buffer mode)**: a session whose `sampleRate` hits is recorded in full. Otherwise, when
   `onErrorSampleRate` hits (sampled on `sessionId + ":on-error"`), the session is recorded in buffer mode: 5 s chunks are
-  kept on the device ("held": the last 60 s, at most 8 chunks per session) and not uploaded. They are uploaded when an
+  kept on the device ("held": the last 60 s, at most 13 chunks per session) and not uploaded. They are uploaded when an
   `ERROR` or `FATAL` item of this process is logged (including the API 24-29 ANR watchdog), at most 3 times per session and
   at least 60 s apart, plus 30 s of follow-up recording. After a JVM crash, an API 30+ ANR or a native crash the previous
   run's buffer is uploaded at the next launch, otherwise it is dropped. A buffer session that times out discards its held
   chunks. `ARTracker.startReplay()` records in full, and switching to full during a buffer session uploads the held buffer.
-  **Known gap**: up to the last ~5 s before a crash (the chunk still open in memory) is lost. A crash item dropped by your
-  `beforeSend` counts as a clean run (no replay). If a launch happens while the SDK is disabled, the next enabled launch
+  **Known gap**: up to the last ~5 s before a crash (the chunk still open in memory) is lost. Error items your
+  `beforeSend` drops still trigger a buffer upload (the trigger fires when the item is enqueued); a JVM crash dropped by
+  `beforeSend` counts as a clean run, while `anr` / `native_crash` exit items count as crashes even if `beforeSend` drops
+  them. If a launch happens while the SDK is disabled, the next enabled launch
   decides only by whether its own predecessor crashed, so a crash before a disabled launch can lose its buffer. The replay
   database is version 5; chunks queued before the upgrade keep uploading.
 - **Format**: `artracker-screen-v1` chunks: gzipped JSON of base64 JPEG frames (with the sanitised screen name and

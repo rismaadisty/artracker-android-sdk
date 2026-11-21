@@ -252,7 +252,7 @@ Replay adalah urutan **screenshot asli** aplikasi. Data sensitif di-mask **di pe
 
 ### 6.5 Chunking, upload & sampling
 
-- `ScreenChunker` (tutup di 10 detik sejak entri pertama, saat sesi berganti, saat frame berikutnya tidak muat di 2 MB gzip, atau saat recording berhenti) menghasilkan chunk `artracker-screen-v1`. Chunk **bukan item `session` di `/ingest`**: ia disimpan di antrean `artracker_replay.db` (`ReplayStore`) dan dikirim lewat Session Replay API (§2). Chunk gzip >5 MiB dibuang.
+- `ScreenChunker` (tutup di 10 detik (mode penuh) atau 5 detik (mode buffer) sejak entri pertama, saat sesi berganti, saat frame berikutnya tidak muat di 2 MB gzip, atau saat recording berhenti) menghasilkan chunk `artracker-screen-v1`. Chunk **bukan item `session` di `/ingest`**: ia disimpan di antrean `artracker_replay.db` (`ReplayStore`) dan dikirim lewat Session Replay API (§2). Chunk gzip >5 MiB dibuang.
 - `seq` ditetapkan oleh `ReplayStore` dan dipersist per session, jadi melanjutkan setelah proses restart pada session yang sama. `start_time` = timestamp entri pertama dari chunk pertama session itu.
 - Flush tick tiap 5 detik menutup chunk yang sudah melewati jendelanya.
 - Upload replay lewat `ARTrackerSender` bila host mengaturnya (`NetworkConfig.sender`), jadi Chucker, certificate pinning, dan proxy host ikut mencakupnya; tanpa sender dipakai `HttpURLConnection` bawaan (`ReplayClient`). Karena itu `SendRequest` punya `method` (`POST`, atau `PUT` untuk upload) dan `SendResponse` punya `body` (langkah `chunk-url` membaca `upload_url` darinya). `FlushWorker` di proses tanpa `init` selalu memakai transport bawaan.
@@ -261,7 +261,7 @@ Replay adalah urutan **screenshot asli** aplikasi. Data sensitif di-mask **di pe
 
 ### 6.6 Pipeline screenshot
 
-API: `ReplayConfig(enabled, sampleRate, framesPerSecond, quality = ReplayQuality.LOW|STANDARD|HIGH)`. Preset (sisi pendek gambar / kualitas JPEG): LOW 480 px / 50, STANDARD 720 px / 60, HIGH 1080 px / 75, tidak pernah di-upscale. `framesPerSecond` dijepit 0,5–10 (disarankan 2).
+API: `ReplayConfig(enabled, sampleRate, framesPerSecond, quality = ReplayQuality.LOW|STANDARD|HIGH, …, onErrorSampleRate)` (`onErrorSampleRate` parameter terakhir, default `1.0`). Preset (sisi pendek gambar / kualitas JPEG): LOW 480 px / 50, STANDARD 720 px / 60, HIGH 1080 px / 75, tidak pernah di-upscale. `framesPerSecond` dijepit 0,5–10 (disarankan 2).
 
 **Capture** (`replay/screenshot/`):
 

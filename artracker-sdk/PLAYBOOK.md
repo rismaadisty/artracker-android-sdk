@@ -189,10 +189,10 @@ Gate awal: `replay.enabled = true` **dan** sampling deterministik `hash(session_
 
 Default berubah: `sampleRate` kini `0.0` (dulu `0.1`) dan ada `onErrorSampleRate = 1.0` (parameter terakhir `ReplayConfig`). Mode per sesi: `sampleRate` kena -> rekam penuh (seperti sebelumnya); jika tidak, `onErrorSampleRate` kena (di-hash dari `sessionId + ":on-error"`) -> mode buffer; jika tidak, tidak direkam. `startReplay()` selalu mode penuh, dan beralih ke penuh di tengah sesi buffer mengunggah buffer yang tertahan.
 
-- Chunk 5 dtk disimpan di perangkat ("held", `state = 0`, `seq = -1`), maks 60 dtk terakhir / 8 chunk per sesi; tidak diunggah selama belum dipromosikan.
+- Chunk 5 dtk disimpan di perangkat ("held", `state = 0`, `seq = -1`), maks 60 dtk terakhir / 13 chunk per sesi; tidak diunggah selama belum dipromosikan.
 - Trigger unggah: item `ERROR`/`FATAL` dari proses ini yang dicatat (termasuk ANR watchdog API 24-29). Maks 3 per sesi dengan jeda >= 60 dtk, ditambah 30 dtk rekaman lanjutan.
 - Setelah crash JVM, ANR API 30+ atau crash native, buffer run sebelumnya diunggah pada launch berikutnya; selain itu dibuang. Buffer sesi yang timeout dibuang.
-- Celah yang diketahui: hingga ~5 dtk terakhir sebelum crash (chunk yang masih di memori) hilang. Item crash yang dibuang `beforeSend` host dianggap run bersih (tanpa replay). Jika sebuah launch berstatus disabled, keputusan launch berikutnya hanya melihat apakah pendahulunya sendiri crash, sehingga crash sebelum launch disabled bisa kehilangan buffer-nya.
+- Celah yang diketahui: hingga ~5 dtk terakhir sebelum crash (chunk yang masih di memori) hilang. Item error yang dibuang `beforeSend` host tetap memicu unggah buffer (pemicu jalan saat item di-enqueue); crash JVM yang dibuang `beforeSend` dianggap run bersih, sedangkan item exit `anr`/`native_crash` tetap dihitung crash walau dibuang `beforeSend`. Jika sebuah launch berstatus disabled, keputusan launch berikutnya hanya melihat apakah pendahulunya sendiri crash, sehingga crash sebelum launch disabled bisa kehilangan buffer-nya.
 - DB replay naik ke versi 5 (`artracker_replay.db`); chunk yang antre sebelum upgrade tetap diunggah.
 
 ### A7. Session profiling (`perf/`, opt-in)

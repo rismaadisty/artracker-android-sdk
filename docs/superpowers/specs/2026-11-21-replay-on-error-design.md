@@ -44,7 +44,7 @@ Keputusan saya (bisa dikoreksi):
 |---|---|---|
 | Config | `ReplayConfig.sampleRate` default `0.1` → `0.0`; tambah `onErrorSampleRate` default `1.0` | Nama sejalan dengan `sampleRate`; perubahan default dicatat di README/CHANGELOG sebagai perubahan perilaku |
 | Pemilihan sesi | Sesi lolos `sampleRate` → mode **full** (seperti sekarang). Kalau tidak, sesi lolos `onErrorSampleRate` → mode **buffer**. Hash `Sampling.isSampled` yang sama, dengan salt berbeda untuk rate kedua supaya kedua keputusan independen | Satu sesi hanya punya satu mode |
-| Panjang buffer | 60 detik: simpan chunk berstatus ditahan selama `last_ts` ≥ (chunk terbaru − 60 dtk), maksimal 8 chunk | Konteks cukup, ≤ ±5 MB |
+| Panjang buffer | 60 detik: simpan chunk berstatus ditahan selama `last_ts` ≥ (chunk terbaru − 60 dtk), maksimal 13 chunk (12 × 5 dtk + chunk pemicu) | Konteks cukup, ≤ ±5 MB |
 | Window chunk di mode buffer | 5 detik (mode full tetap 10 detik) | Saat crash, chunk yang masih terbuka di memori hilang; window lebih kecil = yang hilang ≤ 5 dtk |
 | Rekam lanjut setelah error di-log | 30 detik: chunk yang ditutup dalam 30 dtk setelah pemicu langsung siap kirim | Supaya akibat error terlihat |
 | Batas per sesi | Maksimal 3 pemicu error di-log per sesi, jeda ≥ 60 dtk antar-pemicu. Crash dan ANR tidak dibatasi (prosesnya berhenti) | Mencegah anti-goal error beruntun |
@@ -68,7 +68,7 @@ Keputusan saya (bisa dikoreksi):
 1. `ReplayController.shouldRecord` memilih mode per sesi (full / buffer / tidak merekam).
 2. Mode buffer: `ScreenChunker` memakai window 5 dtk. Batch yang ditutup membawa `held = true` ke `ReplaySink`.
 3. `ReplayIntake` → `ReplayStore.enqueue(held)`: tulis body + row `state = 0 (held)`, `seq` NULL, lalu buang chunk
-   held sesi itu di luar jendela 60 dtk / 8 chunk. Uploader **tidak** di-kick untuk chunk held.
+   held sesi itu di luar jendela 60 dtk / 13 chunk. Uploader **tidak** di-kick untuk chunk held.
 4. `claim()` hanya mengambil `state = 1 (ready)`. Eviction kapasitas global tetap berlaku untuk semua row.
 5. **Pemicu saat proses hidup** (item `ERROR`/`FATAL` lewat `onItemAccepted`, termasuk ANR watchdog):
    - controller menutup chunk terbuka (ikut diberi `has_error`), lalu memanggil `promote(sessionId)`;

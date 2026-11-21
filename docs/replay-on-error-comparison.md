@@ -55,7 +55,7 @@ Refactor, semua sesi ke buffer      → hanya 60 detik terakhir diupload, ±maks
 | **Kuota per sesi terekam** | **[fakta]** Budget ±5 MB/menit. Terukur 16,91 MB untuk 5 menit scroll terus (2 fps, `STANDARD`), ±3,4 MB/menit. | ±1–5 MB per pemicu; 0 kalau tidak ada pemicu. |
 | **CPU di main thread** | **[fakta]** Capture p95 6,2 ms per frame (target 16 ms), OPPO CPH2387, debug build. | Sama per frame. Usulan: 1 fps, bisa diturunkan ke 0,5 fps atau kualitas `LOW` di mode ini. |
 | **Baterai** | **[fakta]** Belum diukur. CPU saat background < 0,1% (replay berhenti saat app di background). | Per HP sama atau sedikit lebih kecil (tanpa upload). Tetap perlu diukur. |
-| **Penyimpanan di HP** | **[fakta]** Antrean replay maks 50 MB (`ReplayStore`), dikosongkan setelah upload. | **[usulan]** Buffer bergulir 6 chunk × 10 detik ≈ maks 5 MB; chunk lama ditimpa. |
+| **Penyimpanan di HP** | **[fakta]** Antrean replay maks 50 MB (`ReplayStore`), dikosongkan setelah upload. | **[usulan]** Buffer bergulir maks 13 chunk × 5 detik (60 detik) ≈ maks 5 MB; chunk lama ditimpa. |
 | **Crash yang punya replay** | ±10% (hanya crash di sesi terpilih). | Hampir semua. Risiko: ≤10 detik terakhir yang belum ditulis ke disk bisa hilang saat proses mati. |
 | **ANR** | **[fakta]** Dideteksi oleh watchdog (API 24–29, saat itu juga) dan `ApplicationExitInfo` (API 30+, baru terbaca saat app dibuka lagi). | API 24–29: upload langsung. API 30+: buffer dari disk dikirim saat app dibuka lagi. |
 | **Error yang di-log** | **[fakta]** Hanya menandai chunk `has_error`. Flag ini belum dipakai oleh backend maupun dashboard. | **[usulan]** Memicu upload buffer dan perekaman lanjutan sebentar. Dibatasi per sesi supaya error beruntun tidak boros kuota. |
@@ -98,7 +98,7 @@ Ini **bukan data produksi**. Ganti asumsinya dengan trafik nyata, atau pakai kal
 
 1. Sesi mulai, SDK mengecek `onErrorSampleRate`.
 2. Kalau terpilih: capture → masking → JPEG → chunk 10 detik (sama seperti sekarang).
-3. Chunk ditutup → disimpan dengan status **ditahan**. Hanya 6 chunk terakhir yang disimpan.
+3. Chunk ditutup → disimpan dengan status **ditahan**. Hanya 60 detik terakhir (maks 13 chunk) yang disimpan.
 4. Kalau ada pemicu: chunk sesi itu yang berstatus ditahan diubah menjadi **siap kirim** → upload.
 5. Kalau sesi berakhir tanpa pemicu: chunk yang ditahan dihapus.
 

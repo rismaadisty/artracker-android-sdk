@@ -205,7 +205,7 @@ td.lose { background: var(--bad-soft); }
           <td>Per HP sama atau sedikit lebih kecil (tanpa upload). Tetap perlu diukur.</td></tr>
         <tr><th>Penyimpanan di HP</th>
           <td><span class="tag fact">fakta</span> Antrean replay maks 50 MB (<code>ReplayStore</code>), dikosongkan setelah upload.</td>
-          <td class="win"><span class="tag prop">usulan</span> Buffer bergulir 6 chunk × 10 dtk ≈ maks 5 MB; chunk lama ditimpa.</td></tr>
+          <td class="win"><span class="tag prop">usulan</span> Buffer bergulir maks 13 chunk × 5 dtk (60 dtk) ≈ maks 5 MB; chunk lama ditimpa.</td></tr>
         <tr><th>Crash yang punya replay</th>
           <td class="lose">±10% (hanya crash di sesi terpilih).</td>
           <td class="win">Hampir semua. Risiko: ≤10 dtk terakhir yang belum ditulis ke disk bisa hilang saat proses mati.</td></tr>
@@ -298,7 +298,7 @@ td.lose { background: var(--bad-soft); }
       <ol>
         <li>Sesi mulai, cek <code>onErrorSampleRate</code>.</li>
         <li>Terpilih: capture → masking → JPEG → chunk 10 dtk (sama).</li>
-        <li>Chunk ditutup → disimpan dengan status <b>ditahan</b>; hanya 6 chunk terakhir yang disimpan.</li>
+        <li>Chunk ditutup → disimpan dengan status <b>ditahan</b>; hanya 60 dtk terakhir (maks 13 chunk) yang disimpan.</li>
         <li>Pemicu: chunk ditahan sesi itu diubah jadi <b>siap kirim</b> → upload.</li>
         <li>Sesi berakhir tanpa pemicu: chunk ditahan dihapus.</li>
       </ol>
