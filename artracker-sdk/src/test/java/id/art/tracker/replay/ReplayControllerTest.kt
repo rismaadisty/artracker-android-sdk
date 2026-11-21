@@ -1431,6 +1431,61 @@ class ReplayControllerTest {
         assertEquals(listOf("accept:$first:held=true", "discard:$first"), sinkEvents.toList())
     }
 
+    /** BUFFER session, one held chunk closed by the background, then the session times out in the background. */
+    private fun bufferThenBackgroundTimeout(): String {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        val old = core.session.peekId()!!
+        ProcessLifecycleTestUtil.stop()
+        settle()
+        assertEquals(listOf("accept:$old:held=true"), sinkEvents.toList())
+        clock.advance(1_800_001) // just past the 30 minute timeout
+        return old
+    }
+
+    @Test
+    fun bufferMode_backgroundTimeout_newSession_discardsOldHeld() {
+        val old = bufferThenBackgroundTimeout()
+
+        ProcessLifecycleTestUtil.start() // the core rotates the session, then replay re-evaluates
+        applyPosted()
+        settle()
+        val fresh = core.session.peekId()!!
+        assertNotEquals(old, fresh)
+        assertTrue(controller().isRunning)
+        assertEquals(RecordingMode.BUFFER, controller().mode)
+        assertEquals(listOf("accept:$old:held=true", "discard:$old"), sinkEvents.toList())
+
+        controller().onDisabledChanged() // a later re-evaluate does not discard again
+        applyPosted()
+        assertEquals(1, sinkEvents.count { it == "discard:$old" })
+    }
+
+    @Test
+    fun bufferMode_backgroundTimeout_newSessionNotRecorded_discardsOldHeld() {
+        var recordOnly: String? = null
+        sampler = { id, rate -> (recordOnly == null || id.startsWith(recordOnly!!)) && onlyOnError(id, rate) }
+        startCore(ReplayConfig(enabled = true))
+        val (_, tv) = textActivity()
+        changeAndCapture(tv)
+        val old = core.session.peekId()!!
+        recordOnly = old
+        ProcessLifecycleTestUtil.stop()
+        settle()
+        clock.advance(1_800_001)
+
+        ProcessLifecycleTestUtil.start()
+        applyPosted()
+        settle()
+        assertNotEquals(old, core.session.peekId())
+        assertFalse(controller().isRunning)
+        assertEquals(listOf("accept:$old:held=true", "discard:$old"), sinkEvents.toList())
+
+        controller().onDisabledChanged() // a later re-evaluate does not discard again
+        applyPosted()
+        assertEquals(1, sinkEvents.count { it == "discard:$old" })
+    }
+
     @Test
     fun fullMode_unchanged_noPromoteNoHeld() {
         sampler = { _, _ -> true }

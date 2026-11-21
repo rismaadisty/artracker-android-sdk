@@ -296,14 +296,22 @@ internal class ReplayController(
         }
         val sessionId = core.session.currentId()
         val mode = modeFor(sessionId)
-        // A BUFFER session that ended without a trigger: its held chunks are of no use any more.
-        val endedBuffer = recordingSessionId.takeIf { running && recordingMode == RecordingMode.BUFFER && it != sessionId }
+        // A BUFFER session that ended without a trigger: its held chunks are of no use any more. [halt] keeps the id and
+        // mode of the last run, so this also covers a session that timed out while recording was stopped (background).
+        val endedBuffer = recordingSessionId.takeIf { recordingMode == RecordingMode.BUFFER && it != sessionId }
         if (mode == null) {
-            halt(flushPipeline = false) // closes the open chunk first (held), on the same serial context
-            if (endedBuffer != null) submit { sink.discardHeld(endedBuffer) }
+            halt(flushPipeline = false) // when running: closes the open chunk first (held), on the same serial context
+            if (endedBuffer != null) {
+                submit { sink.discardHeld(endedBuffer) }
+                // Forgotten once discarded, so a later re-evaluate does not discard again.
+                recordingSessionId = null
+                recordingMode = null
+            }
             return
         }
         if (!running) {
+            // Queued before begin's applyMode and before any frame of the new run.
+            if (endedBuffer != null) submit { sink.discardHeld(endedBuffer) }
             begin(sessionId, mode)
         } else if (sessionId != recordingSessionId) {
             val previousMode = recordingMode
