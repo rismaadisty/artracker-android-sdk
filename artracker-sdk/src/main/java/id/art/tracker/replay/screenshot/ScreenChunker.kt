@@ -54,8 +54,14 @@ internal class ScreenChunker(
     /** The user of a SESSION (not "whoever is signed in now"): a late frame of an ended session keeps its user. */
     private val userId: (String) -> String?,
     private val maxGzipBytes: Int = DEFAULT_MAX_GZIP_BYTES,
-    private val windowMs: Long = DEFAULT_WINDOW_MS,
+    windowMs: Long = DEFAULT_WINDOW_MS,
 ) {
+    /** Chunk window; may change while a chunk is open (processing context only). */
+    var windowMs: Long = windowMs
+
+    /** Marks chunks closed from now on as held (read at close, not at open). Processing context only. */
+    var held: Boolean = false
+
     enum class Add { ADDED, TOO_LARGE }
 
     private val frames = ArrayList<ScreenFrame>()
@@ -175,6 +181,7 @@ internal class ScreenChunker(
             environment = environment,
             format = ReplayFormat.SCREEN_V1,
             hasRageClick = rageFlagged,
+            held = held,
         )
         try {
             sink.accept(batch)
@@ -257,6 +264,7 @@ internal class ScreenChunker(
     companion object {
         const val DEFAULT_MAX_GZIP_BYTES: Int = 2 * 1024 * 1024
         const val DEFAULT_WINDOW_MS: Long = 10_000
+        const val BUFFER_WINDOW_MS: Long = 5_000
         private const val PLATFORM = "android"
         private const val MIME_JPEG = "image/jpeg"
         private const val DATA_FACTOR = 1.05

@@ -355,4 +355,36 @@ class ScreenChunkerTest {
     }
 
     // endregion
+
+    @Test
+    fun close_carriesHeldFlag() {
+        val c = chunker()
+        c.held = true
+        c.addFrame("s1", frame())
+        c.close()
+        c.held = false
+        c.addFrame("s1", frame(seed = 2))
+        c.close()
+        assertEquals(listOf(true, false), batches.map { it.held })
+    }
+
+    @Test
+    fun heldReadAtClose_notAtOpen() {
+        val c = chunker()
+        c.held = true
+        c.addFrame("s1", frame())
+        c.held = false
+        c.close()
+        assertFalse(batches.single().held)
+    }
+
+    @Test
+    fun windowMs_change_appliesToOpenChunk() {
+        val c = chunker()
+        c.addFrame("s1", frame())
+        c.windowMs = ScreenChunker.BUFFER_WINDOW_MS
+        clock.advance(5_000)
+        c.closeIfDue()
+        assertEquals(1, batches.size)
+    }
 }
