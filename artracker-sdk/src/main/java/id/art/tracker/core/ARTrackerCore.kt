@@ -415,7 +415,7 @@ internal class ARTrackerCore(
             // An error in the session flags the replay batch it happened in (the viewer jumps to it).
             onItemAccepted = {
                 replay?.let {
-                    it.noteError()
+                    it.onError()
                     it.onTrigger(TriggerKind.ERROR) // the error dialog / screen is on display now: capture it
                 }
             },
