@@ -43,7 +43,9 @@ class ReplayStoreTest {
         maxBytes: Long = 20L * 1024 * 1024,
         maxBatches: Int = 200,
         maxAttempts: Int = 8,
-    ): ReplayStore = ReplayStore(context, clock, maxBytes, maxBatches, maxAttempts, dbName).also { opened += it }
+        heldWindowMs: Long = ReplayStore.HELD_WINDOW_MS,
+        maxHeldPerSession: Int = ReplayStore.MAX_HELD_PER_SESSION,
+    ): ReplayStore = ReplayStore(context, clock, maxBytes, maxBatches, maxAttempts, heldWindowMs, maxHeldPerSession, dbName).also { opened += it }
 
     private val bodiesDir: File get() = File(context.noBackupFilesDir, "artracker/replay")
 
@@ -58,6 +60,7 @@ class ReplayStoreTest {
         hasError: Boolean = false,
         userId: String? = "u1",
         hasRageClick: Boolean = false,
+        held: Boolean = false,
     ) = NewReplayBatch(
         sessionId = session,
         gzipBody = body,
@@ -69,6 +72,7 @@ class ReplayStoreTest {
         environment = "test",
         format = format,
         hasRageClick = hasRageClick,
+        held = held,
     )
 
     @Test
@@ -454,5 +458,109 @@ class ReplayStoreTest {
         val u = s.claim()!!
         assertEquals(1, u.seq)
         assertTrue(u.hasRageClick)
+    }
+
+    @Test fun heldBatch_isNotClaimable_andNotPending() {
+        val s = store(); s.enqueue(batch("s1", held = true))
+        assertNull(s.claim()); assertEquals(0, s.pendingCount())
+    }
+
+    @Test fun promote_makesHeldClaimable_withSeqInFirstTsOrder_andStartFromFirstPromoted() {
+        val s = store()
+        s.enqueue(batch("s1", firstTs = 25_000, lastTs = 29_000, held = true))
+        s.enqueue(batch("s1", firstTs = 20_000, lastTs = 24_000, held = true))
+        assertEquals(2, s.promote("s1"))
+        val a = s.claim()!!; s.complete(a.id); val b = s.claim()!!
+        assertEquals(0, a.seq); assertEquals(1, b.seq)
+        assertEquals(20_000, a.startMs); assertEquals(9_000, b.durationMs)
+    }
+
+    @Test fun held_trimmedTo60sWindow() {
+        val s = store()
+        s.enqueue(batch("s1", firstTs = 0, lastTs = 4_000, held = true))
+        s.enqueue(batch("s1", firstTs = 65_000, lastTs = 70_000, held = true))
+        assertEquals(1, s.promote("s1"))
+        assertEquals(0, bodyFiles().size - 1)
+    }
+
+    @Test fun held_cappedAt8PerSession_newestKept() {
+        val s = store()
+        repeat(10) { i -> s.enqueue(batch("s1", firstTs = i * 5_000L, lastTs = i * 5_000L + 4_000, held = true)) }
+        assertEquals(8, s.promote("s1"))
+        assertEquals(10_000, s.claim()!!.startMs)
+    }
+
+    @Test fun held_trimDoesNotTouchOtherSessionsOrReadyRows() {
+        val s = store()
+        s.enqueue(batch("s1", firstTs = 0, lastTs = 1_000))
+        s.enqueue(batch("s2", firstTs = 0, lastTs = 1_000, held = true))
+        s.enqueue(batch("s2", firstTs = 100_000, lastTs = 105_000, held = true))
+        assertEquals("s1", s.claim()!!.sessionId)
+        s.enqueue(batch("s3", firstTs = 0, lastTs = 1_000, held = true))
+        assertEquals(1, s.promote("s3"))
+    }
+
+    @Test fun promoteHeldBefore_ignoresSessionId() {
+        val s = store(); s.enqueue(batch("s1", held = true)); clock.advance(10)
+        val cutoff = clock.nowMs(); s.enqueue(batch("s1", held = true))
+        assertEquals(1, s.promoteHeldBefore(cutoff)); assertEquals(1, s.pendingCount())
+    }
+
+    @Test fun dropHeld_andDropHeldBefore_deleteRowsAndBodyFiles() {
+        val s = store()
+        s.enqueue(batch("s1", held = true)); s.enqueue(batch("s2", held = true))
+        assertEquals(1, s.dropHeld("s1"))
+        assertEquals(1, bodyFiles().size)
+        clock.advance(10)
+        assertEquals(1, s.dropHeldBefore(clock.nowMs()))
+        assertTrue(bodyFiles().isEmpty())
+        assertEquals(0, s.promote("s2"))
+    }
+
+    @Test fun promotedThenLaterReady_continuesSeq() {
+        val s = store()
+        s.enqueue(batch("s1", firstTs = 1_000, lastTs = 2_000, held = true))
+        s.enqueue(batch("s1", firstTs = 3_000, lastTs = 4_000, held = true))
+        s.promote("s1")
+        clock.advance(1)
+        s.enqueue(batch("s1", firstTs = 5_000, lastTs = 6_000))
+        val seqs = List(3) { s.claim()!!.seq }
+        assertEquals(listOf(0, 1, 2), seqs)
+    }
+
+    @Test fun clearFormat_alsoDropsHeld() {
+        val s = store(); s.enqueue(batch("s1", held = true))
+        s.clearFormat(ReplayFormat.SCREEN_V1)
+        assertEquals(0, s.promote("s1")); assertTrue(bodyFiles().isEmpty())
+    }
+
+    @Test fun upgradeFromV4_existingRowsStayReady() {
+        val helper = object : SQLiteOpenHelper(context, dbName, null, 4) {
+            override fun onCreate(db: SQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE replay_batches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, " +
+                        "created_at INTEGER NOT NULL, first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, " +
+                        "event_count INTEGER NOT NULL, has_error INTEGER NOT NULL, has_rage_click INTEGER NOT NULL DEFAULT 0, " +
+                        "user_id TEXT, environment TEXT NOT NULL, file TEXT NOT NULL, " +
+                        "format TEXT NOT NULL DEFAULT '${ReplayFormat.SCREEN_V1}', size_bytes INTEGER NOT NULL, " +
+                        "claimed INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0)",
+                )
+                db.execSQL("CREATE INDEX idx_replay_pending ON replay_batches(claimed, created_at, seq)")
+                db.execSQL(
+                    "CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL, " +
+                        "start_ms INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+                )
+            }
+            override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) = Unit
+        }
+        bodiesDir.mkdirs()
+        File(bodiesDir, "old.gz").writeBytes(byteArrayOf(9, 9))
+        helper.writableDatabase.execSQL(
+            "INSERT INTO replay_batches VALUES ('old','s1',0,1,1000,2000,3,0,0,'u1','test','old.gz','${ReplayFormat.SCREEN_V1}',2,0,0)",
+        )
+        helper.close()
+        val s = store()
+        assertEquals(1, s.pendingCount())
+        assertEquals("old", s.claim()!!.id)
     }
 }

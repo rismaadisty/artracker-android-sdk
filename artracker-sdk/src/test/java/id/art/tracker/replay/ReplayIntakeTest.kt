@@ -32,6 +32,10 @@ class ReplayIntakeTest {
         override fun resetOrphaned() = Unit
         override fun purgeOlderThan(cutoffMs: Long) = Unit
         override fun clearFormat(format: String) = Unit
+        override fun promote(sessionId: String): Int = 0
+        override fun promoteHeldBefore(cutoffMs: Long): Int = 0
+        override fun dropHeld(sessionId: String): Int = 0
+        override fun dropHeldBefore(cutoffMs: Long): Int = 0
     }
 
     @Test
