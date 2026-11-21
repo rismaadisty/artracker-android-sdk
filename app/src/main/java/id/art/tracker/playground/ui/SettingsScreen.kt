@@ -115,6 +115,9 @@ fun SettingsScreen(
         NumberRow("replaySampleRate", presetVersion, stringResource(R.string.settings_replay_rate), d.replaySampleRate.toString(), invalidFields, { invalidFields = it }) { text ->
             text.toDoubleOrNull()?.also { v -> editor.update { it.copy(replaySampleRate = v) } } != null
         }
+        NumberRow("replayOnErrorSampleRate", presetVersion, stringResource(R.string.settings_replay_on_error_rate), d.replayOnErrorSampleRate.toString(), invalidFields, { invalidFields = it }) { text ->
+            text.toDoubleOrNull()?.also { v -> editor.update { it.copy(replayOnErrorSampleRate = v) } } != null
+        }
         NumberRow("replayFps", presetVersion, stringResource(R.string.settings_replay_fps), d.replayFps.toString(), invalidFields, { invalidFields = it }) { text ->
             text.toDoubleOrNull()?.also { v -> editor.update { it.copy(replayFps = v) } } != null
         }

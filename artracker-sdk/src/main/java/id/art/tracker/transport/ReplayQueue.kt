@@ -25,7 +25,8 @@ internal class NewReplayBatch(
 
 /**
  * A queued batch handed out by [ReplayQueue.claim]. [seq] is assigned by the queue (persisted per session),
- * [startMs] is the first timestamp of the session's first batch and [durationMs] runs from there to this batch's last event.
+ * [startMs] is the first timestamp of the session's first promoted or ready batch (held rows, `state = 0` and
+ * `seq = -1`, are not uploaded until promoted and do not set it), and [durationMs] runs from there to this batch's last event.
  */
 internal class ReplayUpload(
     val id: String,

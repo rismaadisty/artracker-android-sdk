@@ -21,6 +21,10 @@ import java.io.IOException
  * `seq` is allocated from `replay_seq`, which outlives the batches (complete/clear/eviction keep it), so a session that
  * continues after a process restart never reuses a `seq`: the server overwrites the stored object on a repeated `seq`
  * while ignoring the repeated ack.
+ *
+ * Buffer mode stores HELD rows (`state = 0`, `seq = -1`): they are never claimed for upload until promoted (they then
+ * get a `seq` and become ready), and are trimmed to the held window and cap, or dropped when the run ended cleanly.
+ * `start_ms` of a session comes from its first promoted or ready chunk, so a replay can start mid-session.
  */
 internal class ReplayStore(
     context: Context,

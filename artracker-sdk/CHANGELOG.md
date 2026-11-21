@@ -5,8 +5,24 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Behavior change: `ReplayConfig.sampleRate` default `0.1` -> `0.0`.** Apps that want full-session replay must set
+  `sampleRate` explicitly (for example `0.1` to keep the old behavior). With `enabled = true` and the new defaults a
+  session is recorded in buffer mode (see below), not in full.
+- The replay database moved to version 5 (`artracker_replay.db`); chunks queued before the upgrade keep uploading.
+
 ### Added
 
+- **Replay on error**: `ReplayConfig.onErrorSampleRate` (default `1.0`, last constructor parameter, `0.0..1.0`). A
+  session whose `sampleRate` hits is recorded in full as before; otherwise, if `onErrorSampleRate` hits, it is recorded
+  in **buffer mode**: 5 s chunks are kept on the device ("held", the last 60 s, at most 8 chunks per session) and not
+  uploaded. They are uploaded when an `ERROR` or `FATAL` item of this process is logged (including the API 24-29 ANR
+  watchdog), at most 3 times per session and at least 60 s apart, followed by 30 s of follow-up recording. After a JVM
+  crash, an API 30+ ANR or a native crash the previous run's buffer is uploaded at the next launch, otherwise it is
+  dropped. `ARTracker.startReplay()` records in full, and switching to full during a buffer session uploads the held
+  buffer. Known gap: up to the last ~5 s before a crash (the chunk still in memory) is lost. A crash item dropped by
+  `beforeSend` counts as a clean run (no replay). A timed-out buffer session's held chunks are discarded.
 - **Gradle plugin `id.art.tracker.symbols`** (module `artracker-gradle-plugin`, released with the SDK under the same
   version): after every minified Android build it uploads the R8/ProGuard `mapping.txt` to Artracker, one
   `uploadArtracker<Variant>Mapping` task per minified variant, so crashes in the dashboard are deobfuscated. It needs a

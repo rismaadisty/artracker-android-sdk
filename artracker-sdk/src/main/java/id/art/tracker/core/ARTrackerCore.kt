@@ -673,7 +673,9 @@ internal class ARTrackerCore(
     /**
      * Held (buffer-mode) replay chunks stored before this process started belong to an earlier one: uploaded when it
      * ended in a crash, a native crash or an ANR (the replay of what led to it), dropped otherwise. Never creates the
-     * replay database, and does nothing while the SDK is disabled (a 401 trip may end; the rows wait for it).
+     * replay database, and does nothing while the SDK is disabled. The rows are not kept for a later decision: the next
+     * enabled launch decides only by whether its own predecessor crashed, so a crash before a disabled launch can lose
+     * its buffer.
      */
     private fun decideHeldReplay(previousRunCrashed: Boolean) {
         runCatching {

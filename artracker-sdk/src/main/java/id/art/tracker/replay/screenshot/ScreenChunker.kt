@@ -32,6 +32,7 @@ internal class ScreenTouch(val ts: Long, val xDp: Int, val yDp: Int, val kind: T
 /**
  * Groups screenshot frames and touches into `artracker-screen-v1` chunks (gzipped JSON, at most [maxGzipBytes]):
  * `{ format, platform:"android", seq, frames:[{ts, screen, w, h, vw, vh, mime, data, masked}], touches:[{ts, x, y, kind}] }`.
+ * The chunk window [windowMs] is set per recording mode (10 s in full mode, 5 s in buffer mode).
  * A chunk closes [windowMs] after its first entry, on a session change, when the next frame would not fit, or on
  * [close]. `seq` counts the chunks of a session from 0.
  *

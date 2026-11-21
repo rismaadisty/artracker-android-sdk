@@ -101,7 +101,7 @@ class MyApp : Application() {
                 apiKey = "art_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
                 environment = "production",
                 appVersion = BuildConfig.VERSION_NAME,
-                replay = ReplayConfig(enabled = true, sampleRate = 0.1),
+                replay = ReplayConfig(enabled = true, sampleRate = 0.1, onErrorSampleRate = 1.0),
             ),
         )
     }
@@ -126,7 +126,7 @@ SDK uninitialised and every other call a no-op; each validation error is logged 
 | `environment` | `"production"` | Sent in the envelope `context.environment` |
 | `appVersion` | `null` | Falls back to the app's `versionName` |
 | `debug` | `false` | SDK logs to logcat (tag `ARTracker`) |
-| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.1, framesPerSecond = 1.0, quality = ReplayQuality.STANDARD, idleAfterMs = 30_000, dormantAfterMs = 180_000)` | `framesPerSecond` is clamped to 0.5..10.0 (2 recommended); NaN or infinity is rejected. `quality` sets the size and JPEG quality of each frame. `idleAfterMs` must be >= 5000 and `dormantAfterMs` > `idleAfterMs`, otherwise the config is invalid. See "Session replay" |
+| `replay` | `ReplayConfig(enabled = false, sampleRate = 0.0, framesPerSecond = 1.0, quality = ReplayQuality.STANDARD, idleAfterMs = 30_000, dormantAfterMs = 180_000, onErrorSampleRate = 1.0)` | `sampleRate` records the whole session (default `0.0`, was `0.1`); `onErrorSampleRate` keeps a rolling buffer and uploads it when an error is logged, see "Replay on error". Both must be 0.0..1.0. `framesPerSecond` is clamped to 0.5..10.0 (2 recommended); NaN or infinity is rejected. `quality` sets the size and JPEG quality of each frame. `idleAfterMs` must be >= 5000 and `dormantAfterMs` > `idleAfterMs`, otherwise the config is invalid. See "Session replay" |
 | `privacy` | `PrivacyConfig(maskAllInputs = true, maskAllText = false, sensitiveViewClasses = emptySet())` | See "Masking" |
 | `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false, sender = null)` | The first four are used by the OkHttp interceptor; `captureHeaders` is reserved: headers are never captured. `sender` replaces the transport, see "Custom transport" |
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
@@ -295,9 +295,10 @@ Priority: password > explicit unmask > explicit mask or masked ancestor / custom
 
 ## Session replay
 
-Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.1` (deterministic per session id),
+Opt-in: `ReplayConfig(enabled = false)` by default, with `sampleRate = 0.0` (full-session recording, deterministic per session id; it was `0.1` before the replay-on-error
+change, so set it explicitly to keep full replay), `onErrorSampleRate = 1.0` (buffer mode, see below),
 `framesPerSecond = 1.0` and `quality = ReplayQuality.STANDARD`. `ARTracker.startReplay()` / `stopReplay()` override the
-first two at runtime. A replay is a sequence of **real screenshots of the app, masked on the device**; there is no other
+sampling at runtime. A replay is a sequence of **real screenshots of the app, masked on the device**; there is no other
 mode and the SDK reads no replay setting from the server.
 
 ```kotlin
@@ -306,14 +307,26 @@ import id.art.tracker.ReplayQuality
 
 replay = ReplayConfig(
     enabled = true,
-    sampleRate = 0.1,
+    sampleRate = 0.1,                      // full-session recording for 10 % of sessions
+    onErrorSampleRate = 1.0,               // the rest: buffer mode, uploaded only when an error is logged
     framesPerSecond = 2.0,                 // 0.5..10 (2 recommended)
     quality = ReplayQuality.STANDARD,      // LOW 480 px / q50, STANDARD 720 px / q60, HIGH 1080 px / q75
 )
 ```
 
+- **Replay on error (buffer mode)**: a session whose `sampleRate` hits is recorded in full. Otherwise, when
+  `onErrorSampleRate` hits (sampled on `sessionId + ":on-error"`), the session is recorded in buffer mode: 5 s chunks are
+  kept on the device ("held": the last 60 s, at most 8 chunks per session) and not uploaded. They are uploaded when an
+  `ERROR` or `FATAL` item of this process is logged (including the API 24-29 ANR watchdog), at most 3 times per session and
+  at least 60 s apart, plus 30 s of follow-up recording. After a JVM crash, an API 30+ ANR or a native crash the previous
+  run's buffer is uploaded at the next launch, otherwise it is dropped. A buffer session that times out discards its held
+  chunks. `ARTracker.startReplay()` records in full, and switching to full during a buffer session uploads the held buffer.
+  **Known gap**: up to the last ~5 s before a crash (the chunk still open in memory) is lost. A crash item dropped by your
+  `beforeSend` counts as a clean run (no replay). If a launch happens while the SDK is disabled, the next enabled launch
+  decides only by whether its own predecessor crashed, so a crash before a disabled launch can lose its buffer. The replay
+  database is version 5; chunks queued before the upgrade keep uploading.
 - **Format**: `artracker-screen-v1` chunks: gzipped JSON of base64 JPEG frames (with the sanitised screen name and
-  viewport) and touches (`down`, `move`, `up`, in dp), closed after 10 s, on a session change, when the next frame would
+  viewport) and touches (`down`, `move`, `up`, in dp), closed after 10 s (5 s in buffer mode), on a session change, when the next frame would
   not fit (2 MB), or when recording stops.
 - **Captured**: every window of the app (dialogs and bottom sheets included, see limitations) composited into one
   frame, and touch coordinates (the SDK wraps `Window.Callback` and only reads coordinates; it never consumes events).
