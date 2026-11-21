@@ -373,7 +373,7 @@ replay = ReplayConfig(
   16 ms main-thread watchdog halves the rate.
 - **Data budget (economical, every network)**: about 5 MB per minute. Over budget in a rolling 60 s window the rate is
   halved (down to 0.5 fps) and, if that persists, the quality drops one preset for the session. Chunks (gzipped JSON of
-  frames and touches, `artracker-screen-v1`) close at 10 s or 2 MB and upload on Wi-Fi and cellular; offline they are
+  frames and touches, `artracker-screen-v1`) close at 10 s in full-session mode, 5 s in buffer mode, or at 2 MB, and upload on Wi-Fi and cellular; offline they are
   kept up to 50 MB (files under `noBackupFilesDir`).
 
 ## Performance monitoring
