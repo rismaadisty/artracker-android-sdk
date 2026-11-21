@@ -3,7 +3,7 @@ package id.art.tracker.replay
 /**
  * Rate-limits error-triggered replay uploads. An admitted call at time `t` blocks calls with `nowMs - t < minGapMs`;
  * only admitted calls count toward [maxPerSession] and reset the gap clock. A different session id resets both.
- * Not thread-safe: main thread only.
+ * Not thread-safe: confined to the replay processing context (`ReplayController`'s serial background context).
  */
 internal class ErrorTriggerPolicy(
     private val maxPerSession: Int = 3,

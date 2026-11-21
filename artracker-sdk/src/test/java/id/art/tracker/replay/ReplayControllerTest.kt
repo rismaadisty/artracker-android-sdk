@@ -17,6 +17,7 @@ import id.art.tracker.TelemetryItem
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.ClassAvailability
 import id.art.tracker.replay.capture.TriggerKind
+import id.art.tracker.replay.screenshot.PixelCopyApi
 import id.art.tracker.replay.screenshot.ScreenChunker
 import id.art.tracker.replay.screenshot.ScreenshotKit
 import id.art.tracker.replay.touch.TouchRecorder
@@ -135,6 +136,7 @@ class ReplayControllerTest {
         replay: ReplayConfig = ReplayConfig(enabled = true, sampleRate = 1.0),
         useDefaultFactory: Boolean = false,
         foreground: Boolean = true,
+        pixelCopy: PixelCopyApi? = null,
     ): ARTrackerCore {
         val cfg = config(replay)
         core = if (useDefaultFactory) {
@@ -142,7 +144,8 @@ class ReplayControllerTest {
         } else {
             ARTrackerCore(app, cfg, clock, replayFactory = { c, handler ->
                 testReplayController(
-                    c, handler, dispatcher, testScreenshotKit(c, handler, sink), { id, rate -> sampler(id, rate) },
+                    c, handler, dispatcher, testScreenshotKit(c, handler, sink, pixelCopy = pixelCopy),
+                    { id, rate -> sampler(id, rate) },
                     sink = sink, // the same sink as the chunker's: accept / promote / discardHeld arrive in order
                     imeVisibility = { imeVisible },
                 )
@@ -1352,6 +1355,63 @@ class ReplayControllerTest {
 
         assertEquals(listOf("accept:$sid:held=true", "promote:$sid"), sinkEvents.toList())
         assertTrue(batches().single().hasError)
+    }
+
+    @Test
+    fun bufferMode_errorFromAnotherThread_promotesWithoutTheMainThread() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        val sid = core.session.peekId()!!
+
+        // The API 24-29 ANR watchdog reports from its own thread while the main thread is blocked (the process may be
+        // killed from the ANR dialog before it unblocks): the main looper is deliberately not run here.
+        val reporter = Thread { controller().onError() }
+        reporter.start()
+        reporter.join()
+        dispatcher.runAll()
+
+        assertEquals(listOf("accept:$sid:held=true", "promote:$sid"), sinkEvents.toList())
+        assertTrue(batches().single().hasError)
+    }
+
+    @Test
+    fun bufferToFullSessionChange_strayFrameOfTheOldSession_isDropped() {
+        // The copy completes only when this test says so, like PixelCopy on API 26+ (its result comes back on main).
+        val copies = ArrayList<(Int) -> Unit>()
+        fun completeCopies() {
+            while (copies.isNotEmpty()) copies.removeAt(0)(PixelCopyApi.ERROR)
+            idle(0)
+        }
+        var first: String? = null
+        sampler = { id, rate -> if (first == null || id.startsWith(first!!)) onlyOnError(id, rate) else true }
+        startCore(ReplayConfig(enabled = true), pixelCopy = PixelCopyApi { _, _, done -> copies += done })
+        val (_, tv) = textActivity()
+        dispatcher.runAll()
+        first = core.session.peekId()!!
+        assertEquals(RecordingMode.BUFFER, controller().mode)
+        tv.text = "old session"
+        idle(0)
+        controller().captureFrame() // a frame of the BUFFER session whose copy is still running
+        assertTrue(copies.isNotEmpty())
+
+        ARTracker.reset() // the next session is recorded in FULL mode
+        idle(200)
+        dispatcher.runAll()
+        val second = core.session.peekId()!!
+        assertNotEquals(first, second)
+        assertEquals(RecordingMode.FULL, controller().mode)
+
+        completeCopies() // the old session's frame reaches the processing context after the change
+        dispatcher.runAll()
+        tv.text = "new session"
+        idle(0)
+        controller().captureFrame()
+        completeCopies()
+        dispatcher.runAll()
+        flushChunks()
+
+        assertTrue(sinkEvents.toString(), sinkEvents.none { it == "accept:$first:held=false" })
+        assertTrue(sinkEvents.toString(), sinkEvents.contains("accept:$second:held=false"))
     }
 
     @Test

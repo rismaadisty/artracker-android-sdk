@@ -47,9 +47,9 @@ import kotlinx.coroutines.launch
  * the CURRENT session (re-evaluated at every new session).
  *
  * Modes: [RecordingMode.FULL] uploads every chunk. [RecordingMode.BUFFER] records the same way, in
- * [ScreenChunker.BUFFER_WINDOW_MS] chunks stored held (not uploaded); an error [onError] admits by [ErrorTriggerPolicy]
- * promotes the session's held chunks and keeps chunks ready for [FOLLOW_UP_MS]. A BUFFER session that ends without a
- * trigger has its held chunks discarded.
+ * [ScreenChunker.BUFFER_WINDOW_MS] chunks stored held (not uploaded); an error ([onError]) that [ErrorTriggerPolicy]
+ * admits promotes the session's held chunks and keeps chunks ready for [FOLLOW_UP_MS]. A BUFFER session that ends
+ * without a trigger has its held chunks discarded.
  *
  * Threading:
  * - Main thread: every public method hops there ([onMain]); it owns the lifecycle state, the [scheduler], the touch
@@ -58,7 +58,8 @@ import kotlinx.coroutines.launch
  * - One serial background context ([processing], `Dispatchers.Default.limitedParallelism(1)` in production) owns the
  *   [ScreenshotKit.encoder] and [ScreenshotKit.chunker]: it masks, scales, compresses, deduplicates and chunks the
  *   frames ([ScreenChunker]), under a byte budget ([ByteBudgetGovernor]). Frames use latest-frame-wins: at most one
- *   waits; a newer frame replaces it.
+ *   waits; a newer frame replaces it. It also admits and promotes error triggers ([onError]), so they never wait for the
+ *   main thread (blocked during an ANR); other threads see what is recorded through the `@Volatile` [recording].
  *
  * Output: a frame at the first capture, on screen change (the raw name is only used to force the frame), after a
  * session change or a restart, and otherwise whenever the picture changed; touches ride on the same chunk. A closed
@@ -101,7 +102,6 @@ internal class ReplayController(
 
     /** BUFFER only: until this clock time, closed chunks are ready (the follow-up after an admitted error). */
     private var followUpUntilMs: Long? = null
-    private val errorPolicy = ErrorTriggerPolicy()
     private var forceFullNext = false
     private var currentActivity: WeakReference<Activity>? = null
     private val attachedRoots = ArrayList<WeakReference<View>>()
@@ -140,8 +140,16 @@ internal class ReplayController(
         val href: String,
         val density: Float,
         val sessionId: String,
+        val mode: RecordingMode,
         val force: Boolean,
     )
+
+    /** What is being recorded: [recordingSessionId] and [recordingMode] while [running]. */
+    private class Recording(val sessionId: String, val mode: RecordingMode)
+
+    /** Snapshot for other threads ([onError]); written on the main thread wherever it changes ([publishRecording]). */
+    @Volatile
+    private var recording: Recording? = null
 
     private val pendingShot = AtomicReference<ShotJob?>(null)
     private val shotJobQueued = AtomicBoolean(false)
@@ -156,6 +164,16 @@ internal class ReplayController(
     // region processing-context state
     private var shotSessionId: String? = null
     private var lastGovernorCap: Double? = null
+
+    /**
+     * Session and mode the chunker records for, set by the submit that applies the mode ([applyMode]). A FULL -> FULL
+     * session change applies no mode and leaves them as they were.
+     */
+    private var modeSessionId: String? = null
+    private var appliedMode: RecordingMode? = null
+
+    /** Rate limit of the error triggers ([triggerOnError]). */
+    private val errorPolicy = ErrorTriggerPolicy()
     // endregion
 
     init {
@@ -324,9 +342,10 @@ internal class ReplayController(
                 submit {
                     closeScreenChunk(resetDuplicates = false)
                     if (endedBuffer != null) sink.discardHeld(endedBuffer)
-                    applyMode(mode)
+                    applyMode(sessionId, mode)
                 }
             }
+            publishRecording()
             forceFullNext = true
             scheduler.requestSoon()
         } else if (mode != recordingMode) {
@@ -337,8 +356,9 @@ internal class ReplayController(
             submit {
                 closeScreenChunk(resetDuplicates = false)
                 if (previousMode == RecordingMode.BUFFER) sink.promote(sessionId)
-                applyMode(mode)
+                applyMode(sessionId, mode)
             }
+            publishRecording()
         }
     }
 
@@ -347,7 +367,8 @@ internal class ReplayController(
         recordingSessionId = sessionId
         recordingMode = mode
         followUpUntilMs = null
-        submit { applyMode(mode) } // before any frame of this run is submitted
+        submit { applyMode(sessionId, mode) } // before any frame of this run is submitted
+        publishRecording()
         forceFullNext = true
         lastFullAtMs = core.clock.nowMs()
         governor = screenshot.governorFactory(baseFps, replayConfig.quality)
@@ -374,6 +395,7 @@ internal class ReplayController(
     private fun halt(flushPipeline: Boolean, discard: Boolean = false) {
         if (!running) return
         running = false
+        publishRecording()
         followUpUntilMs = null
         mainHandler.removeCallbacks(flushRunnable)
         mainHandler.removeCallbacks(stateRunnable)
@@ -555,6 +577,7 @@ internal class ReplayController(
             return
         }
         val sessionId = recordingSessionId ?: return
+        val mode = recordingMode ?: return
         val activity = currentActivity?.get()
         val roots = RootViewLocator.roots(activity)
         if (roots.isEmpty()) return
@@ -576,7 +599,7 @@ internal class ReplayController(
                 if (force) post { forceFullNext = true }
                 return@capture
             }
-            submitShot(ShotJob(raw, href, density, sessionId, force))
+            submitShot(ShotJob(raw, href, density, sessionId, mode, force))
         }
     }
 
@@ -634,6 +657,14 @@ internal class ReplayController(
     /** Masks, scales, compresses and chunks one screenshot; always gives the buffer back. */
     private fun processShot(job: ShotJob) {
         try {
+            // A frame captured before a session change that applied a mode (BUFFER on either side) and processed after
+            // it: it would be recorded in the new session's mode under the old session (shipped, or held and never
+            // promoted). FULL -> FULL keeps today's path below.
+            if (job.sessionId != modeSessionId &&
+                (job.mode == RecordingMode.BUFFER || appliedMode == RecordingMode.BUFFER)
+            ) {
+                return
+            }
             if (job.sessionId != shotSessionId) {
                 screenshot.chunker.close()
                 shotSessionId = job.sessionId
@@ -696,24 +727,39 @@ internal class ReplayController(
     /**
      * An error was logged (any thread): the open replay batch (or the next one) is flagged `has_error`. In BUFFER mode
      * an error the [errorPolicy] admits also closes the open chunk, promotes the session's held chunks for upload and
-     * opens a [FOLLOW_UP_MS] window in which closed chunks are ready at once.
+     * opens a [FOLLOW_UP_MS] window in which closed chunks are ready at once. All of it but the window's end time runs on
+     * the processing context: the API 24-29 watchdog reports an ANR while the main thread is blocked, and the process
+     * may be killed from the ANR dialog before it unblocks.
      */
     internal fun onError() {
-        submit { screenshot.chunker.markError() }
-        onMain { triggerOnError() }
+        val buffer = recording?.takeIf { it.mode == RecordingMode.BUFFER } // what was recorded when the error was logged
+        submit {
+            screenshot.chunker.markError()
+            if (buffer != null) triggerOnError(buffer.sessionId)
+        }
     }
 
-    private fun triggerOnError() {
-        if (!running || recordingMode != RecordingMode.BUFFER) return
-        val sessionId = recordingSessionId ?: return
+    /** Processing context: admits the error and promotes [sessionId]'s held chunks. */
+    private fun triggerOnError(sessionId: String) {
+        // A session or mode change queued before this one already closed the error's session.
+        if (appliedMode != RecordingMode.BUFFER || modeSessionId != sessionId) return
         val now = core.clock.nowMs()
         if (!errorPolicy.admit(sessionId, now)) return
-        followUpUntilMs = now + FOLLOW_UP_MS // an admitted error during a follow-up extends it
-        submit {
-            closeScreenChunk(resetDuplicates = false) // carries has_error (marked above), still held
-            sink.promote(sessionId)
-            screenshot.chunker.held = false
+        closeScreenChunk(resetDuplicates = false) // carries has_error (marked above), still held
+        sink.promote(sessionId)
+        screenshot.chunker.held = false
+        val until = now + FOLLOW_UP_MS
+        post {
+            // An admitted error during a follow-up extends it. Not after a stop or a change: that applies a mode again.
+            if (running && recordingSessionId == sessionId && recordingMode == RecordingMode.BUFFER) followUpUntilMs = until
         }
+    }
+
+    /** Main thread: publishes [running], [recordingSessionId] and [recordingMode] to [recording]. */
+    private fun publishRecording() {
+        val sessionId = recordingSessionId
+        val mode = recordingMode
+        recording = if (running && sessionId != null && mode != null) Recording(sessionId, mode) else null
     }
 
     /** Ends the follow-up window once it is over: the chunk open now ships, later ones are held again. */
@@ -727,8 +773,10 @@ internal class ReplayController(
         }
     }
 
-    /** Processing context: the chunker records [mode] from its next chunk on. */
-    private fun applyMode(mode: RecordingMode) {
+    /** Processing context: the chunker records [sessionId] in [mode] from its next chunk on. */
+    private fun applyMode(sessionId: String, mode: RecordingMode) {
+        modeSessionId = sessionId
+        appliedMode = mode
         val buffer = mode == RecordingMode.BUFFER
         screenshot.chunker.held = buffer
         screenshot.chunker.windowMs = if (buffer) ScreenChunker.BUFFER_WINDOW_MS else ScreenChunker.DEFAULT_WINDOW_MS

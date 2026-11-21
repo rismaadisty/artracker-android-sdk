@@ -483,11 +483,38 @@ class ReplayStoreTest {
         assertEquals(0, bodyFiles().size - 1)
     }
 
-    @Test fun held_cappedAt8PerSession_newestKept() {
+    @Test fun held_cappedAt13PerSession_newestKept() {
         val s = store()
-        repeat(10) { i -> s.enqueue(batch("s1", firstTs = i * 5_000L, lastTs = i * 5_000L + 4_000, held = true)) }
-        assertEquals(8, s.promote("s1"))
-        assertEquals(10_000, s.claim()!!.startMs)
+        // 1 s apart: all inside the 60 s window, so only the cap trims.
+        repeat(15) { i -> s.enqueue(batch("s1", firstTs = i * 1_000L, lastTs = i * 1_000L + 900, held = true)) }
+        assertEquals(13, s.promote("s1"))
+        assertEquals(2_000, s.claim()!!.startMs)
+    }
+
+    @Test fun held_backToBack5sChunks_keepTheWhole60s() {
+        val s = store()
+        // 12 x 5 s = 60 s plus the chunk the trigger closes: the cap does not cut the window short.
+        repeat(13) { i -> s.enqueue(batch("s1", firstTs = i * 5_000L, lastTs = (i + 1) * 5_000L, held = true)) }
+        assertEquals(13, s.promote("s1"))
+        assertEquals(0, s.claim()!!.startMs)
+    }
+
+    @Test fun held_trimIgnoresRowsWrittenBeforeTheStoreOpened() {
+        // The previous process held 13 chunks of s1, then died; the session continues after the relaunch.
+        val previous = store()
+        repeat(13) { i ->
+            previous.enqueue(batch("s1", firstTs = i * 5_000L, lastTs = (i + 1) * 5_000L, held = true))
+            clock.advance(1)
+        }
+        previous.close()
+        clock.advance(1_000)
+        val processStart = clock.nowMs()
+        val s = store()
+        // This process's first held chunk is far past the old window: it must not trim (window or cap) the old rows
+        // before the launch decision has looked at them.
+        s.enqueue(batch("s1", firstTs = 500_000, lastTs = 505_000, held = true))
+        assertEquals(13, s.promoteHeldBefore(processStart))
+        assertEquals(1, s.promote("s1"))
     }
 
     @Test fun held_trimDoesNotTouchOtherSessionsOrReadyRows() {

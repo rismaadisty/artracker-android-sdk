@@ -37,7 +37,10 @@ internal class ReplayStore(
     dbName: String = DB_NAME,
     private val bodiesDir: File = File(context.applicationContext.noBackupFilesDir, BODIES_PATH),
 ) : ReplayQueue {
-    private val helper = object : SQLiteOpenHelper(context.applicationContext, dbName, null, DB_VERSION) {
+    /** When this store (so this process) opened: [trimHeld] leaves older held rows to the launch decision. */
+    private val openedAtMs = clock.nowMs()
+
+    private val helper =object : SQLiteOpenHelper(context.applicationContext, dbName, null, DB_VERSION) {
         override fun onCreate(db: SQLiteDatabase) {
             createBatchesTable(db)
             db.execSQL(
@@ -268,18 +271,24 @@ internal class ReplayStore(
             }
         } ?: 0
 
-    /** Keeps the newest [heldWindowMs] of a session's held rows (by `last_ts`) and at most [maxHeldPerSession]. */
+    /**
+     * Keeps the newest [heldWindowMs] of a session's held rows (by `last_ts`) and at most [maxHeldPerSession]. Only rows
+     * written since this store opened count: a session that continues after a relaunch must not trim the previous
+     * process's buffer before the launch decision has promoted or dropped it.
+     */
     private fun trimHeld(db: SQLiteDatabase, sessionId: String) {
+        val mine = "state = 0 AND session_id = ? AND created_at >= ?"
+        val opened = openedAtMs.toString()
         val newest = db.rawQuery(
-            "SELECT MAX(last_ts) FROM replay_batches WHERE state = 0 AND session_id = ?",
-            arrayOf(sessionId),
+            "SELECT MAX(last_ts) FROM replay_batches WHERE $mine",
+            arrayOf(sessionId, opened),
         ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else return }
-        deleteRows(db, "state = 0 AND session_id = ? AND last_ts < ?", arrayOf(sessionId, (newest - heldWindowMs).toString()))
+        deleteRows(db, "$mine AND last_ts < ?", arrayOf(sessionId, opened, (newest - heldWindowMs).toString()))
         deleteRows(
             db,
-            "state = 0 AND session_id = ? AND id NOT IN (SELECT id FROM replay_batches WHERE state = 0 AND session_id = ? " +
+            "$mine AND id NOT IN (SELECT id FROM replay_batches WHERE $mine " +
                 "ORDER BY first_ts DESC, rowid DESC LIMIT $maxHeldPerSession)",
-            arrayOf(sessionId, sessionId),
+            arrayOf(sessionId, opened, sessionId, opened),
         )
     }
 
@@ -407,7 +416,8 @@ internal class ReplayStore(
         private const val DB_VERSION = 5
         const val DEFAULT_MAX_BYTES: Long = 50L * 1024 * 1024
         const val HELD_WINDOW_MS: Long = 60_000L
-        const val MAX_HELD_PER_SESSION: Int = 8
+        /** 12 back-to-back 5 s chunks fill the 60 s window, plus the chunk the trigger closes. */
+        const val MAX_HELD_PER_SESSION: Int = 13
         private const val BODIES_PATH = "artracker/replay"
         private val EMPTY = ByteArray(0)
         private const val SQL_VARIABLE_CHUNK = 500

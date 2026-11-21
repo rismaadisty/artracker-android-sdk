@@ -17,17 +17,19 @@ import kotlinx.coroutines.CoroutineDispatcher
 
 /**
  * A [ScreenshotKit] for tests: windows are drawn with `View.draw` (no `PixelCopy`), and closed chunks go to [sink]
- * (by default the core's own replay sink, as in production).
+ * (by default the core's own replay sink, as in production). With a [pixelCopy], the base window is copied through it
+ * as on API 26+ (so a test can complete the copy later).
  */
 internal fun testScreenshotKit(
     core: ARTrackerCore,
     handler: Handler,
     sink: ReplaySink = ReplaySink { core.replaySink.accept(it) },
     governorBudget: Long = ByteBudgetGovernor.DEFAULT_BUDGET_BYTES,
+    pixelCopy: PixelCopyApi? = null,
 ): ScreenshotKit = ScreenshotKit(
     capturer = ScreenshotCapturer(
-        BitmapPool(), MaskCollector(MaskingPolicy(core.config.privacy)), handler, sdkInt = 25,
-        pixelCopy = PixelCopyApi { _, _, done -> done(PixelCopyApi.ERROR) },
+        BitmapPool(), MaskCollector(MaskingPolicy(core.config.privacy)), handler, sdkInt = if (pixelCopy != null) 34 else 25,
+        pixelCopy = pixelCopy ?: PixelCopyApi { _, _, done -> done(PixelCopyApi.ERROR) },
     ),
     encoder = ScreenshotEncoder(),
     chunker = ScreenChunker(sink, core.clock, core.config.environment, core::userForSession),
