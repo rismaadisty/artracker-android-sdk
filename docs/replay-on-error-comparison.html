@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay Saat Crash</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: satu kolom dokumen teknis; tabel perbandingan dua kolom, timeline batang, kalkulator kuota. */
+:root {
+  --bg: #f6f7f8;
+  --surface: #ffffff;
+  --fg: #1b2228;
+  --muted: #5b6670;
+  --line: #dde2e6;
+  --accent: #0f6e77;
+  --accent-soft: #e2f1f2;
+  --now: #8a6d1f;
+  --now-soft: #f6efdb;
+  --good: #1f7a45;
+  --good-soft: #e3f3e8;
+  --bad: #a2352d;
+  --bad-soft: #f8e5e3;
+  --frame: #c7cfd5;
+  --frame-up: #0f6e77;
+  --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12171b; --surface: #1a2126; --fg: #e4e9ec; --muted: #9aa6af; --line: #2c353c;
+    --accent: #5cc3cc; --accent-soft: #163236; --now: #d9b65a; --now-soft: #2f2816;
+    --good: #6cc98f; --good-soft: #17301f; --bad: #ec8a80; --bad-soft: #3a1d1a;
+    --frame: #3a454d; --frame-up: #5cc3cc; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12171b; --surface: #1a2126; --fg: #e4e9ec; --muted: #9aa6af; --line: #2c353c;
+  --accent: #5cc3cc; --accent-soft: #163236; --now: #d9b65a; --now-soft: #2f2816;
+  --good: #6cc98f; --good-soft: #17301f; --bad: #ec8a80; --bad-soft: #3a1d1a;
+  --frame: #3a454d; --frame-up: #5cc3cc; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+}
+.wrap { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 48px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.25; }
+h1 { font-size: 2rem; font-weight: 600; }
+h2 { font-size: 1.35rem; font-weight: 600; }
+h3 { font-size: 1.02rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+.eyebrow { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 16px; }
+header { display: flex; flex-direction: column; gap: 12px; }
+.lede { color: var(--muted); font-size: 1.05rem; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 0.85rem; color: var(--muted); }
+
+.tag { display: inline-block; font-family: var(--font-mono); font-size: 0.72rem; padding: 1px 7px; border-radius: 999px; white-space: nowrap; vertical-align: 1px; }
+.tag.fact { background: var(--accent-soft); color: var(--accent); }
+.tag.prop { background: var(--now-soft); color: var(--now); }
+.tag.open { background: var(--bad-soft); color: var(--bad); }
+
+/* timeline */
+.timelines { display: grid; grid-template-columns: 1fr; gap: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+.tl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tl-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+.tl-head .who { font-weight: 600; }
+.tl-head .res { font-size: 0.85rem; color: var(--muted); }
+.track { display: grid; grid-template-columns: repeat(30, 1fr); gap: 2px; align-items: end; height: 28px; position: relative; }
+.track span { display: block; height: 100%; background: var(--frame); border-radius: 2px; }
+.track span.up { background: var(--frame-up); }
+.track span.crash { background: var(--bad); }
+.track span.gone { background: transparent; border: 1px dashed var(--frame); }
+.tl-foot { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.82rem; color: var(--muted); }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; }
+
+/* compare table */
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+thead th { font-family: var(--font-display); font-weight: 600; font-size: 0.95rem; background: var(--bg); }
+thead th.now { color: var(--now); }
+thead th.next { color: var(--accent); }
+tbody th { font-weight: 500; color: var(--muted); width: 22%; }
+td.win { background: var(--good-soft); }
+td.lose { background: var(--bad-soft); }
+
+/* calculator */
+.calc { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+.inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; }
+.inputs label { display: flex; flex-direction: column; gap: 4px; font-size: 0.82rem; color: var(--muted); }
+.inputs input { font: inherit; font-family: var(--font-mono); color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; }
+.inputs input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.results { display: flex; flex-direction: column; gap: 12px; }
+.res-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; padding: 12px; border-radius: 8px; }
+.res-row.now { background: var(--now-soft); }
+.res-row.next { background: var(--accent-soft); }
+.res-row .big { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.res-row .lbl { font-weight: 600; }
+.res-row .sub { grid-column: 1 / -1; font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; grid-column: 1 / -1; }
+.bar > div { height: 100%; }
+.res-row.now .bar > div { background: var(--now); }
+.res-row.next .bar > div { background: var(--accent); }
+.note { font-size: 0.82rem; color: var(--muted); }
+
+/* flow + lists */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.card ol, .card ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.trig { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.trig .card { gap: 8px; }
+.trig .when { font-size: 0.85rem; color: var(--muted); }
+.qs { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
+.qs li { max-width: 72ch; }
+.qs b { font-weight: 600; }
+
+@media (max-width: 720px) {
+  .calc, .cols, .trig { grid-template-columns: 1fr; }
+  h1 { font-size: 1.6rem; }
+}
+@media (max-width: 420px) {
+  .inputs { grid-template-columns: 1fr; }
+  .track { gap: 1px; }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">ARTracker Android SDK · Session replay</span>
+  <h1>Replay saat crash: kondisi sekarang vs refactor</h1>
+  <p class="lede">Tujuan: hemat kuota data user. Replay hanya dikirim ketika terjadi crash, ANR, atau error yang di-log, bukan sepanjang sesi.</p>
+  <div class="meta">
+    <span>20 Nov 2026</span>
+    <span>Branch <span class="mono">feature/team-lead-feedback</span></span>
+    <span><span class="tag fact">fakta</span> dari kode/PERF.md</span>
+    <span><span class="tag prop">usulan</span> belum diputuskan final</span>
+    <span><span class="tag open">terbuka</span> perlu keputusan</span>
+  </div>
+</header>
+
+<section>
+  <h2>Gambaran singkat</h2>
+  <p>Satu sesi 15 menit, crash di akhir. Tiap kotak = 30 detik rekaman.</p>
+  <div class="timelines" aria-label="Perbandingan timeline rekaman">
+    <div class="tl">
+      <div class="tl-head"><span class="who" style="color:var(--now)">Sekarang: sesi terpilih (10%)</span><span class="res">semua diupload, ±maks 51 MB</span></div>
+      <div class="track" id="t1"></div>
+      <div class="tl-foot"><span>0 mnt</span><span>15 mnt · crash</span></div>
+    </div>
+    <div class="tl">
+      <div class="tl-head"><span class="who" style="color:var(--now)">Sekarang: sesi tidak terpilih (90%)</span><span class="res">tidak merekam, crash tanpa replay</span></div>
+      <div class="track" id="t2"></div>
+      <div class="tl-foot"><span>0 mnt</span><span>15 mnt · crash</span></div>
+    </div>
+    <div class="tl">
+      <div class="tl-head"><span class="who" style="color:var(--accent)">Refactor: semua sesi merekam ke buffer</span><span class="res">hanya 60 dtk terakhir diupload, ±maks 5 MB</span></div>
+      <div class="track" id="t3"></div>
+      <div class="tl-foot"><span>0 mnt</span><span>15 mnt · crash</span></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--frame-up)"></i>direkam + diupload</span>
+      <span><i style="background:var(--frame)"></i>direkam, lalu dibuang (tidak diupload)</span>
+      <span><i style="border:1px dashed var(--frame)"></i>tidak direkam</span>
+      <span><i style="background:var(--bad)"></i>crash</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Perbandingan per aspek</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th class="now">Sekarang</th><th class="next">Refactor (mode saat error)</th></tr></thead>
+      <tbody>
+        <tr><th>Siapa yang merekam</th>
+          <td><span class="tag fact">fakta</span> Sesi yang lolos <code>sampleRate</code> (default 0.1 = 10%), diputuskan per session id dengan hash FNV-1a yang sama dengan web SDK. Default <code>enabled = false</code>.</td>
+          <td class="lose"><span class="tag prop">usulan</span> Sesi yang lolos <code>onErrorSampleRate</code> (usulan default 1.0 = semua). Lebih banyak HP yang menjalankan capture.</td></tr>
+        <tr><th>Apa yang diupload</th>
+          <td class="lose"><span class="tag fact">fakta</span> Seluruh sesi. Chunk ditutup tiap 10 dtk (maks 2 MB gzip), masuk antrean SQLite, lalu dikirim.</td>
+          <td class="win"><span class="tag prop">usulan</span> Hanya ~60 dtk terakhir sebelum pemicu. Sesi tanpa pemicu: 0 byte.</td></tr>
+        <tr><th>Kuota per sesi terekam</th>
+          <td class="lose"><span class="tag fact">fakta</span> Budget ±5 MB/menit. Terukur 16,91 MB untuk 5 mnt scroll terus (2 fps, STANDARD), ±3,4 MB/menit.</td>
+          <td class="win">±1–5 MB per pemicu, nol bila tidak ada pemicu.</td></tr>
+        <tr><th>CPU di main thread</th>
+          <td><span class="tag fact">fakta</span> Capture p95 6,2 ms per frame (target 16 ms), OPPO CPH2387, debug build.</td>
+          <td>Sama per frame. Usulan: 1 fps, bisa diturunkan ke 0,5 fps atau kualitas <code>LOW</code> di mode ini.</td></tr>
+        <tr><th>Baterai</th>
+          <td><span class="tag fact">fakta</span> Belum diukur. Background CPU &lt; 0,1% (replay berhenti saat app di background).</td>
+          <td>Per HP sama atau sedikit lebih kecil (tanpa upload). Tetap perlu diukur.</td></tr>
+        <tr><th>Penyimpanan di HP</th>
+          <td><span class="tag fact">fakta</span> Antrean replay maks 50 MB (<code>ReplayStore</code>), dikosongkan setelah upload.</td>
+          <td class="win"><span class="tag prop">usulan</span> Buffer bergulir 6 chunk × 10 dtk ≈ maks 5 MB; chunk lama ditimpa.</td></tr>
+        <tr><th>Crash yang punya replay</th>
+          <td class="lose">±10% (hanya crash di sesi terpilih).</td>
+          <td class="win">Hampir semua. Risiko: ≤10 dtk terakhir yang belum ditulis ke disk bisa hilang saat proses mati.</td></tr>
+        <tr><th>ANR</th>
+          <td><span class="tag fact">fakta</span> Dideteksi watchdog (API 24–29, saat itu juga) dan <code>ApplicationExitInfo</code> (API 30+, baru terbaca saat app dibuka lagi).</td>
+          <td>API 24–29: upload langsung. API 30+: buffer dari disk dikirim saat app dibuka lagi.</td></tr>
+        <tr><th>Error yang di-log</th>
+          <td><span class="tag fact">fakta</span> Hanya menandai chunk <code>has_error</code>. Flag ini belum dipakai di backend/dashboard.</td>
+          <td><span class="tag prop">usulan</span> Memicu upload buffer + rekaman lanjut sebentar. Dibatasi per sesi supaya error beruntun tidak boros kuota.</td></tr>
+        <tr><th>Privasi</th>
+          <td>Masking di HP sebelum JPEG dibuat.</td>
+          <td class="win">Masking sama. Data yang keluar dari HP jauh lebih sedikit.</td></tr>
+        <tr><th>Sisi web/backend</th>
+          <td>Replay dimulai dari awal sesi.</td>
+          <td><span class="tag open">terbuka</span> Replay dimulai di tengah sesi (frame pertama harus full snapshot). Dashboard perlu label "replay sebelum crash" dan tautan ke crash-nya.</td></tr>
+        <tr><th>Kompleksitas SDK</th>
+          <td>Sudah jalan dan teruji.</td>
+          <td class="lose">Baru: buffer bergulir di disk, status "ditahan" vs "siap kirim", pengiriman saat launch berikutnya, batas per sesi.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Hitung kuota</h2>
+  <p>Ilustrasi, bukan data produksi. Ubah angkanya sesuai trafik Alfagift. Laju data memakai angka terukur 3,4 MB/menit (scroll terus), jadi ini batas atas: sesi nyata lebih kecil karena idle dan frame yang sama tidak dikirim ulang.</p>
+  <div class="calc">
+    <div class="inputs">
+      <label for="users">Sesi per hari<input id="users" type="number" min="0" value="1000"></label>
+      <label for="mins">Lama sesi (menit)<input id="mins" type="number" min="1" value="10"></label>
+      <label for="rate">Sample rate sekarang (%)<input id="rate" type="number" min="0" max="100" value="10"></label>
+      <label for="mbmin">MB per menit rekaman<input id="mbmin" type="number" min="0" step="0.1" value="3.4"></label>
+      <label for="crash">Sesi dengan crash/ANR (%)<input id="crash" type="number" min="0" max="100" step="0.1" value="1"></label>
+      <label for="err">Sesi dengan error di-log (%)<input id="err" type="number" min="0" max="100" step="0.1" value="5"></label>
+      <label for="buf">Panjang buffer (detik)<input id="buf" type="number" min="10" step="10" value="60"></label>
+      <label for="after">Rekam lanjut setelah error (detik)<input id="after" type="number" min="0" step="10" value="30"></label>
+    </div>
+    <div class="results">
+      <div class="res-row now">
+        <span class="lbl">Sekarang</span><span class="big" id="outNow">–</span>
+        <div class="bar"><div id="barNow"></div></div>
+        <span class="sub" id="subNow"></span>
+      </div>
+      <div class="res-row next">
+        <span class="lbl">Refactor</span><span class="big" id="outNext">–</span>
+        <div class="bar"><div id="barNext"></div></div>
+        <span class="sub" id="subNext"></span>
+      </div>
+      <p class="note">Refactor diasumsikan merekam 100% sesi, satu upload per sesi untuk error yang di-log (batas per sesi), dan crash tidak merekam lanjut.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Pemicu upload</h2>
+  <div class="trig">
+    <div class="card">
+      <h3>Crash fatal</h3>
+      <p class="when">Proses mati saat itu juga.</p>
+      <p>Buffer harus sudah ada di disk. Dikirim saat app dibuka lagi, ditempel ke crash yang sama lewat session id.</p>
+    </div>
+    <div class="card">
+      <h3>ANR</h3>
+      <p class="when">API 24–29 live, API 30+ saat launch berikutnya.</p>
+      <p>Watchdog: upload langsung. <code>ApplicationExitInfo</code>: cari buffer sesi itu di disk lalu kirim.</p>
+    </div>
+    <div class="card">
+      <h3>Error di-log</h3>
+      <p class="when">App masih hidup.</p>
+      <p>Upload buffer, rekam lanjut ±30 dtk supaya terlihat akibatnya. Maks N upload per sesi.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Alur di HP</h2>
+  <div class="cols">
+    <div class="card">
+      <h3 style="color:var(--now)">Sekarang</h3>
+      <ol>
+        <li>Sesi mulai, cek <code>sampleRate</code>.</li>
+        <li>Terpilih: capture → masking → JPEG → chunk 10 dtk.</li>
+        <li>Chunk ditutup → antrean SQLite → upload.</li>
+        <li>Error di-log: chunk diberi flag <code>has_error</code>.</li>
+        <li>Ulangi sampai sesi selesai / app ke background.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--accent)">Refactor</h3>
+      <ol>
+        <li>Sesi mulai, cek <code>onErrorSampleRate</code>.</li>
+        <li>Terpilih: capture → masking → JPEG → chunk 10 dtk (sama).</li>
+        <li>Chunk ditutup → disimpan dengan status <b>ditahan</b>; hanya 6 chunk terakhir yang disimpan.</li>
+        <li>Pemicu: chunk ditahan sesi itu diubah jadi <b>siap kirim</b> → upload.</li>
+        <li>Sesi berakhir tanpa pemicu: chunk ditahan dihapus.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Yang perlu diputuskan</h2>
+  <ol class="qs">
+    <li><b>Mode lama tetap ada?</b> Usulan: tetap bisa dipakai (misalnya <code>sampleRate = 0.01</code> untuk melihat perilaku normal), tapi default-nya 0 dan mode saat error jadi default.</li>
+    <li><b>Panjang buffer.</b> Usulan 60 dtk. Lebih panjang = konteks lebih banyak, kuota per pemicu naik.</li>
+    <li><b>Batas upload error di-log per sesi.</b> Usulan maks 1–3 kali, dengan jeda antar pemicu.</li>
+    <li><b>fps dan kualitas di mode ini.</b> Usulan tetap 1 fps STANDARD; turunkan bila pengukuran baterai buruk.</li>
+    <li><b>Hanya Wi-Fi?</b> Opsi: upload replay ditunda sampai Wi-Fi. Paling hemat kuota, tapi replay datang terlambat.</li>
+    <li><b>Web SDK dan iOS.</b> Sampling sekarang identik lintas platform. Perlu disepakati apakah mode ini juga dibawa ke web/iOS.</li>
+    <li><b>Dashboard.</b> Menampilkan replay yang dimulai di tengah sesi dan menautkannya ke crash/error.</li>
+  </ol>
+</section>
+
+</div>
+
+<script>
+(function () {
+  function track(id, fn) {
+    var el = document.getElementById(id);
+    for (var i = 0; i < 30; i++) {
+      var s = document.createElement('span');
+      var c = fn(i);
+      if (c) s.className = c;
+      el.appendChild(s);
+    }
+  }
+  track('t1', function (i) { return i === 29 ? 'crash' : 'up'; });
+  track('t2', function (i) { return i === 29 ? 'crash' : 'gone'; });
+  track('t3', function (i) { return i === 29 ? 'crash' : (i >= 27 ? 'up' : ''); });
+
+  var ids = ['users', 'mins', 'rate', 'mbmin', 'crash', 'err', 'buf', 'after'];
+  function num(id) { var v = parseFloat(document.getElementById(id).value); return isFinite(v) && v >= 0 ? v : 0; }
+  function fmt(mb) {
+    if (mb >= 1024) return (mb / 1024).toLocaleString('id-ID', { maximumFractionDigits: 2 }) + ' GB';
+    return mb.toLocaleString('id-ID', { maximumFractionDigits: 0 }) + ' MB';
+  }
+  function calc() {
+    var users = num('users'), mins = num('mins'), rate = Math.min(num('rate'), 100) / 100,
+        mbmin = num('mbmin'), crash = Math.min(num('crash'), 100) / 100, err = Math.min(num('err'), 100) / 100,
+        buf = num('buf'), after = num('after');
+    var recNow = users * rate;
+    var now = recNow * mins * mbmin;
+    var bufMin = Math.min(buf / 60, mins);
+    var crashMb = users * crash * bufMin * mbmin;
+    var errMb = users * err * (bufMin + after / 60) * mbmin;
+    var next = crashMb + errMb;
+    var max = Math.max(now, next, 1e-9);
+    document.getElementById('outNow').textContent = fmt(now);
+    document.getElementById('outNext').textContent = fmt(next);
+    document.getElementById('barNow').style.width = (now / max * 100) + '%';
+    document.getElementById('barNext').style.width = (next / max * 100) + '%';
+    document.getElementById('subNow').textContent =
+      Math.round(recNow).toLocaleString('id-ID') + ' sesi merekam & upload penuh · ±' +
+      Math.round(users * crash * rate).toLocaleString('id-ID') + ' dari ' +
+      Math.round(users * crash).toLocaleString('id-ID') + ' crash punya replay';
+    document.getElementById('subNext').textContent =
+      Math.round(users).toLocaleString('id-ID') + ' sesi merekam · crash/ANR ' + fmt(crashMb) +
+      ' + error ' + fmt(errMb) + ' · semua ' + Math.round(users * crash).toLocaleString('id-ID') + ' crash punya replay';
+  }
+  ids.forEach(function (id) { document.getElementById(id).addEventListener('input', calc); });
+  calc();
+})();
+</script>
+</body>
+</html>
