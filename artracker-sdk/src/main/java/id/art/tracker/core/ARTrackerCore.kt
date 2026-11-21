@@ -124,6 +124,12 @@ internal class ARTrackerCore(
     private val transportPrefs = SharedPrefsStore(app, TransportConfigStore.PREFS_NAME)
     private val killSwitch = KillSwitch(transportPrefs, clock)
 
+    /**
+     * Wall-clock start of this process (as far as the SDK knows it). Items timed before it describe an earlier
+     * process (exit reasons are re-timed to the exit), and replay chunks stored before it were recorded by one.
+     */
+    private val processStartMs = clock.nowMs()
+
     val identity = IdentityStore(SharedPrefsStore(app, IDENTITY_PREFS))
 
     /** Last actions of the user/app, attached to crashes and handled errors (never sent on their own). */
@@ -412,11 +418,14 @@ internal class ARTrackerCore(
             beforeSend = config.beforeSend,
             flushIntervalMs = config.flushIntervalMs,
             flushContext = Dispatchers.IO,
-            // An error in the session flags the replay batch it happened in (the viewer jumps to it).
-            onItemAccepted = {
-                replay?.let {
-                    it.onError()
-                    it.onTrigger(TriggerKind.ERROR) // the error dialog / screen is on display now: capture it
+            // An error in the session flags the replay batch it happened in (the viewer jumps to it). An item timed
+            // before this process started (an exit of an earlier process) says nothing about the screen on display now.
+            onItemAccepted = { item ->
+                if (item.timestampMs >= processStartMs) {
+                    replay?.let {
+                        it.onError()
+                        it.onTrigger(TriggerKind.ERROR) // the error dialog / screen is on display now: capture it
+                    }
                 }
             },
         )
@@ -634,7 +643,8 @@ internal class ARTrackerCore(
     /**
      * Runs on [scope] after queue maintenance and with [pipeline] ready: recovers the crash files of earlier runs
      * into the queue, then reports the ANR / native crash / low-memory exits of earlier processes (API 30+).
-     * Either one finding something sets [leftoverItems], so the caller flushes right away.
+     * Either one finding something sets [leftoverItems], so the caller flushes right away. Last, the held replay
+     * chunks of earlier processes are uploaded when one of them crashed and dropped otherwise ([decideHeldReplay]).
      */
     internal fun onBackgroundInit() {
         crashStore.prepare()
@@ -645,6 +655,10 @@ internal class ARTrackerCore(
             // The user opted out after the crash: nothing recorded earlier may be sent.
             crashStore.pending().forEach(crashStore::delete)
             collectExitInfo()
+            // Opting out already cleared the replay queue; a crash between that and persisting the flag can leave
+            // held chunks behind. Never uploaded, so dropped.
+            runCatching { if (replayDatabaseExists()) replayQueue.dropHeldBefore(processStartMs) }
+                .onFailure { SdkLog.w("dropping held replay chunks failed", it) }
             return
         }
         // The crash JSON goes through beforeSend and the same redaction as every other item before it is queued.
@@ -652,15 +666,37 @@ internal class ARTrackerCore(
             telemetryItemFromJson(json)?.let(pipeline::prepareRecovered)
         }
         if (recovered > 0) leftoverItems = true
-        collectExitInfo()
+        val exitCrashed = collectExitInfo()
+        decideHeldReplay(previousRunCrashed = recovered > 0 || exitCrashed)
+    }
+
+    /**
+     * Held (buffer-mode) replay chunks stored before this process started belong to an earlier one: uploaded when it
+     * ended in a crash, a native crash or an ANR (the replay of what led to it), dropped otherwise. Never creates the
+     * replay database, and does nothing while the SDK is disabled (a 401 trip may end; the rows wait for it).
+     */
+    private fun decideHeldReplay(previousRunCrashed: Boolean) {
+        runCatching {
+            if (!replayDatabaseExists() || isDisabled()) return@runCatching
+            if (previousRunCrashed) {
+                val n = replayQueue.promoteHeldBefore(processStartMs)
+                if (n > 0) {
+                    SdkLog.d("replay buffer promoted after a crash: $n chunks")
+                    replayKicker.kick()
+                }
+            } else {
+                replayQueue.dropHeldBefore(processStartMs)
+            }
+        }.onFailure { SdkLog.w("deciding on held replay chunks failed", it) }
     }
 
     /**
      * Exit reasons go through the normal pipeline (beforeSend, redaction, the attribute budget). While the SDK is
      * disabled nothing is emitted, but the processed timestamp still advances so those exits are not reported
-     * after a later opt-in.
+     * after a later opt-in. Returns true when an `anr` or `native_crash` exit was emitted.
      */
-    private fun collectExitInfo() {
+    private fun collectExitInfo(): Boolean {
+        var crashed = false
         runCatching {
             val collector = ExitInfoCollector(app, transportPrefs, items, clock, device.buildId, device.lastUpdateTimeMs)
             if (isDisabled()) {
@@ -671,7 +707,9 @@ internal class ARTrackerCore(
             // Exits of an earlier process: this process's global properties do not describe them.
             exits.forEach { emit(it, withGlobals = false) }
             if (exits.isNotEmpty()) leftoverItems = true
+            crashed = exits.any { it.name == "anr" || it.name == "native_crash" }
         }.onFailure { SdkLog.w("collecting exit reasons failed", it) }
+        return crashed
     }
 
     /** Runs inside the crash handler: lock-free reads only, no coroutines, database or network. */

@@ -1,6 +1,9 @@
 package id.art.tracker.core
 
+import android.app.ActivityManager
 import android.app.Application
+import android.app.ApplicationExitInfo
+import android.content.Context
 import android.os.Looper
 import android.os.Bundle
 import androidx.navigation.NavController
@@ -23,7 +26,12 @@ import id.art.tracker.privacy.MaskingPolicy
 import id.art.tracker.replay.ManualDispatcher
 import id.art.tracker.replay.ReplayController
 import id.art.tracker.replay.ReplaySink
+import id.art.tracker.replay.ON_ERROR_SALT
+import id.art.tracker.replay.RecordingMode
+import id.art.tracker.telemetry.CrashStore
 import id.art.tracker.testutil.FakeReplayBackend
+import id.art.tracker.testutil.RecordedCall
+import id.art.tracker.testutil.testScreenshotKit
 import id.art.tracker.testutil.testReplayController
 import id.art.tracker.transport.FlusherRegistry
 import id.art.tracker.transport.NewReplayBatch
@@ -37,10 +45,12 @@ import id.art.tracker.lifecycle.NavBinder
 import id.art.tracker.lifecycle.PlainActivity
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
+import java.io.File
 import java.lang.ref.WeakReference
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -53,6 +63,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowActivityManager.ApplicationExitInfoBuilder
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -60,6 +71,11 @@ class ARTrackerCoreTest {
     private val app: Application = ApplicationProvider.getApplicationContext()
     private val seen = CopyOnWriteArrayList<TelemetryItem>()
     private val config = configWith()
+
+    private companion object {
+        /** Wall-clock start of the core under test (its process start); earlier processes ran before it. */
+        const val T0 = 1_700_000_000_000L
+    }
 
     private fun configWith(
         sessionTimeoutMs: Long = 1_800_000,
@@ -847,6 +863,223 @@ class ARTrackerCoreTest {
         assertEquals(starts[0], views[0].sessionId)
         assertEquals(starts[0], views[1].sessionId)
     }
+
+    // region replay on error: triggers and the launch decision
+
+    private val crashDir get() = File(app.filesDir, "artracker/crash")
+
+    /**
+     * An earlier process on [clock]: starts a core, writes the crash file its crash handler would have written, and
+     * goes away (opting out first when [optOut]). Returns the session id of that process, which the crash item carries.
+     */
+    private fun crashOfEarlierProcess(clock: FakeClock = FakeClock(T0 - 120_000), optOut: Boolean = false): String {
+        val earlier = ARTrackerCore(app, configWith(), clock)
+        ARTrackerCore.install(earlier)
+        earlier.start()
+        val sessionId = earlier.session.currentId()
+        val json = earlier.crashItemJsonForTest(Thread.currentThread(), RuntimeException("boom"))
+        if (optOut) earlier.optOut(true)
+        runBlocking { withTimeout(15_000) { earlier.awaitIdle() } }
+        ARTracker.resetForTest()
+        assertTrue(CrashStore(crashDir).writeSync(JSONObject(json).getString("id"), json))
+        return sessionId
+    }
+
+    /** Held (buffer-mode) chunks of an earlier process: stored a minute before [T0], the start of the core under test. */
+    private fun seedHeld(store: ReplayStore, sessionId: String, count: Int = 2) {
+        repeat(count) { i ->
+            val first = T0 - 70_000 + i * 5_000L
+            assertTrue(store.enqueue(NewReplayBatch(sessionId, byteArrayOf(1, 2, 3), 1, first, first + 5_000, false, null, "test", held = true)))
+        }
+    }
+
+    /** Held rows still in [store] (counted by dropping them: call it last). */
+    private fun heldLeft(store: ReplayStore): Int = store.dropHeldBefore(Long.MAX_VALUE)
+
+    private fun startCoreAt(clock: FakeClock, endpoint: String = "http://127.0.0.1:9"): ARTrackerCore {
+        val core = ARTrackerCore(app, configWith(endpoint = endpoint), clock)
+        ARTrackerCore.install(core)
+        core.start()
+        return core
+    }
+
+    private fun awaitAcks(backend: FakeReplayBackend, n: Int): List<RecordedCall> {
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15)
+        while (backend.requestsTo(FakeReplayBackend.ACK).size < n && System.nanoTime() < deadline) Thread.sleep(20)
+        return backend.requestsTo(FakeReplayBackend.ACK)
+    }
+
+    @Test
+    fun crashThenRelaunch_promotesPreviousBuffer() {
+        val backend = FakeReplayBackend()
+        crashOfEarlierProcess()
+        val store = ReplayStore(app, FakeClock(T0 - 60_000))
+        try {
+            seedHeld(store, "session-before-crash")
+
+            startCoreAt(FakeClock(T0), backend.endpoint)
+            settle()
+
+            assertEquals(0, heldLeft(store))
+            val acks = awaitAcks(backend, 2)
+            assertEquals(2, acks.size)
+            assertTrue(acks.all { it.json().getString("session_id") == "session-before-crash" })
+        } finally {
+            store.close()
+            backend.shutdown()
+        }
+    }
+
+    @Test
+    fun crashThenRelaunchSameSession_promotesPreviousBuffer() {
+        val backend = FakeReplayBackend()
+        val sessionId = crashOfEarlierProcess()
+        val store = ReplayStore(app, FakeClock(T0 - 60_000))
+        try {
+            seedHeld(store, sessionId)
+
+            val core = startCoreAt(FakeClock(T0), backend.endpoint)
+            settle()
+
+            // Two minutes later the session has not timed out: the relaunched process continues it.
+            assertEquals(sessionId, core.session.currentId())
+            assertEquals(0, heldLeft(store))
+            val acks = awaitAcks(backend, 2)
+            assertEquals(2, acks.size)
+            assertTrue(acks.all { it.json().getString("session_id") == sessionId })
+        } finally {
+            store.close()
+            backend.shutdown()
+        }
+    }
+
+    @Test
+    @Config(sdk = [30])
+    fun anrExitThenRelaunch_promotesPreviousBuffer() {
+        val backend = FakeReplayBackend()
+        val manager = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        shadowOf(manager).addApplicationExitInfo(
+            ApplicationExitInfoBuilder.newBuilder()
+                .setReason(ApplicationExitInfo.REASON_ANR)
+                .setTimestamp(T0 - 30_000)
+                .setImportance(100)
+                .setProcessName(app.packageName)
+                .build(),
+        )
+        val store = ReplayStore(app, FakeClock(T0 - 60_000))
+        try {
+            seedHeld(store, "session-before-anr")
+
+            startCoreAt(FakeClock(T0), backend.endpoint)
+            val items = settle()
+
+            assertEquals(1, items.named("anr").size)
+            assertEquals(0, heldLeft(store))
+            assertEquals(2, awaitAcks(backend, 2).size)
+        } finally {
+            store.close()
+            backend.shutdown()
+        }
+    }
+
+    @Test
+    fun cleanRelaunch_dropsPreviousBuffer() {
+        val store = ReplayStore(app, FakeClock(T0 - 60_000))
+        try {
+            seedHeld(store, "session-clean")
+            store.enqueue(replayBatch("session-ready-1")) // a FULL-mode chunk still waiting: not touched
+
+            startCoreAt(FakeClock(T0))
+            settle()
+
+            assertEquals(0, heldLeft(store))
+            assertEquals(1, store.pendingCount())
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun optedOut_heldRowsNeverPromoted() {
+        val backend = FakeReplayBackend()
+        crashOfEarlierProcess(optOut = true)
+        val store = ReplayStore(app, FakeClock(T0 - 60_000))
+        try {
+            seedHeld(store, "session-opted-out")
+
+            startCoreAt(FakeClock(T0), backend.endpoint)
+            settle()
+
+            assertEquals(0, store.pendingCount())
+            assertEquals(0, heldLeft(store)) // dropped, not merely left held
+            assertTrue(crashDir.listFiles().orEmpty().isEmpty())
+            assertTrue(backend.requestsTo(FakeReplayBackend.CHUNK_URL).isEmpty())
+        } finally {
+            store.close()
+            backend.shutdown()
+        }
+    }
+
+    @Test
+    fun noReplayDb_launchDoesNotCreateIt() {
+        crashOfEarlierProcess()
+        assertFalse(app.getDatabasePath(ReplayStore.DB_NAME).exists())
+
+        startCoreAt(FakeClock(T0))
+        settle()
+
+        assertTrue("the crash was recovered", seen.any { it.level == LogLevel.FATAL })
+        assertFalse(app.getDatabasePath(ReplayStore.DB_NAME).exists())
+    }
+
+    @Test
+    fun exitItemOfPreviousProcess_doesNotTriggerCurrentBuffer() {
+        val promoted = CopyOnWriteArrayList<String>()
+        val sink = object : ReplaySink {
+            override fun accept(batch: NewReplayBatch) {}
+
+            override fun promote(sessionId: String) {
+                promoted += sessionId
+            }
+        }
+        val dispatcher = ManualDispatcher()
+        val core = ARTrackerCore(
+            app,
+            configWith(replay = ReplayConfig(enabled = true)),
+            FakeClock(T0),
+            replayFactory = { c, handler ->
+                testReplayController(
+                    c, handler, dispatcher, testScreenshotKit(c, handler, sink),
+                    sampler = { id, _ -> id.endsWith(ON_ERROR_SALT) }, // BUFFER mode
+                    sink = sink,
+                )
+            },
+            replaySink = sink,
+        )
+        ARTrackerCore.install(core)
+        core.start()
+        ProcessLifecycleTestUtil.start()
+        Robolectric.buildActivity(Activity::class.java).setup()
+        fun drain() {
+            settle()
+            shadowOf(Looper.getMainLooper()).idle()
+            dispatcher.runAll()
+        }
+        drain()
+        assertEquals(RecordingMode.BUFFER, core.replayController!!.mode)
+
+        // What ExitInfoCollector emits at launch: an exit of the previous process, timed to when it happened.
+        core.emit(core.items.log(LogLevel.FATAL, "anr", "input dispatching timed out", emptyMap()).copy(timestampMs = T0 - 60_000))
+        drain()
+        assertEquals(1, seen.named("anr").size)
+        assertEquals(emptyList<String>(), promoted.toList())
+
+        ARTracker.log(LogLevel.ERROR, "something broke")
+        drain()
+        assertEquals(listOf(core.session.currentId()), promoted.toList())
+    }
+
+    // endregion
 }
 
 /** A navigator whose destinations are plain nodes: enough for the controller to dispatch destination changes. */
