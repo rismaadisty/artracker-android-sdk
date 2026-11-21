@@ -209,4 +209,15 @@ class ARTrackerConfigTest {
         val before = config(replay = ReplayConfig(idleAfterMs = 30_000, dormantAfterMs = 10_000)).validate()
         assertTrue(before.toString(), "replay.dormantAfterMs must be > replay.idleAfterMs" in before)
     }
+
+    @Test fun replayDefaults_bufferModeByDefault() {
+        val c = ReplayConfig()
+        assertEquals(0.0, c.sampleRate, 0.0)
+        assertEquals(1.0, c.onErrorSampleRate, 0.0)
+    }
+
+    @Test fun onErrorSampleRate_outOfRange_isInvalid() {
+        val errors = config(replay = ReplayConfig(onErrorSampleRate = 1.5)).validate()
+        assertTrue(errors.contains("replay.onErrorSampleRate must be between 0.0 and 1.0"))
+    }
 }

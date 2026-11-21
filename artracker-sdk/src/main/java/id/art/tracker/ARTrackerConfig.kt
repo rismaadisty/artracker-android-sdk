@@ -71,16 +71,25 @@ public enum class ReplayQuality { LOW, STANDARD, HIGH }
  * (0.2 fps) -> DORMANT after [dormantAfterMs] (no timed capture; the chunk is closed). Important UI changes (screen,
  * dialog/window, error, API response, keyboard, `ARTracker.captureReplayFrame`) are captured in every state, and the
  * first touch after IDLE/DORMANT captures what the user came back to at once.
+ *
+ * [sampleRate] selects full-session recording; sessions it does not select fall back to BUFFER mode with
+ * [onErrorSampleRate] (see there for the triggers). `startReplay()` always records in full.
  */
 public class ReplayConfig @JvmOverloads constructor(
     public val enabled: Boolean = false,
-    public val sampleRate: Double = 0.1,
+    /** Share of sessions (0.0..1.0) recorded in full (FULL mode) and uploaded as they go. Default 0.0. */
+    public val sampleRate: Double = 0.0,
     public val framesPerSecond: Double = 1.0,
     public val quality: ReplayQuality = ReplayQuality.STANDARD,
     /** No user input for this long (>= 5000 ms) and replay captures at 0.2 fps instead of [framesPerSecond]. */
     public val idleAfterMs: Long = 30_000,
     /** No user input for this long (must be > [idleAfterMs]) and replay stops capturing on a timer altogether. */
     public val dormantAfterMs: Long = 180_000,
+    /**
+     * Share of the remaining sessions (0.0..1.0) recorded in BUFFER mode: chunks are kept on the device and uploaded
+     * only when an error trigger fires (a logged ERROR/FATAL item, a crash or ANR of the previous run). Default 1.0.
+     */
+    public val onErrorSampleRate: Double = 1.0,
 )
 
 /**
@@ -161,6 +170,9 @@ internal fun ARTrackerConfig.validate(): List<String> {
     }
     if (!(replay.sampleRate in 0.0..1.0)) {
         errors += "replay.sampleRate must be between 0.0 and 1.0"
+    }
+    if (!(replay.onErrorSampleRate in 0.0..1.0)) {
+        errors += "replay.onErrorSampleRate must be between 0.0 and 1.0"
     }
     if (replay.idleAfterMs < MIN_IDLE_AFTER_MS) {
         errors += "replay.idleAfterMs must be >= $MIN_IDLE_AFTER_MS"
