@@ -730,3 +730,4 @@ Not covered by automated tests: anything that needs a device (see the status box
 - [`docs/github-packages.md`](docs/github-packages.md): how an app (Alfagift, Apo, ...) consumes the SDK from GitHub Packages.
 - [`docs/releasing.md`](docs/releasing.md): how a release is validated and published (tag `v*`), and the one-time manual setup.
 - [`artracker-sdk/CHANGELOG.md`](artracker-sdk/CHANGELOG.md)
+
