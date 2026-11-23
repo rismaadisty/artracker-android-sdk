@@ -22,8 +22,8 @@ internal class ItemFactory(
     fun session(name: String, attrs: Map<String, Any?> = emptyMap()): TelemetryItem =
         build(ItemType.SESSION, name, null, null, attrs)
 
-    /** A `perf.samples` item (session profiling); no level. */
-    fun perf(attrs: Map<String, Any?>): TelemetryItem = build(ItemType.PERF, "perf.samples", null, null, attrs)
+    /** A `perf` item: `perf.samples` (session profiling) by default, or another [name] such as `app_start`; no level. */
+    fun perf(attrs: Map<String, Any?>, name: String = "perf.samples"): TelemetryItem = build(ItemType.PERF, name, null, null, attrs)
 
     private fun build(
         type: ItemType,

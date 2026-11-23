@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import id.art.tracker.ARTracker
 import id.art.tracker.ARTrackerConfig
+import id.art.tracker.AppStartConfig
 import id.art.tracker.ARTrackerSender
 import id.art.tracker.BeforeSend
 import id.art.tracker.ExperimentalARTrackerApi
@@ -63,5 +64,7 @@ object SampleApp {
         network = NetworkConfig(sender = sender),
         beforeSend = beforeSend,
         performance = PerformanceConfig(enabled = debug),
+        // Cold start profiling, debug builds only: every cold start is profiled so the profile is easy to see.
+        appStart = AppStartConfig(profiling = debug, profileSampleRate = 1.0),
     )
 }

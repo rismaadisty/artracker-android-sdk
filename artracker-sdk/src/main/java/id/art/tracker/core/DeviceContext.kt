@@ -34,7 +34,7 @@ internal class DeviceContext(
         runCatching { packageInfo()?.versionName }.getOrNull()
     }
 
-    private val appBuild: Long by lazy(LazyThreadSafetyMode.PUBLICATION) {
+    internal val appBuild: Long by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching {
             val info = packageInfo() ?: return@runCatching 0L
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

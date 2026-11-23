@@ -7,7 +7,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * POSTs gzip envelopes to `{endpoint}/api/v1/ingest` using plain [HttpURLConnection] (no OkHttp dependency).
+ * POSTs gzip envelopes to `{endpoint}{path}` (`/api/v1/ingest` by default; the startup profiles use
+ * [IngestEndpoint.PROFILES_PATH], with the same headers) using plain [HttpURLConnection] (no OkHttp dependency).
  * Never throws: every failure is mapped to a [SendResult].
  */
 internal class IngestClient(
@@ -15,9 +16,10 @@ internal class IngestClient(
     private val apiKey: String,
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 15_000,
+    path: String = IngestEndpoint.INGEST_PATH,
 ) : Sender {
     // A malformed endpoint can never succeed, so it is resolved once and reported as Drop(0) on every send.
-    private val url: URL? = IngestEndpoint.url(endpoint)
+    private val url: URL? = IngestEndpoint.url(endpoint, path)
 
     // Defence in depth behind ARTrackerConfig.validate(): a key with CR/LF or any control character must never reach
     // the HTTP stack (the JDK opens the connection before it rejects such a header).
