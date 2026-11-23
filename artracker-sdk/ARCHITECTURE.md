@@ -264,16 +264,16 @@ Replay adalah urutan **screenshot asli** aplikasi. Data sensitif di-mask **di pe
 
 ### 6.5 Chunking, upload & sampling
 
-- `ScreenChunker` (tutup di 10 detik sejak entri pertama, saat sesi berganti, saat frame berikutnya tidak muat di 2 MB gzip, atau saat recording berhenti) menghasilkan chunk `artracker-screen-v1`. Chunk **bukan item `session` di `/ingest`**: ia disimpan di antrean `artracker_replay.db` (`ReplayStore`) dan dikirim lewat Session Replay API (§2). Chunk gzip >5 MiB dibuang.
+- `ScreenChunker` (tutup di 10 detik (mode penuh) atau 5 detik (mode buffer) sejak entri pertama, saat sesi berganti, saat frame berikutnya tidak muat di 2 MB gzip, atau saat recording berhenti) menghasilkan chunk `artracker-screen-v1`. Chunk **bukan item `session` di `/ingest`**: ia disimpan di antrean `artracker_replay.db` (`ReplayStore`) dan dikirim lewat Session Replay API (§2). Chunk gzip >5 MiB dibuang.
 - `seq` ditetapkan oleh `ReplayStore` dan dipersist per session, jadi melanjutkan setelah proses restart pada session yang sama. `start_time` = timestamp entri pertama dari chunk pertama session itu.
 - Flush tick tiap 5 detik menutup chunk yang sudah melewati jendelanya.
 - Upload replay lewat `ARTrackerSender` bila host mengaturnya (`NetworkConfig.sender`), jadi Chucker, certificate pinning, dan proxy host ikut mencakupnya; tanpa sender dipakai `HttpURLConnection` bawaan (`ReplayClient`). Karena itu `SendRequest` punya `method` (`POST`, atau `PUT` untuk upload) dan `SendResponse` punya `body` (langkah `chunk-url` membaca `upload_url` darinya). `FlushWorker` di proses tanpa `init` selalu memakai transport bawaan.
 - `403 {"error":"screenshot_disabled"}` pada `chunk-url` (→ `ReplayResult.ScreenshotDisabled`; 403 tanpa body terbaca diperlakukan sama) berarti pemilik project mematikan replay screenshot: chunk dibuang, chunk lain yang menunggu di antrean dihapus (`ReplayQueue.clearFormat`), dan `ReplayController.onScreenshotDisabled()` menghentikan perekaman di proses itu (chunk yang terbuka dibuang, dicatat sekali). Ini bukan kegagalan autentikasi: kill-switch tidak menyala. Proses berikutnya mencoba lagi.
-- **Default `replay.enabled = false`** (opt-in, setara keputusan D2 web) dan `sampleRate = 0.1`. Sampling deterministik: `hash(session_id) < sampleRate`.
+- **Default `replay.enabled = false`** (opt-in, setara keputusan D2 web) dan `sampleRate = 0.0` (dulu `0.1`) dengan `onErrorSampleRate = 1.0`. Sampling deterministik: `hash(session_id) < sampleRate` -> rekam penuh; jika tidak, `onErrorSampleRate` (di-hash dari `sessionId + ":on-error"`) -> mode buffer (chunk 5 dtk ditahan di perangkat, diunggah saat item ERROR/FATAL dicatat atau setelah crash/ANR pada launch berikutnya).
 
 ### 6.6 Pipeline screenshot
 
-API: `ReplayConfig(enabled, sampleRate, framesPerSecond, quality = ReplayQuality.LOW|STANDARD|HIGH)`. Preset (sisi pendek gambar / kualitas JPEG): LOW 480 px / 50, STANDARD 720 px / 60, HIGH 1080 px / 75, tidak pernah di-upscale. `framesPerSecond` dijepit 0,5–10 (disarankan 2).
+API: `ReplayConfig(enabled, sampleRate, framesPerSecond, quality = ReplayQuality.LOW|STANDARD|HIGH, …, onErrorSampleRate)` (`onErrorSampleRate` parameter terakhir, default `1.0`). Preset (sisi pendek gambar / kualitas JPEG): LOW 480 px / 50, STANDARD 720 px / 60, HIGH 1080 px / 75, tidak pernah di-upscale. `framesPerSecond` dijepit 0,5–10 (disarankan 2).
 
 **Capture** (`replay/screenshot/`):
 
@@ -283,7 +283,7 @@ API: `ReplayConfig(enabled, sampleRate, framesPerSecond, quality = ReplayQuality
 | `MaskCollector` / `ComposeMaskCollector` (main thread, satu pass yang sama) | Kumpulkan rect mask dalam koordinat layar dari `MaskingPolicy` (password, sensitif, mask eksplisit, `maskAllInputs`, `maskAllText`, `sensitiveViewClasses`, view terblokir) dan pass semantics Compose khusus mask (`ComposeMaskRules`, tanpa membaca gaya). Gagal membaca → frame dibuang |
 | `ScreenshotEncoder` (thread pemrosesan) | Cat mask (`MaskPainter`, pola silang) **di bitmap ukuran penuh sebelum** fingerprint, scale, dan JPEG; fingerprint CRC dari downscale 64×64 menekan frame kembar; scale ke preset; JPEG |
 | `ByteBudgetGovernor` | Jendela 60 s byte terenkode; >5 MB → fps dibagi dua (min 0,5, paling sering tiap 10 s); overrun menetap di lantai fps → kualitas turun satu preset (tidak naik lagi dalam sesi); pulih di bawah 80 % |
-| `ScreenChunker` | Chunk `artracker-screen-v1` (JSON gzip `{format, platform:"android", seq, frames:[{ts,screen,w,h,vw,vh,mime,data(base64),masked}], touches:[{ts,x,y,kind}]}`), tutup di 10 s, 2 MB gzip, atau ganti sesi; frame yang tidak muat sendirian di-encode ulang satu preset lebih rendah, kalau masih tidak muat dibuang |
+| `ScreenChunker` | Chunk `artracker-screen-v1` (JSON gzip `{format, platform:"android", seq, frames:[{ts,screen,w,h,vw,vh,mime,data(base64),masked}], touches:[{ts,x,y,kind}]}`), tutup di 10 s (mode penuh) atau 5 s (mode buffer), 2 MB gzip, atau ganti sesi; frame yang tidak muat sendirian di-encode ulang satu preset lebih rendah, kalau masih tidak muat dibuang |
 
 Pemicu capture memakai `FrameScheduler` (dirty flag + `requestSoon`), watchdog 16 ms per capture dan `capFps` dari governor. Keputusan: `SurfaceView`/`TextureView`/`VideoView`/peta/WebView **terblokir** oleh `MaskingPolicy`, sehingga areanya di-mask, bukan di-composite lewat `PixelCopy(surfaceView)`. Frame pertama sesi, pergantian layar (nama mentah, di memori saja), dan checkout tiap 2 menit selalu dikirim meskipun gambarnya sama; frame kembar lain tidak dikirim. Upload memakai `ReplayClient` (`format` ikut di body `chunk-url`, `event_count` = frame + sentuhan). Nama layar di tiap frame dibangun `ReplayHref` (disanitasi).
 
@@ -483,7 +483,7 @@ CREATE TABLE replay_seq (session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL,
 | Q1 | Nama API | **`ARTracker.init`** (issue + parity web). Snippet `ARTracker.start` di landing page diperbarui terpisah |
 | Q2 | Package | **Tetap `id.art.tracker`**: seluruh kode Kotlin SDK berada di package `id.art.tracker` (dan sub-package `core`, `transport`, …); groupId Maven `id.art.tracker`. Sample app **tidak diubah** (namespace & package tetap `id.art.tracker`). Agar kelas `R`/`BuildConfig` hasil generate tidak bentrok dengan app, properti Gradle `android.namespace` modul library diisi `id.art.tracker.sdk`. Ini hanya memengaruhi kelas generate, bukan package kode. SDK tidak boleh memakai sub-package `id.art.tracker.ui` (dipakai sample app) |
 | Q3 | Format replay | Screenshot yang di-mask di perangkat (§6.1) sebagai satu-satunya format; wireframe → rrweb dan pembacaan konfigurasi mode dari server dihapus |
-| Q4 | Replay default | Off + sampling 0.1 (parity web) |
+| Q4 | Replay default | Off + sampling 0.1 (parity web); sejak replay-on-error: `sampleRate = 0.0` + `onErrorSampleRate = 1.0` |
 | Q5 | `maskAllInputs` default `true` | Lebih aman daripada hanya password/numerik; bisa dilonggarkan per view |
 | R1 | `ViewRootForTest.semanticsOwner` dan `WindowManagerGlobal` adalah API internal/reflection | Dibungkus `runCatching` + fallback; diuji di setiap bump versi Compose |
 | R2 | AGP 9.0.1 memakai built-in Kotlin, sedangkan catalog `kotlin = 2.0.21` (plugin compose). Kompatibilitas belum diverifikasi | Diverifikasi di Fase 0 dengan `./gradlew :artracker-sdk:assemble`; naikkan Kotlin bila perlu |

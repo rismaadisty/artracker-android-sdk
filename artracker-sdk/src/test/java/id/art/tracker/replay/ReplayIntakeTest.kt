@@ -32,6 +32,19 @@ class ReplayIntakeTest {
         override fun resetOrphaned() = Unit
         override fun purgeOlderThan(cutoffMs: Long) = Unit
         override fun clearFormat(format: String) = Unit
+        var promoteResult = 0
+        val promoted = mutableListOf<String>()
+        val droppedHeld = mutableListOf<String>()
+        override fun promote(sessionId: String): Int {
+            promoted += sessionId
+            return promoteResult
+        }
+        override fun promoteHeldBefore(cutoffMs: Long): Int = 0
+        override fun dropHeld(sessionId: String): Int {
+            droppedHeld += sessionId
+            return 0
+        }
+        override fun dropHeldBefore(cutoffMs: Long): Int = 0
     }
 
     @Test
@@ -66,5 +79,49 @@ class ReplayIntakeTest {
         // The opt-out's own clear() may already have run before this batch was committed: it must be cleared again.
         assertEquals(1, queue.cleared)
         assertEquals(0, kicks)
+    }
+
+    @Test
+    fun heldBatch_isStored_butDoesNotKick() {
+        val queue = RecordingQueue()
+        var kicks = 0
+        ReplayIntake({ false }, { queue }, { kicks++ }).accept(NewReplayBatch("session-xyz-1", byteArrayOf(1), 1, 1, 2, false, null, "test", held = true))
+
+        assertEquals(1, queue.enqueued)
+        assertEquals(0, kicks)
+    }
+
+    @Test
+    fun promote_kicksOnlyWhenRowsPromoted() {
+        val queue = RecordingQueue()
+        var kicks = 0
+        val intake = ReplayIntake({ false }, { queue }, { kicks++ })
+
+        queue.promoteResult = 0
+        intake.promote("session-xyz-1")
+        assertEquals(0, kicks)
+
+        queue.promoteResult = 2
+        intake.promote("session-xyz-1")
+        assertEquals(1, kicks)
+        assertEquals(listOf("session-xyz-1", "session-xyz-1"), queue.promoted)
+    }
+
+    @Test
+    fun promote_whileDisabled_doesNothing() {
+        val queue = RecordingQueue().also { it.promoteResult = 2 }
+        var kicks = 0
+        ReplayIntake({ true }, { queue }, { kicks++ }).promote("session-xyz-1")
+
+        assertTrue(queue.promoted.isEmpty())
+        assertEquals(0, kicks)
+    }
+
+    @Test
+    fun discardHeld_dropsSessionHeldRows() {
+        val queue = RecordingQueue()
+        ReplayIntake({ false }, { queue }, {}).discardHeld("session-xyz-1")
+
+        assertEquals(listOf("session-xyz-1"), queue.droppedHeld)
     }
 }

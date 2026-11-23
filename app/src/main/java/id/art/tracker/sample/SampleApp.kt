@@ -59,7 +59,7 @@ object SampleApp {
         environment = "sample",
         debug = debug,
         replay = ReplayConfig(
-            enabled = true, sampleRate = 1.0, framesPerSecond = 2.0, quality = ReplayQuality.STANDARD,
+            enabled = true, sampleRate = 1.0, onErrorSampleRate = 1.0, framesPerSecond = 2.0, quality = ReplayQuality.STANDARD,
         ),
         network = NetworkConfig(sender = sender),
         beforeSend = beforeSend,

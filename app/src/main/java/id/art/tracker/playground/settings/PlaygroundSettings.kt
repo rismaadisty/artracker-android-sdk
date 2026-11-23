@@ -18,6 +18,7 @@ data class PlaygroundSettings(
     val environment: String = "sample",
     val replayEnabled: Boolean = true,
     val replaySampleRate: Double = 1.0,
+    val replayOnErrorSampleRate: Double = 1.0,
     val replayFps: Double = 2.0,
     val replayQuality: ReplayQuality = ReplayQuality.STANDARD,
     val maskAllInputs: Boolean = true,
@@ -35,6 +36,7 @@ data class PlaygroundSettings(
         if (sessionTimeoutMs < MIN_MS) errors += "sessionTimeoutMs minimal $MIN_MS ms"
         if (!replayFps.isFinite()) errors += "replayFps harus berupa angka terhingga"
         if (!(replaySampleRate in 0.0..1.0)) errors += "replaySampleRate harus antara 0.0 dan 1.0"
+        if (!(replayOnErrorSampleRate in 0.0..1.0)) errors += "replayOnErrorSampleRate harus antara 0.0 dan 1.0"
         if (!(networkSampleRate in 0.0..1.0)) errors += "networkSampleRate harus antara 0.0 dan 1.0"
         if (endpointProfile == EndpointProfile.LOCAL && EndpointGuard.classify(localEndpoint) != EndpointClass.SAFE_LOCAL) {
             errors += "Endpoint LOCAL harus host lokal (localhost, 127.0.0.1, 10.0.2.2); host remote hanya lewat profil Backend"
@@ -69,6 +71,7 @@ data class PlaygroundSettings(
             debug = debug,
             replay = ReplayConfig(
                 enabled = replayEnabled, sampleRate = replaySampleRate, framesPerSecond = replayFps, quality = replayQuality,
+                onErrorSampleRate = replayOnErrorSampleRate,
             ),
             privacy = PrivacyConfig(maskAllInputs = maskAllInputs, maskAllText = maskAllText),
             network = NetworkConfig(

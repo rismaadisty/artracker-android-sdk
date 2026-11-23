@@ -19,11 +19,14 @@ internal class NewReplayBatch(
     val format: String = ReplayFormat.SCREEN_V1,
     /** A rage tap (see `RageTapDetector`) landed in this chunk. Last, so positional callers keep working. */
     val hasRageClick: Boolean = false,
+    /** Buffer mode: stored but not uploadable until promoted (`state = 0`, no `seq` yet). Last, so positional callers keep working. */
+    val held: Boolean = false,
 )
 
 /**
  * A queued batch handed out by [ReplayQueue.claim]. [seq] is assigned by the queue (persisted per session),
- * [startMs] is the first timestamp of the session's first batch and [durationMs] runs from there to this batch's last event.
+ * [startMs] is the first timestamp of the session's first promoted or ready batch (held rows, `state = 0` and
+ * `seq = -1`, are not uploaded until promoted and do not set it), and [durationMs] runs from there to this batch's last event.
  */
 internal class ReplayUpload(
     val id: String,
@@ -72,4 +75,16 @@ internal interface ReplayQueue {
 
     /** Deletes the pending (not in-flight) batches of one [ReplayFormat]; the `seq` counters stay. */
     fun clearFormat(format: String)
+
+    /** Makes the held batches of [sessionId] uploadable, allocating `seq` in `first_ts` order. Returns rows promoted. */
+    fun promote(sessionId: String): Int
+
+    /** Promotes every held batch (any session) created before [cutoffMs]. Returns rows promoted. */
+    fun promoteHeldBefore(cutoffMs: Long): Int
+
+    /** Deletes the held batches of [sessionId] and their bodies. Returns rows deleted. */
+    fun dropHeld(sessionId: String): Int
+
+    /** Deletes every held batch created before [cutoffMs]. Returns rows deleted. */
+    fun dropHeldBefore(cutoffMs: Long): Int
 }

@@ -17,6 +17,9 @@ import id.art.tracker.TelemetryItem
 import id.art.tracker.core.ARTrackerCore
 import id.art.tracker.core.ClassAvailability
 import id.art.tracker.replay.capture.TriggerKind
+import id.art.tracker.replay.screenshot.PixelCopyApi
+import id.art.tracker.replay.screenshot.ScreenChunker
+import id.art.tracker.replay.screenshot.ScreenshotKit
 import id.art.tracker.replay.touch.TouchRecorder
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.ProcessLifecycleTestUtil
@@ -73,7 +76,26 @@ class ReplayControllerTest {
     private val looper: Looper = Looper.getMainLooper()
     private val seen = CopyOnWriteArrayList<TelemetryItem>()
     private val sinkBatches = CopyOnWriteArrayList<NewReplayBatch>()
-    private val sink = ReplaySink { sinkBatches += it }
+
+    /** Every call the sink received, in order: `accept:<session>:held=<b>`, `promote:<session>`, `discard:<session>`. */
+    private val sinkEvents = CopyOnWriteArrayList<String>()
+    private val sink = object : ReplaySink {
+        override fun accept(batch: NewReplayBatch) {
+            sinkBatches += batch
+            sinkEvents += "accept:${batch.sessionId}:held=${batch.held}"
+        }
+
+        override fun promote(sessionId: String) {
+            sinkEvents += "promote:$sessionId"
+        }
+
+        override fun discardHeld(sessionId: String) {
+            sinkEvents += "discard:$sessionId"
+        }
+    }
+
+    /** Only the on-error sampling hits: every session records in BUFFER mode. */
+    private val onlyOnError = { id: String, _: Double -> id.endsWith(ON_ERROR_SALT) }
     private val clock = FakeClock(1_700_000_000_000L)
     private val dispatcher = ManualDispatcher()
     private var sampler: (String, Double) -> Boolean = Sampling::isSampled
@@ -114,6 +136,7 @@ class ReplayControllerTest {
         replay: ReplayConfig = ReplayConfig(enabled = true, sampleRate = 1.0),
         useDefaultFactory: Boolean = false,
         foreground: Boolean = true,
+        pixelCopy: PixelCopyApi? = null,
     ): ARTrackerCore {
         val cfg = config(replay)
         core = if (useDefaultFactory) {
@@ -121,7 +144,9 @@ class ReplayControllerTest {
         } else {
             ARTrackerCore(app, cfg, clock, replayFactory = { c, handler ->
                 testReplayController(
-                    c, handler, dispatcher, testScreenshotKit(c, handler, sink), { id, rate -> sampler(id, rate) },
+                    c, handler, dispatcher, testScreenshotKit(c, handler, sink, pixelCopy = pixelCopy),
+                    { id, rate -> sampler(id, rate) },
+                    sink = sink, // the same sink as the chunker's: accept / promote / discardHeld arrive in order
                     imeVisibility = { imeVisible },
                 )
             }, replaySink = sink, appStartFactory = { _, _ -> null })
@@ -384,11 +409,11 @@ class ReplayControllerTest {
     }
 
     @Test
-    fun noteError_flagsTheChunk() {
+    fun onError_flagsTheChunk() {
         startCore()
         textActivity()
         capture()
-        controller().noteError()
+        controller().onError()
         flushChunks()
 
         assertTrue(batches().single().hasError)
@@ -1028,7 +1053,7 @@ class ReplayControllerTest {
         val frames = frameCount()
         val batchesBefore = batches().size
 
-        controller().noteError()
+        controller().onError()
         controller().onTrigger(TriggerKind.ERROR)
         advanceBoth(1_000)
         assertEquals(batchesBefore, batches().size) // the chunk is open
@@ -1183,7 +1208,7 @@ class ReplayControllerTest {
         val batchesBefore = batches().size
 
         repeat(10) { // a failing request every 2 s for 20 s
-            controller().noteError()
+            controller().onError()
             controller().onTrigger(TriggerKind.ERROR)
             advanceBoth(2_000)
         }
@@ -1263,6 +1288,317 @@ class ReplayControllerTest {
 
         assertEquals(frames + 1, frameCount())
         assertEquals(1.0, schedulerField("stateRate") as Double, 0.0)
+    }
+
+    // endregion
+
+    // region BUFFER mode (replay on error)
+
+    private fun chunkerOf(): ScreenChunker {
+        val kit = controller().javaClass.getDeclaredField("screenshot").also { it.isAccessible = true }
+            .get(controller()) as ScreenshotKit
+        return kit.chunker
+    }
+
+    /** A BUFFER-mode core: only the on-error sampling hits. */
+    private fun startBuffer(): TextView {
+        sampler = onlyOnError
+        startCore(ReplayConfig(enabled = true))
+        val (_, tv) = textActivity()
+        dispatcher.runAll()
+        return tv
+    }
+
+    /** Changes the picture and captures it, so every call yields a frame (dedup lets it through). */
+    private var frameNo = 0
+    private fun changeAndCapture(tv: TextView) {
+        tv.text = "frame ${frameNo++}"
+        idle(0)
+        capture()
+    }
+
+    @Test
+    fun bufferMode_chunksAreHeld_andUse5sWindow() {
+        val tv = startBuffer()
+        assertEquals(RecordingMode.BUFFER, controller().mode)
+        changeAndCapture(tv)
+        advanceBoth(6_000) { changeAndCapture(tv) }
+        settle()
+
+        // A 10 s window would still hold the chunk open: it closed within 6 s.
+        assertTrue("batches=${batches().size}", batches().isNotEmpty())
+        assertTrue(batches().all { it.held })
+        assertEquals(ScreenChunker.BUFFER_WINDOW_MS, chunkerOf().windowMs)
+    }
+
+    @Test
+    fun bufferMode_noError_nothingPromoted() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        advanceBoth(120_000) { changeAndCapture(tv) }
+        flushChunks()
+
+        assertTrue(batches().size >= 2)
+        assertTrue(batches().all { it.held })
+        assertTrue(sinkEvents.none { it.startsWith("promote:") })
+    }
+
+    @Test
+    fun bufferMode_error_closesOpenChunkHeld_thenPromotes() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        val sid = core.session.peekId()!!
+        assertTrue(batches().isEmpty()) // the chunk is open
+
+        controller().onError()
+        dispatcher.runAll()
+
+        assertEquals(listOf("accept:$sid:held=true", "promote:$sid"), sinkEvents.toList())
+        assertTrue(batches().single().hasError)
+    }
+
+    @Test
+    fun bufferMode_errorFromAnotherThread_promotesWithoutTheMainThread() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        val sid = core.session.peekId()!!
+
+        // The API 24-29 ANR watchdog reports from its own thread while the main thread is blocked (the process may be
+        // killed from the ANR dialog before it unblocks): the main looper is deliberately not run here.
+        val reporter = Thread { controller().onError() }
+        reporter.start()
+        reporter.join()
+        dispatcher.runAll()
+
+        assertEquals(listOf("accept:$sid:held=true", "promote:$sid"), sinkEvents.toList())
+        assertTrue(batches().single().hasError)
+    }
+
+    @Test
+    fun bufferToFullSessionChange_strayFrameOfTheOldSession_isDropped() {
+        // The copy completes only when this test says so, like PixelCopy on API 26+ (its result comes back on main).
+        val copies = ArrayList<(Int) -> Unit>()
+        fun completeCopies() {
+            while (copies.isNotEmpty()) copies.removeAt(0)(PixelCopyApi.ERROR)
+            idle(0)
+        }
+        var first: String? = null
+        sampler = { id, rate -> if (first == null || id.startsWith(first!!)) onlyOnError(id, rate) else true }
+        startCore(ReplayConfig(enabled = true), pixelCopy = PixelCopyApi { _, _, done -> copies += done })
+        val (_, tv) = textActivity()
+        dispatcher.runAll()
+        first = core.session.peekId()!!
+        assertEquals(RecordingMode.BUFFER, controller().mode)
+        tv.text = "old session"
+        idle(0)
+        controller().captureFrame() // a frame of the BUFFER session whose copy is still running
+        assertTrue(copies.isNotEmpty())
+
+        ARTracker.reset() // the next session is recorded in FULL mode
+        idle(200)
+        dispatcher.runAll()
+        val second = core.session.peekId()!!
+        assertNotEquals(first, second)
+        assertEquals(RecordingMode.FULL, controller().mode)
+
+        completeCopies() // the old session's frame reaches the processing context after the change
+        dispatcher.runAll()
+        tv.text = "new session"
+        idle(0)
+        controller().captureFrame()
+        completeCopies()
+        dispatcher.runAll()
+        flushChunks()
+
+        assertTrue(sinkEvents.toString(), sinkEvents.none { it == "accept:$first:held=false" })
+        assertTrue(sinkEvents.toString(), sinkEvents.contains("accept:$second:held=false"))
+    }
+
+    @Test
+    fun bufferMode_followUp30s_ready_thenHeldAgain() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        controller().onError()
+        dispatcher.runAll()
+        val atError = batches().size
+
+        advanceBoth(25_000) { changeAndCapture(tv) } // inside the 30 s follow-up window
+        val inFollowUp = batches().drop(atError)
+        assertTrue("inFollowUp=${inFollowUp.size}", inFollowUp.isNotEmpty())
+        assertTrue(inFollowUp.none { it.held })
+
+        advanceBoth(10_000) { changeAndCapture(tv) } // the window ends here: its chunk ships, held again after
+        val afterEnd = batches().size
+        advanceBoth(20_000) { changeAndCapture(tv) }
+        flushChunks()
+
+        val later = batches().drop(afterEnd)
+        assertTrue("later=${later.size}", later.isNotEmpty())
+        assertTrue(later.all { it.held })
+        assertEquals(1, sinkEvents.count { it.startsWith("promote:") })
+    }
+
+    @Test
+    fun errorBurst_promotesOnce() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        repeat(10) { // an API failing every 500 ms
+            controller().onError()
+            advanceBoth(500) { changeAndCapture(tv) }
+        }
+        settle()
+
+        assertEquals(1, sinkEvents.count { it.startsWith("promote:") })
+    }
+
+    @Test
+    fun bufferMode_sessionChange_discardsOldHeld() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        val first = core.session.peekId()!!
+
+        ARTracker.reset() // rotates the session
+        idle(200)
+        dispatcher.runAll()
+        val second = core.session.peekId()!!
+        assertNotEquals(first, second)
+
+        // The old chunk is closed held, then the old session's held chunks are dropped.
+        assertEquals(listOf("accept:$first:held=true", "discard:$first"), sinkEvents.toList())
+        assertEquals(RecordingMode.BUFFER, controller().mode)
+
+        changeAndCapture(tv)
+        flushChunks()
+        assertEquals("accept:$second:held=true", sinkEvents.last())
+    }
+
+    @Test
+    fun bufferMode_sessionChangeToNotRecorded_discardsOldHeld() {
+        var firstOnly: String? = null
+        sampler = { id, rate -> (firstOnly == null || id.startsWith(firstOnly!!)) && onlyOnError(id, rate) }
+        startCore(ReplayConfig(enabled = true))
+        val (_, tv) = textActivity()
+        changeAndCapture(tv)
+        val first = core.session.peekId()!!
+        firstOnly = first
+
+        ARTracker.reset()
+        idle(200)
+        settle()
+
+        assertFalse(controller().isRunning)
+        assertNull(controller().mode)
+        assertEquals(listOf("accept:$first:held=true", "discard:$first"), sinkEvents.toList())
+    }
+
+    /** BUFFER session, one held chunk closed by the background, then the session times out in the background. */
+    private fun bufferThenBackgroundTimeout(): String {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+        val old = core.session.peekId()!!
+        ProcessLifecycleTestUtil.stop()
+        settle()
+        assertEquals(listOf("accept:$old:held=true"), sinkEvents.toList())
+        clock.advance(1_800_001) // just past the 30 minute timeout
+        return old
+    }
+
+    @Test
+    fun bufferMode_backgroundTimeout_newSession_discardsOldHeld() {
+        val old = bufferThenBackgroundTimeout()
+
+        ProcessLifecycleTestUtil.start() // the core rotates the session, then replay re-evaluates
+        applyPosted()
+        settle()
+        val fresh = core.session.peekId()!!
+        assertNotEquals(old, fresh)
+        assertTrue(controller().isRunning)
+        assertEquals(RecordingMode.BUFFER, controller().mode)
+        assertEquals(listOf("accept:$old:held=true", "discard:$old"), sinkEvents.toList())
+
+        controller().onDisabledChanged() // a later re-evaluate does not discard again
+        applyPosted()
+        assertEquals(1, sinkEvents.count { it == "discard:$old" })
+    }
+
+    @Test
+    fun bufferMode_backgroundTimeout_newSessionNotRecorded_discardsOldHeld() {
+        var recordOnly: String? = null
+        sampler = { id, rate -> (recordOnly == null || id.startsWith(recordOnly!!)) && onlyOnError(id, rate) }
+        startCore(ReplayConfig(enabled = true))
+        val (_, tv) = textActivity()
+        changeAndCapture(tv)
+        val old = core.session.peekId()!!
+        recordOnly = old
+        ProcessLifecycleTestUtil.stop()
+        settle()
+        clock.advance(1_800_001)
+
+        ProcessLifecycleTestUtil.start()
+        applyPosted()
+        settle()
+        assertNotEquals(old, core.session.peekId())
+        assertFalse(controller().isRunning)
+        assertEquals(listOf("accept:$old:held=true", "discard:$old"), sinkEvents.toList())
+
+        controller().onDisabledChanged() // a later re-evaluate does not discard again
+        applyPosted()
+        assertEquals(1, sinkEvents.count { it == "discard:$old" })
+    }
+
+    @Test
+    fun fullMode_unchanged_noPromoteNoHeld() {
+        sampler = { _, _ -> true }
+        startCore()
+        val (_, tv) = textActivity()
+        assertEquals(RecordingMode.FULL, controller().mode)
+        changeAndCapture(tv)
+        controller().onError()
+        advanceBoth(15_000) { changeAndCapture(tv) }
+        controller().onError()
+        flushChunks()
+
+        assertTrue(batches().isNotEmpty())
+        assertTrue(batches().none { it.held })
+        assertTrue(batches().first().hasError)
+        assertTrue(sinkEvents.none { it.startsWith("promote:") || it.startsWith("discard:") })
+        assertEquals(ScreenChunker.DEFAULT_WINDOW_MS, chunkerOf().windowMs)
+    }
+
+    @Test
+    fun manualStart_isFull_evenWithBufferSampler() {
+        val tv = startBuffer()
+        assertEquals(RecordingMode.BUFFER, controller().mode)
+        changeAndCapture(tv)
+        val sid = core.session.peekId()!!
+
+        ARTracker.startReplay()
+        idle(200)
+        dispatcher.runAll()
+        assertEquals(RecordingMode.FULL, controller().mode)
+        // Same session, BUFFER -> FULL: the buffered chunk closes held and the session's held chunks are promoted.
+        assertEquals(listOf("accept:$sid:held=true", "promote:$sid"), sinkEvents.toList())
+
+        val before = batches().size
+        changeAndCapture(tv)
+        flushChunks()
+        val after = batches().drop(before)
+        assertTrue(after.isNotEmpty())
+        assertTrue(after.none { it.held })
+        assertEquals(ScreenChunker.DEFAULT_WINDOW_MS, chunkerOf().windowMs)
+    }
+
+    @Test
+    fun bufferMode_background_closesHeld_noKick() {
+        val tv = startBuffer()
+        changeAndCapture(tv)
+
+        ProcessLifecycleTestUtil.stop()
+        settle()
+
+        assertTrue(batches().last().held)
+        assertTrue(sinkEvents.none { it.startsWith("promote:") })
+        assertNull(controller().mode)
     }
 
     // endregion

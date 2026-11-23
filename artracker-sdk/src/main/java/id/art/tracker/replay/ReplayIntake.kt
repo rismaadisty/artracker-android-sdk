@@ -1,11 +1,18 @@
 package id.art.tracker.replay
 
+import id.art.tracker.core.SdkLog
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayQueue
 
 /** Receives each closed replay chunk (the core queues it for upload). */
 internal fun interface ReplaySink {
     fun accept(batch: NewReplayBatch)
+
+    /** Makes the session's held (buffer-mode) chunks uploadable. */
+    fun promote(sessionId: String) {}
+
+    /** Drops the session's held chunks. */
+    fun discardHeld(sessionId: String) {}
 }
 
 /**
@@ -28,6 +35,19 @@ internal class ReplayIntake(
             store.clear()
             return
         }
-        onQueued()
+        if (!batch.held) onQueued()
+    }
+
+    override fun promote(sessionId: String) {
+        if (isDisabled()) return
+        val n = queue().promote(sessionId)
+        if (n > 0) {
+            SdkLog.d("replay buffer promoted: $n chunks")
+            onQueued()
+        }
+    }
+
+    override fun discardHeld(sessionId: String) {
+        queue().dropHeld(sessionId)
     }
 }

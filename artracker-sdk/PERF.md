@@ -427,3 +427,24 @@ animation was switched on, none afterwards, and the session id changed after the
 read of the sink summary was 1 chunk / 6 frames (right after setup). A third run meant to read the chunk count with a
 single quick gesture was started and then **abandoned** (it takes 31 min per run), and a "before" run of `main` was **never
 taken**, so the plan's before/after table is not complete. Both are open.
+
+
+## 7. Replay buffer mode
+
+Status: **NOT MEASURED.** No device was available when buffer mode was written; the procedure below is ready to run and
+every result stays `NOT MEASURED` until it is.
+
+Procedure: same as section 2 (sample app, debug build, a physical device, profile `SINK`) with
+`ReplayConfig(enabled = true, sampleRate = 0.0, onErrorSampleRate = 1.0)` (playground: replay sample rate `0.0`, on-error
+sample rate `1.0`).
+
+1. Run A, no error: scroll the Feed for 5 minutes without logging any `ERROR`/`FATAL` item. Record the bytes uploaded
+   (sink summary, or the `chunk-ack` count times the chunk size). Expected: about 0.
+2. Run B, one error: the same 5 minutes, then log one error with `ARTracker` (`ARTracker.log(LogLevel.ERROR, ...)`, or the Lab
+   button). Record the bytes uploaded after the 30 s follow-up. Expected: at most about 5 MB plus the follow-up.
+3. For both runs compute the capture p50/p95/max with the commands of section 2.
+
+| Run | Device | Bytes uploaded | Capture p50 (us) | Capture p95 (us) | Capture max (us) |
+| --- | --- | --- | --- | --- | --- |
+| A: 5 min scrolling, no error | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| B: 5 min scrolling, one error | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |

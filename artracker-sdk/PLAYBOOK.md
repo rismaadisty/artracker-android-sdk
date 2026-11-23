@@ -169,7 +169,7 @@ flowchart TD
         S4 --> P1["MaskPainter: cat mask di bitmap PENUH"]
         P1 --> P2["Fingerprint CRC 64×64<br/>(frame kembar dibuang, kecuali frame pertama,<br/>ganti layar, checkpoint 2 mnt)"]
         P2 --> P3["Scale (LOW 480 / STANDARD 720 / HIGH 1080) → JPEG"]
-        P3 --> P4["ScreenChunker: tutup tiap 10 dtk,<br/>2 MB gzip, atau ganti sesi"]
+        P3 --> P4["ScreenChunker: tutup tiap 10 dtk (buffer: 5 dtk),<br/>2 MB gzip, atau ganti sesi"]
     end
     T1["TouchRecorder (Window.Callback wrapper)<br/>DOWN/UP selalu, MOVE ≥50 ms"] --> P4
     P4 --> R1[("ReplayStore: file .gz + baris SQLite<br/>maks 50 MB / 200 batch / 8 attempt")]
@@ -183,7 +183,17 @@ flowchart TD
 ```
 
 Governor: `ByteBudgetGovernor` membagi dua fps bila >5 MB / 60 dtk; bila masih lewat di fps minimum, kualitas turun satu preset. `FrameScheduler` menurunkan fps bila capture >16 ms tiga kali berturut-turut.
-Gate awal: `replay.enabled = true` **dan** sampling deterministik `hash(session_id) < sampleRate`.
+Gate awal: `replay.enabled = true` **dan** sampling deterministik `hash(session_id) < sampleRate` (mode penuh).
+
+#### Mode buffer (replay-on-error)
+
+Default berubah: `sampleRate` kini `0.0` (dulu `0.1`) dan ada `onErrorSampleRate = 1.0` (parameter terakhir `ReplayConfig`). Mode per sesi: `sampleRate` kena -> rekam penuh (seperti sebelumnya); jika tidak, `onErrorSampleRate` kena (di-hash dari `sessionId + ":on-error"`) -> mode buffer; jika tidak, tidak direkam. `startReplay()` selalu mode penuh, dan beralih ke penuh di tengah sesi buffer mengunggah buffer yang tertahan.
+
+- Chunk 5 dtk disimpan di perangkat ("held", `state = 0`, `seq = -1`), maks 60 dtk terakhir / 13 chunk per sesi; tidak diunggah selama belum dipromosikan.
+- Trigger unggah: item `ERROR`/`FATAL` dari proses ini yang dicatat (termasuk ANR watchdog API 24-29). Maks 3 per sesi dengan jeda >= 60 dtk, ditambah 30 dtk rekaman lanjutan.
+- Setelah crash JVM, ANR API 30+ atau crash native, buffer run sebelumnya diunggah pada launch berikutnya; selain itu dibuang. Buffer sesi yang timeout dibuang.
+- Celah yang diketahui: hingga ~5 dtk terakhir sebelum crash (chunk yang masih di memori) hilang. Item error yang dibuang `beforeSend` host tetap memicu unggah buffer (pemicu jalan saat item di-enqueue); crash JVM yang dibuang `beforeSend` dianggap run bersih, sedangkan item exit `anr`/`native_crash` tetap dihitung crash walau dibuang `beforeSend`. Jika sebuah launch berstatus disabled, keputusan launch berikutnya hanya melihat apakah pendahulunya sendiri crash, sehingga crash sebelum launch disabled bisa kehilangan buffer-nya.
+- DB replay naik ke versi 5 (`artracker_replay.db`); chunk yang antre sebelum upgrade tetap diunggah.
 
 ### A7. Session profiling (`perf/`, opt-in)
 
@@ -252,7 +262,7 @@ Selalu aktifkan `debug = true` saat verifikasi supaya `SdkLog` tampil.
 | Berhenti kirim setelah `401` | Key salah/dicabut | Perbaiki key; tunggu `disabledUntil` atau hapus data app saat uji |
 | Data lambat muncul | Di background hanya WorkManager (tunda OS) | Normal; `flush()` saat foreground untuk uji |
 | `429` terus | Kuota project 1000 event/s dibagi semua device | Turunkan sampling replay/perf, kurangi event berisik |
-| Replay kosong | `enabled=false`, sesi tak lolos sampling, `403 screenshot_disabled`, backend lama (`404` → batch dibuang) | Cek config + `sampleRate`; cek setting project; upgrade backend |
+| Replay kosong | `enabled=false`, sesi tak lolos sampling (`sampleRate`/`onErrorSampleRate`), mode buffer tanpa error ERROR/FATAL, `403 screenshot_disabled`, backend lama (`404` → batch dibuang) | Cek config + `sampleRate`; cek setting project; upgrade backend |
 | Replay berhenti setelah kill-switch 401 pulih | Batasan diketahui: tidak auto-resume saat tetap foreground | `startReplay()` atau relaunch |
 | Area layar hitam/silang tak terduga | `SurfaceView`/`TextureView`/`WebView`/map/`FLAG_SECURE` selalu di-mask | Perilaku by design |
 | Crash tidak terkirim | App di-kill sebelum file ditulis (>50 ms) atau belum relaunch | Relaunch online; cek file `filesDir/artracker/crash/` |

@@ -28,6 +28,7 @@ class SharedPrefsSettingsStore(context: Context) : SettingsStore {
                 environment = prefs.getString("environment", null) ?: d.environment,
                 replayEnabled = prefs.getBoolean("replayEnabled", d.replayEnabled),
                 replaySampleRate = prefs.getString("replaySampleRate", null)?.toDouble() ?: d.replaySampleRate,
+                replayOnErrorSampleRate = prefs.getString("replayOnErrorSampleRate", null)?.toDouble() ?: d.replayOnErrorSampleRate,
                 replayFps = prefs.getString("replayFps", null)?.toDouble() ?: d.replayFps,
                 replayQuality = prefs.getString("replayQuality", null)?.let { ReplayQuality.valueOf(it) } ?: d.replayQuality,
                 maskAllInputs = prefs.getBoolean("maskAllInputs", d.maskAllInputs),
@@ -52,6 +53,7 @@ class SharedPrefsSettingsStore(context: Context) : SettingsStore {
             .putString("environment", settings.environment)
             .putBoolean("replayEnabled", settings.replayEnabled)
             .putString("replaySampleRate", settings.replaySampleRate.toString())
+            .putString("replayOnErrorSampleRate", settings.replayOnErrorSampleRate.toString())
             .putString("replayFps", settings.replayFps.toString())
             .putString("replayQuality", settings.replayQuality.name)
             .putBoolean("maskAllInputs", settings.maskAllInputs)

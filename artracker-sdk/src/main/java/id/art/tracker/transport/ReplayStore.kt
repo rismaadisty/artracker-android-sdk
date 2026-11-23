@@ -21,6 +21,10 @@ import java.io.IOException
  * `seq` is allocated from `replay_seq`, which outlives the batches (complete/clear/eviction keep it), so a session that
  * continues after a process restart never reuses a `seq`: the server overwrites the stored object on a repeated `seq`
  * while ignoring the repeated ack.
+ *
+ * Buffer mode stores HELD rows (`state = 0`, `seq = -1`): they are never claimed for upload until promoted (they then
+ * get a `seq` and become ready), and are trimmed to the held window and cap, or dropped when the run ended cleanly.
+ * `start_ms` of a session comes from its first promoted or ready chunk, so a replay can start mid-session.
  */
 internal class ReplayStore(
     context: Context,
@@ -28,10 +32,15 @@ internal class ReplayStore(
     private val maxBytes: Long = DEFAULT_MAX_BYTES,
     private val maxBatches: Int = 200,
     private val maxAttempts: Int = 8,
+    private val heldWindowMs: Long = HELD_WINDOW_MS,
+    private val maxHeldPerSession: Int = MAX_HELD_PER_SESSION,
     dbName: String = DB_NAME,
     private val bodiesDir: File = File(context.applicationContext.noBackupFilesDir, BODIES_PATH),
 ) : ReplayQueue {
-    private val helper = object : SQLiteOpenHelper(context.applicationContext, dbName, null, DB_VERSION) {
+    /** When this store (so this process) opened: [trimHeld] leaves older held rows to the launch decision. */
+    private val openedAtMs = clock.nowMs()
+
+    private val helper =object : SQLiteOpenHelper(context.applicationContext, dbName, null, DB_VERSION) {
         override fun onCreate(db: SQLiteDatabase) {
             createBatchesTable(db)
             db.execSQL(
@@ -59,6 +68,10 @@ internal class ReplayStore(
                     // Chunks already queued keep uploading, with has_rage_click false.
                     db.execSQL("ALTER TABLE replay_batches ADD COLUMN has_rage_click INTEGER NOT NULL DEFAULT 0")
                 }
+                if (oldVersion < 5) {
+                    // Chunks already queued are ready (state 1); only buffer mode writes state 0 (held).
+                    db.execSQL("ALTER TABLE replay_batches ADD COLUMN state INTEGER NOT NULL DEFAULT 1")
+                }
             }
         }
     }
@@ -81,7 +94,8 @@ internal class ReplayStore(
                 "format TEXT NOT NULL DEFAULT '${ReplayFormat.SCREEN_V1}', " +
                 "size_bytes INTEGER NOT NULL, " +
                 "claimed INTEGER NOT NULL DEFAULT 0, " +
-                "attempts INTEGER NOT NULL DEFAULT 0)",
+                "attempts INTEGER NOT NULL DEFAULT 0, " +
+                "state INTEGER NOT NULL DEFAULT 1)",
         )
         db.execSQL("CREATE INDEX idx_replay_pending ON replay_batches(claimed, created_at, seq)")
     }
@@ -94,7 +108,7 @@ internal class ReplayStore(
             writeBody(name, batch.gzipBody)
             try {
                 db.inTransaction {
-                val seq = nextSeq(db, batch, now)
+                val seq = if (batch.held) -1 else nextSeq(db, batch.sessionId, batch.firstTsMs, now)
                 val values = ContentValues(16).apply {
                     put("id", id)
                     put("session_id", batch.sessionId)
@@ -112,8 +126,10 @@ internal class ReplayStore(
                     put("size_bytes", batch.gzipBody.size)
                     put("claimed", 0)
                     put("attempts", 0)
+                    put("state", if (batch.held) 0 else 1)
                 }
                 db.insertOrThrow("replay_batches", null, values)
+                if (batch.held) trimHeld(db, batch.sessionId)
                 evictIfNeeded(db)
                 }
             } catch (e: Exception) {
@@ -155,7 +171,7 @@ internal class ReplayStore(
             "SELECT b.id, b.session_id, b.seq, b.file, b.event_count, b.first_ts, b.last_ts, b.has_error, " +
                 "b.user_id, b.environment, b.format, s.start_ms, b.has_rage_click " +
                 "FROM replay_batches b LEFT JOIN replay_seq s ON s.session_id = b.session_id " +
-                "WHERE b.claimed = 0 ORDER BY b.created_at, b.seq, b.rowid LIMIT 1",
+                "WHERE b.claimed = 0 AND b.state = 1 ORDER BY b.created_at, b.seq, b.rowid LIMIT 1",
             null,
         ).use { c ->
             if (!c.moveToFirst()) return@use null
@@ -196,7 +212,7 @@ internal class ReplayStore(
     override fun pendingCount(): Int =
         guarded("pendingCount") { db ->
             db.rawQuery(
-                "SELECT COUNT(*) FROM replay_batches WHERE claimed = 0 AND attempts < ?",
+                "SELECT COUNT(*) FROM replay_batches WHERE claimed = 0 AND state = 1 AND attempts < ?",
                 arrayOf(maxAttempts.toString()),
             ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
         } ?: 0
@@ -226,20 +242,70 @@ internal class ReplayStore(
         }
     }
 
+    override fun promote(sessionId: String): Int = promoteWhere("state = 0 AND session_id = ?", arrayOf(sessionId))
+
+    override fun promoteHeldBefore(cutoffMs: Long): Int =
+        promoteWhere("state = 0 AND created_at < ?", arrayOf(cutoffMs.toString()))
+
+    override fun dropHeld(sessionId: String): Int = dropWhere("state = 0 AND session_id = ?", arrayOf(sessionId))
+
+    override fun dropHeldBefore(cutoffMs: Long): Int = dropWhere("state = 0 AND created_at < ?", arrayOf(cutoffMs.toString()))
+
+    private fun dropWhere(where: String, args: Array<String>): Int =
+        guarded("dropHeld") { db -> db.inTransaction { deleteRows(db, where, args) } } ?: 0
+
+    private fun promoteWhere(where: String, args: Array<String>): Int =
+        guarded("promote") { db ->
+            db.inTransaction {
+                val now = clock.nowMs()
+                val rows = ArrayList<Triple<String, String, Long>>()
+                db.rawQuery(
+                    "SELECT id, session_id, first_ts FROM replay_batches WHERE $where ORDER BY session_id, first_ts, rowid",
+                    args,
+                ).use { c -> while (c.moveToNext()) rows += Triple(c.getString(0), c.getString(1), c.getLong(2)) }
+                rows.forEach { (id, session, firstTs) ->
+                    val seq = nextSeq(db, session, firstTs, now)
+                    db.execSQL("UPDATE replay_batches SET state = 1, seq = ? WHERE id = ?", arrayOf<Any?>(seq, id))
+                }
+                rows.size
+            }
+        } ?: 0
+
+    /**
+     * Keeps the newest [heldWindowMs] of a session's held rows (by `last_ts`) and at most [maxHeldPerSession]. Only rows
+     * written since this store opened count: a session that continues after a relaunch must not trim the previous
+     * process's buffer before the launch decision has promoted or dropped it.
+     */
+    private fun trimHeld(db: SQLiteDatabase, sessionId: String) {
+        val mine = "state = 0 AND session_id = ? AND created_at >= ?"
+        val opened = openedAtMs.toString()
+        val newest = db.rawQuery(
+            "SELECT MAX(last_ts) FROM replay_batches WHERE $mine",
+            arrayOf(sessionId, opened),
+        ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else return }
+        deleteRows(db, "$mine AND last_ts < ?", arrayOf(sessionId, opened, (newest - heldWindowMs).toString()))
+        deleteRows(
+            db,
+            "$mine AND id NOT IN (SELECT id FROM replay_batches WHERE $mine " +
+                "ORDER BY first_ts DESC, rowid DESC LIMIT $maxHeldPerSession)",
+            arrayOf(sessionId, opened, sessionId, opened),
+        )
+    }
+
     fun close() {
         runCatching { helper.close() }
     }
 
-    private fun nextSeq(db: SQLiteDatabase, batch: NewReplayBatch, now: Long): Int {
+    private fun nextSeq(db: SQLiteDatabase, sessionId: String, firstTsMs: Long, now: Long): Int {
         val current = db.rawQuery(
             "SELECT next_seq FROM replay_seq WHERE session_id = ?",
-            arrayOf(batch.sessionId),
+            arrayOf(sessionId),
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else null }
         if (current == null) {
             val values = ContentValues(4).apply {
-                put("session_id", batch.sessionId)
+                put("session_id", sessionId)
                 put("next_seq", 1)
-                put("start_ms", batch.firstTsMs)
+                put("start_ms", firstTsMs)
                 put("updated_at", now)
             }
             db.insertOrThrow("replay_seq", null, values)
@@ -247,7 +313,7 @@ internal class ReplayStore(
         }
         db.execSQL(
             "UPDATE replay_seq SET next_seq = ?, updated_at = ? WHERE session_id = ?",
-            arrayOf<Any?>(current + 1, now, batch.sessionId),
+            arrayOf<Any?>(current + 1, now, sessionId),
         )
         return current
     }
@@ -286,14 +352,15 @@ internal class ReplayStore(
         if (victims.isNotEmpty()) SdkLog.d("evicted ${victims.size} queued replay batches")
     }
 
-    /** Deletes the rows matching [where] and their body files. Call inside a transaction. */
-    private fun deleteRows(db: SQLiteDatabase, where: String?, args: Array<String>?) {
+    /** Deletes the rows matching [where] and their body files; returns the row count. Call inside a transaction. */
+    private fun deleteRows(db: SQLiteDatabase, where: String?, args: Array<String>?): Int {
         val files = ArrayList<String>()
         db.rawQuery("SELECT file FROM replay_batches" + (where?.let { " WHERE $it" } ?: ""), args).use { c ->
             while (c.moveToNext()) files += c.getString(0)
         }
-        db.delete("replay_batches", where, args)
+        val n = db.delete("replay_batches", where, args)
         files.forEach(::deleteBody)
+        return n
     }
 
     private fun fileNameFor(id: String): String = "$id.gz"
@@ -346,8 +413,11 @@ internal class ReplayStore(
 
     companion object {
         const val DB_NAME = "artracker_replay.db"
-        private const val DB_VERSION = 4
+        private const val DB_VERSION = 5
         const val DEFAULT_MAX_BYTES: Long = 50L * 1024 * 1024
+        const val HELD_WINDOW_MS: Long = 60_000L
+        /** 12 back-to-back 5 s chunks fill the 60 s window, plus the chunk the trigger closes. */
+        const val MAX_HELD_PER_SESSION: Int = 13
         private const val BODIES_PATH = "artracker/replay"
         private val EMPTY = ByteArray(0)
         private const val SQL_VARIABLE_CHUNK = 500

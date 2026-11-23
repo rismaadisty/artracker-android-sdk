@@ -5,8 +5,28 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Behavior change: `ReplayConfig.sampleRate` default `0.1` -> `0.0`.** Apps that want full-session replay must set
+  `sampleRate` explicitly. To keep the old behavior exactly, set `sampleRate = 0.1, onErrorSampleRate = 0.0`: with
+  `sampleRate = 0.1` alone, the other 90 % of sessions are now recorded in buffer mode. With `enabled = true` and the new
+  defaults every session is captured on the device (in buffer mode, see below, not in full) and only uploaded around
+  problems.
+- The replay database moved to version 5 (`artracker_replay.db`); chunks queued before the upgrade keep uploading.
+
 ### Added
 
+- **Replay on error**: `ReplayConfig.onErrorSampleRate` (default `1.0`, last constructor parameter, `0.0..1.0`). A
+  session whose `sampleRate` hits is recorded in full as before; otherwise, if `onErrorSampleRate` hits, it is recorded
+  in **buffer mode**: 5 s chunks are kept on the device ("held", the last 60 s, at most 13 chunks per session) and not
+  uploaded. They are uploaded when an `ERROR` or `FATAL` item of this process is logged (including the API 24-29 ANR
+  watchdog), at most 3 times per session and at least 60 s apart, followed by 30 s of follow-up recording. After a JVM
+  crash, an API 30+ ANR or a native crash the previous run's buffer is uploaded at the next launch, otherwise it is
+  dropped. `ARTracker.startReplay()` records in full, and switching to full during a buffer session uploads the held
+  buffer. Known gap: up to the last ~5 s before a crash (the chunk still in memory) is lost. Error items `beforeSend`
+  drops still trigger a buffer upload (the trigger fires when the item is enqueued); a JVM crash dropped by `beforeSend`
+  counts as a clean run, while `anr` / `native_crash` exit items count as crashes even if `beforeSend` drops them. A
+  timed-out buffer session's held chunks are discarded.
 - **Warm and hot start measurement, with phases.** `app_start` now covers cold, warm and hot starts, each with a
   contiguous phase breakdown (`process_to_init`, `application_on_create`, `activity_create`, `first_draw` for a cold
   start; on API 35+ `process_to_init` is split into `bind_application`, `content_providers` and `app_on_create_pre_init`
