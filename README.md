@@ -1,10 +1,10 @@
 # artracker-android-sdk
 Native Android SDK for session replay — capture UI layout states, touch events, and user flows
 
-Version `1.0.3`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
+Version `1.0.4`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-in) privacy-masked session replay to an
 [ARTracker](https://github.com/tiofani03/artracker) backend (`POST {endpoint}/api/v1/ingest`).
 
-> **Status: what is verified and what is NOT** (read this before adopting `1.0.3`)
+> **Status: what is verified and what is NOT** (read this before adopting `1.0.4`)
 >
 > | Area | State |
 > | --- | --- |
@@ -28,13 +28,13 @@ Version `1.0.3`. The SDK sends events, logs, crashes, ANRs, HTTP calls and (opt-
 
 ## Installation
 
-Coordinates: `id.art.tracker:artracker-android:1.0.3`, published to **GitHub Packages**
+Coordinates: `id.art.tracker:artracker-android:1.0.4`, published to **GitHub Packages**
 (`https://maven.pkg.github.com/rismaadisty/artracker-android-sdk`).
 
 ```kotlin
 // build.gradle.kts of the app module
 dependencies {
-    implementation("id.art.tracker:artracker-android:1.0.3")
+    implementation("id.art.tracker:artracker-android:1.0.4")
 }
 ```
 
@@ -61,7 +61,7 @@ dependencyResolutionManagement {
 
 Step by step (creating the token, Groovy, version catalog, CI, troubleshooting): [`docs/github-packages.md`](docs/github-packages.md).
 To try an unreleased build instead, publish it to your local Maven repository and add `mavenLocal()`:
-`./gradlew :artracker-sdk:publishToMavenLocal` (writes to `~/.m2/repository/id/art/tracker/artracker-android/1.0.3/`).
+`./gradlew :artracker-sdk:publishToMavenLocal` (writes to `~/.m2/repository/id/art/tracker/artracker-android/1.0.4/`).
 
 The SDK pulls in `kotlinx-coroutines-android`, `androidx.work:work-runtime-ktx`, `androidx.lifecycle:lifecycle-process`,
 `androidx.core:core-ktx` and the Kotlin stdlib. It has no Room, no kotlinx.serialization and no OkHttp dependency.
@@ -587,7 +587,7 @@ pluginManagement {
 // build.gradle.kts of the app module
 plugins {
     id("com.android.application")
-    id("id.art.tracker.symbols") version "<sdk-version>" // same version as the SDK; first published after 1.0.3
+    id("id.art.tracker.symbols") version "<sdk-version>" // same version as the SDK; first published in 1.0.4
 }
 
 artracker {
