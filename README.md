@@ -131,7 +131,7 @@ SDK uninitialised and every other call a no-op; each validation error is logged 
 | `network` | `NetworkConfig(captureHeaders = false, ignoreHosts = emptySet(), sampleRate = 1.0, captureOnlyErrors = false, sender = null)` | The first four are used by the OkHttp interceptor; `captureHeaders` is reserved: headers are never captured. `sender` replaces the transport, see "Custom transport" |
 | `flushIntervalMs` | `10_000` | Foreground flush interval, minimum 1000 |
 | `sessionTimeoutMs` | `1_800_000` | Timeout (30 min) counted from the last **user input** (touch, key, return to foreground), minimum 1000. SDK activity (events, API calls, replay uploads, reading the session id) never extends a session, and a session only rotates on the next user input; it never lasts more than 24 h. The unit is milliseconds: `sessionTimeoutMs = 1800` is 1.8 s, not 30 min. iOS: the iOS SDK does not expose this yet (its timeout is a fixed 30 min); the planned `ARTrackerConfig.sessionTimeout` will be in **seconds** (default `1800`), clamped to a 1 s minimum instead of rejected. iOS sessions do not survive a process restart and emit no `session_start` / `session_end` items |
-| `performance` | `PerformanceConfig(enabled = false, sampleIntervalMs = 1_000, trackFrames = true)` | Session profiling, opt-in. `sampleIntervalMs` must be 500..10_000, otherwise the config is invalid. See "Performance monitoring" |
+| `performance` | `PerformanceConfig(enabled = false, sampleIntervalMs = 1_000, trackFrames = true, sampleRate = 0.0, onErrorSampleRate = 1.0)` | Session profiling, opt-in. `sampleIntervalMs` must be 500..10_000, `sampleRate` (whole sessions, uploaded as they go) and `onErrorSampleRate` (kept on the device, uploaded around an error) must be 0.0..1.0, otherwise the config is invalid. See "Performance monitoring" and "Performance on error" |
 | `appStart` | `AppStartConfig(enabled = true, profiling = false, profileSampleRate = 0.1, inAppPackages = emptySet())` | Cold, warm and hot start measurement (on by default) and the opt-in startup profiler. `profileSampleRate` must be in 0.0..1.0, otherwise the config is invalid. See "App start" |
 | `beforeSend` | `null` | `BeforeSend { item -> item }`: modify an item, or return `null` to drop it. Runs before the item is queued |
 
@@ -428,6 +428,33 @@ a sample finds `ActivityManager.MemoryInfo.lowMemory` turned on (once per low pe
 while it kills cached processes).
 `perf.thermal_change {from, to}` reports thermal state changes. Opting out discards the buffered samples. To measure what profiling costs, see
 `artracker-sdk/PERF.md` section 4.
+
+### Performance on error
+
+Which samples are uploaded is decided once per session, deterministically from the session id (the same hash as replay, with
+the salts `:perf` and `:perf-on-error`):
+
+| Mode | When | What happens to `perf.samples` |
+| --- | --- | --- |
+| full | the session hits `sampleRate` (default `0.0`) | every batch is uploaded as it is made |
+| buffer | otherwise, the session hits `onErrorSampleRate` (default `1.0`) | batches are stored on the device and **not uploaded** until an error trigger fires |
+| off | neither | nothing is sampled |
+
+> **Behavior change.** Before this, `PerformanceConfig(enabled = true)` uploaded every session's samples. With the defaults
+> (`sampleRate = 0.0, onErrorSampleRate = 1.0`) a session without an error now uploads none. To keep the old behavior exactly,
+> set `sampleRate = 1.0`.
+
+In buffer mode the SDK keeps the last 60 seconds of batches (at most 7 per session) in the local queue, flagged as held, so a
+crash, a native crash, an out-of-memory kill or an ANR does not lose them with the process. The triggers are the same as for replay:
+
+- a logged `ERROR` / `FATAL` item (`ARTracker.log`, `captureException`, a live ANR): the held batches of the session go out together
+  with the samples still in memory, and for the next 30 seconds new batches are uploaded as they are made. An error is admitted at most
+  3 times per session and at least 60 seconds apart (the same policy as replay).
+- the previous run ended in a crash, a native crash or an ANR: at the next launch its held batches are uploaded.
+
+A buffer session that ends (a new session starts) or a launch after a clean exit deletes the held batches: nothing is uploaded.
+Opting out deletes them too. `perf.thermal_change` and `perf.memory_warning` from the samples follow the same rule; a trim-level
+`perf.memory_warning` (`source: "trim"`) is sent at once, as before.
 
 ## App start
 
