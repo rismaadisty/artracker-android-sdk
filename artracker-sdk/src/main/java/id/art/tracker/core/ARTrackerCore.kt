@@ -775,7 +775,7 @@ internal class ARTrackerCore(
         intervalMs = config.performance.sampleIntervalMs,
         memoryInfoWarnings = PerfMonitor.memoryInfoWarningsFor(Build.VERSION.SDK_INT),
         sessionId = { session.peekId() },
-        emit = { sessionId, build ->
+        emit = { sessionId, _, build ->
             if (!isDisabled()) emit(build(itemsFor(sessionId, endedSessionUserId ?: identity.userId)))
         },
     )
