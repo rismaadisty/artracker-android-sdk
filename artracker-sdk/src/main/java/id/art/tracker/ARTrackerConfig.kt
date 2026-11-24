@@ -101,11 +101,25 @@ public class ReplayConfig @JvmOverloads constructor(
  * thermal state is taken every [sampleIntervalMs] (500..10_000) and sent in batches as `perf.samples` items.
  * Off by default; nothing (thread, loop or callback) is created while [enabled] is false.
  * [trackFrames] turns the frame rate / jank / frozen-frame counters (API 24+ `FrameMetrics`) on or off.
+ *
+ * Which sessions are profiled, and how, is decided once per session by [sampleRate] and [onErrorSampleRate]
+ * (see there). With the defaults a healthy session uploads no `perf.samples` at all: only the minute before an error
+ * and the half minute after it are sent.
  */
 public class PerformanceConfig @JvmOverloads constructor(
     public val enabled: Boolean = false,
     public val sampleIntervalMs: Long = 1_000,
     public val trackFrames: Boolean = true,
+    /**
+     * Share of sessions (0.0..1.0) profiled in full: every `perf.samples` batch is uploaded as it goes, like before
+     * buffer mode existed. Default 0.0.
+     */
+    public val sampleRate: Double = 0.0,
+    /**
+     * Share of the remaining sessions (0.0..1.0) profiled in BUFFER mode: `perf.samples` are kept on the device and
+     * uploaded only when an error trigger fires (a logged ERROR/FATAL item, a crash or ANR). Default 1.0.
+     */
+    public val onErrorSampleRate: Double = 1.0,
 )
 
 /**
@@ -185,6 +199,12 @@ internal fun ARTrackerConfig.validate(): List<String> {
     }
     if (performance.sampleIntervalMs !in MIN_SAMPLE_INTERVAL_MS..MAX_SAMPLE_INTERVAL_MS) {
         errors += "performance.sampleIntervalMs must be between $MIN_SAMPLE_INTERVAL_MS and $MAX_SAMPLE_INTERVAL_MS"
+    }
+    if (!(performance.sampleRate in 0.0..1.0)) {
+        errors += "performance.sampleRate must be between 0.0 and 1.0"
+    }
+    if (!(performance.onErrorSampleRate in 0.0..1.0)) {
+        errors += "performance.onErrorSampleRate must be between 0.0 and 1.0"
     }
     if (!replay.framesPerSecond.isFinite()) {
         errors += "replay.framesPerSecond must be a finite number"

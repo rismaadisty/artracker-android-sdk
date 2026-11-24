@@ -1,5 +1,6 @@
 package id.art.tracker.replay
 
+import id.art.tracker.PerformanceConfig
 import id.art.tracker.ReplayConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -18,5 +19,23 @@ class RecordingModeTest {
         val calls = mutableListOf<Pair<String, Double>>()
         RecordingMode.select("s", false, ReplayConfig(sampleRate = 0.2, onErrorSampleRate = 0.7)) { id, r -> calls += id to r; false }
         assertEquals(listOf("s" to 0.2, "s$ON_ERROR_SALT" to 0.7), calls)
+    }
+
+    private val onlyPerfOnError = { id: String, _: Double -> id.endsWith(PERF_ON_ERROR_SALT) }
+
+    @Test fun perf_sampleRateHit_isFull() =
+        assertEquals(RecordingMode.FULL, RecordingMode.selectPerf("s", PerformanceConfig(), always))
+    @Test fun perf_onlyOnErrorHit_isBuffer() =
+        assertEquals(RecordingMode.BUFFER, RecordingMode.selectPerf("s", PerformanceConfig(), onlyPerfOnError))
+    @Test fun perf_noHit_isNull() = assertNull(RecordingMode.selectPerf("s", PerformanceConfig(), never))
+    @Test fun perf_usesPerfSalts_andRates() {
+        val calls = mutableListOf<Pair<String, Double>>()
+        RecordingMode.selectPerf("s", PerformanceConfig(sampleRate = 0.2, onErrorSampleRate = 0.7)) { id, r -> calls += id to r; false }
+        assertEquals(listOf("s$PERF_SALT" to 0.2, "s$PERF_ON_ERROR_SALT" to 0.7), calls)
+    }
+    @Test fun perf_saltsDifferFromReplaySalts() {
+        // A session's perf decision must be independent of its replay decision.
+        assertEquals(":perf", PERF_SALT)
+        assertEquals(":perf-on-error", PERF_ON_ERROR_SALT)
     }
 }

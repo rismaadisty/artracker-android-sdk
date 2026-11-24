@@ -17,6 +17,7 @@ class ARTrackerConfigTest {
         replay: ReplayConfig = ReplayConfig(),
         network: NetworkConfig = NetworkConfig(),
         appStart: AppStartConfig = AppStartConfig(),
+        performance: PerformanceConfig = PerformanceConfig(),
     ) = ARTrackerConfig(
         endpoint = endpoint,
         apiKey = apiKey,
@@ -25,6 +26,7 @@ class ARTrackerConfigTest {
         replay = replay,
         network = network,
         appStart = appStart,
+        performance = performance,
     )
 
     private fun keyOfLength(n: Int) = "art_live_" + "a".repeat(n - "art_live_".length)
@@ -216,6 +218,28 @@ class ARTrackerConfigTest {
         val c = ReplayConfig()
         assertEquals(0.0, c.sampleRate, 0.0)
         assertEquals(1.0, c.onErrorSampleRate, 0.0)
+    }
+
+    @Test fun performanceDefaults_bufferModeByDefault() {
+        val c = PerformanceConfig()
+        assertEquals(0.0, c.sampleRate, 0.0)
+        assertEquals(1.0, c.onErrorSampleRate, 0.0)
+    }
+
+    @Test fun performanceSampleRate_outOfRange_isInvalid() {
+        for (rate in listOf(-0.1, 1.5, Double.NaN)) {
+            val errors = config(performance = PerformanceConfig(sampleRate = rate)).validate()
+            assertTrue(errors.toString(), errors.contains("performance.sampleRate must be between 0.0 and 1.0"))
+        }
+        assertTrue(config(performance = PerformanceConfig(sampleRate = 0.0)).validate().isEmpty())
+        assertTrue(config(performance = PerformanceConfig(sampleRate = 1.0)).validate().isEmpty())
+    }
+
+    @Test fun performanceOnErrorSampleRate_outOfRange_isInvalid() {
+        for (rate in listOf(-0.1, 1.5, Double.NaN)) {
+            val errors = config(performance = PerformanceConfig(onErrorSampleRate = rate)).validate()
+            assertTrue(errors.toString(), errors.contains("performance.onErrorSampleRate must be between 0.0 and 1.0"))
+        }
     }
 
     @Test fun onErrorSampleRate_outOfRange_isInvalid() {
