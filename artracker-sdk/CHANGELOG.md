@@ -5,6 +5,24 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Behavior change: performance samples are no longer uploaded continuously.** `PerformanceConfig` gets `sampleRate`
+  (default `0.0`) and `onErrorSampleRate` (default `1.0`), both `0.0..1.0`. With `enabled = true` and the defaults a
+  session without an error uploads no `perf.samples`. To keep the old behavior exactly, set `sampleRate = 1.0`.
+- The queue database (`artracker.db`) moved to version 2 (`held`, `session_id` columns); items queued before the upgrade
+  keep uploading.
+
+### Added
+
+- **Performance on error**: a session whose `sampleRate` hits uploads every batch as before; otherwise, if
+  `onErrorSampleRate` hits, it is sampled in **buffer mode**: batches are kept on the device ("held", the last 60 s, at
+  most 7 per session) and not uploaded. They are uploaded when an `ERROR` or `FATAL` item of this process is logged
+  (including the ANR watchdog), at most 3 times per session and at least 60 s apart, followed by 30 s of batches that are
+  uploaded as they are made. After a JVM crash, an ANR or a native crash the previous run's buffer is uploaded at the
+  next launch, otherwise it is dropped (so is the buffer of a session that ends without an error, and on opt-out).
+  Held rows are evicted before any item that is ready to send when the queue is full.
+
 ## [1.0.4] - 2026-11-24
 
 ### Changed
