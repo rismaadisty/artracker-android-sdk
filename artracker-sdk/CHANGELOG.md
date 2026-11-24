@@ -5,6 +5,8 @@ versions follow semantic versioning.
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-24
+
 ### Changed
 
 - **Behavior change: `ReplayConfig.sampleRate` default `0.1` -> `0.0`.** Apps that want full-session replay must set
