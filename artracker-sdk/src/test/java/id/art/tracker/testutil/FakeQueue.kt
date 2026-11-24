@@ -25,7 +25,7 @@ internal class FakeQueue : ItemQueue {
     }
 
     override fun claimBatch(maxItems: Int, maxBytes: Int): Batch? = synchronized(lock) {
-        val sorted = pending.sortedWith(compareBy({ it.priority }, { it.createdAtMs }, { it.id }))
+        val sorted = pending.filter { !it.held }.sortedWith(compareBy({ it.priority }, { it.createdAtMs }, { it.id }))
         val claimed = ArrayList<StoredItem>()
         var total = 0L
         for (item in sorted) {
@@ -53,7 +53,7 @@ internal class FakeQueue : ItemQueue {
         Unit
     }
 
-    override fun pendingCount(): Int = synchronized(lock) { pending.size }
+    override fun pendingCount(): Int = synchronized(lock) { pending.count { !it.held } }
 
     override fun resetOrphanedBatches() = synchronized(lock) {
         inFlight.values.forEach { pending += it }
@@ -69,6 +69,35 @@ internal class FakeQueue : ItemQueue {
         pending.clear()
         inFlight.clear()
     }
+
+    override fun promoteHeld(sessionId: String): Int = promoteIf { it.sessionId == sessionId }
+
+    override fun promoteHeldBefore(cutoffMs: Long): Int = promoteIf { it.createdAtMs < cutoffMs }
+
+    override fun dropHeld(sessionId: String): Int = dropIf { it.sessionId == sessionId }
+
+    override fun dropHeldBefore(cutoffMs: Long): Int = dropIf { it.createdAtMs < cutoffMs }
+
+    private fun promoteIf(match: (StoredItem) -> Boolean): Int = synchronized(lock) {
+        var n = 0
+        for (i in pending.indices) {
+            val item = pending[i]
+            if (item.held && match(item)) {
+                pending[i] = item.copy(held = false)
+                n++
+            }
+        }
+        n
+    }
+
+    private fun dropIf(match: (StoredItem) -> Boolean): Int = synchronized(lock) {
+        val before = pending.size
+        pending.removeAll { it.held && match(it) }
+        before - pending.size
+    }
+
+    /** Ids of the items that are stored but held back (test visibility). */
+    fun heldIds(): List<String> = synchronized(lock) { pending.filter { it.held }.map { it.id } }
 
     fun inFlightCount(): Int = synchronized(lock) { inFlight.values.sumOf { it.size } }
 }

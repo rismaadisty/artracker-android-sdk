@@ -822,4 +822,83 @@ class EventPipelineTest {
         assertTrue(queue.stored.none { it.id == bad.id })
         assertTrue(queue.stored.any { it.id == good.id })
     }
+
+    // region held items
+
+    @Test
+    fun heldItem_isStoredWithItsSession_andNotPending() = runTest {
+        val p = pipeline()
+        val sample = factory.event("perf.samples")
+        p.enqueue(sample, held = true)
+        p.awaitIdle()
+
+        assertEquals(listOf(true), queue.stored.map { it.held })
+        assertEquals(listOf("session-1"), queue.stored.map { it.sessionId })
+        assertEquals(0, queue.pendingCount())
+        assertEquals(listOf(sample.id), queue.delegate.heldIds())
+    }
+
+    @Test
+    fun readyItem_isNotHeld_andCarriesNoSession() = runTest {
+        val p = pipeline()
+        p.enqueue(factory.event("ready"))
+        p.awaitIdle()
+
+        assertEquals(listOf(false), queue.stored.map { it.held })
+        assertEquals(listOf<String?>(null), queue.stored.map { it.sessionId })
+    }
+
+    @Test
+    fun promoteHeld_isOrderedAfterItemsEnqueuedBefore_andFlushes() = runTest {
+        val p = pipeline()
+        val a = factory.event("a")
+        val b = factory.event("b")
+        p.enqueue(a, held = true)
+        p.enqueue(b, held = true) // both still in the channel / open group when promoteHeld() runs
+        p.promoteHeld("session-1")
+        p.awaitIdle()
+
+        assertEquals(listOf(a.id, b.id).toSet(), requests.flatten().toSet())
+        assertTrue(queue.delegate.heldIds().isEmpty())
+        assertEquals(0, queue.pendingCount())
+    }
+
+    @Test
+    fun promoteHeld_ofAnotherSession_sendsNothing() = runTest {
+        val p = pipeline()
+        p.enqueue(factory.event("a"), held = true)
+        p.promoteHeld("other")
+        p.awaitIdle()
+
+        assertTrue(requests.isEmpty())
+        assertEquals(1, queue.delegate.heldIds().size)
+    }
+
+    @Test
+    fun dropHeld_deletesTheSessionsHeldItems_afterEarlierOnes() = runTest {
+        val p = pipeline()
+        p.enqueue(factory.event("a"), held = true)
+        p.enqueue(factory.event("ready"))
+        p.dropHeld("session-1")
+        p.awaitIdle()
+
+        assertTrue(queue.delegate.heldIds().isEmpty())
+        assertEquals(1, queue.pendingCount())
+    }
+
+    @Test
+    fun heldCommand_thatThrows_doesNotKillTheConsumer() = runTest {
+        val throwing = object : ItemQueue by queue {
+            override fun promoteHeld(sessionId: String): Int = throw IllegalStateException("db")
+        }
+        val p = EventPipeline(backgroundScope, throwing, flusher, clock, null, 10_000L)
+        p.promoteHeld("session-1")
+        val later = factory.event("later")
+        p.enqueue(later)
+        p.awaitIdle()
+
+        assertTrue(queue.stored.any { it.id == later.id })
+    }
+
+    // endregion
 }

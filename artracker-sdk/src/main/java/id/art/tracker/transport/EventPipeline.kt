@@ -14,6 +14,7 @@ import id.art.tracker.core.limit
 import id.art.tracker.privacy.AttributeRedactor
 import id.art.tracker.priority
 import id.art.tracker.toJson
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
@@ -70,13 +71,17 @@ internal class EventPipeline(
         val flushes: Int = 0,
         val stopped: Boolean = false,
         val discardsHandled: Long = 0,
+        val heldCommands: Int = 0,
     )
+
+    /** A promote or drop of a session's held items, run by the consumer once everything enqueued before it is stored. */
+    private class HeldCommand(val sessionId: String, val promote: Boolean)
 
     /**
      * An item plus its acceptance sequence number, which [discardAll] compares against, and the global properties that
      * were in force when it was enqueued (not when it is prepared: the pipeline may lag behind the caller).
      */
-    private class Queued(val item: TelemetryItem, val seq: Long, val globals: GlobalSnapshot)
+    private class Queued(val item: TelemetryItem, val seq: Long, val globals: GlobalSnapshot, val held: Boolean)
 
     private val progress = MutableStateFlow(Progress())
     private val accepted = AtomicLong(0)
@@ -100,6 +105,8 @@ internal class EventPipeline(
     /** Set by [flushNow]; taken by the consumer once it has drained and persisted everything enqueued before. */
     private val drainFlushPending = AtomicBoolean(false)
 
+    private val heldCommands = ConcurrentLinkedQueue<HeldCommand>()
+
     private val timerLock = Any()
     private var timerJob: Job? = null
 
@@ -114,11 +121,12 @@ internal class EventPipeline(
     /**
      * Hands [item] to the consumer. Never blocks and never throws. Returns false only if the item could not be
      * accepted at all (channel closed); when the buffer is full the oldest queued item is dropped instead.
+     * A [held] item is stored but not sent until [promoteHeld] (see [StoredItem.held]).
      */
-    fun enqueue(item: TelemetryItem, globals: GlobalSnapshot = GlobalSnapshot.EMPTY): Boolean {
+    fun enqueue(item: TelemetryItem, globals: GlobalSnapshot = GlobalSnapshot.EMPTY, held: Boolean = false): Boolean {
         val seq = accepted.incrementAndGet()
         return try {
-            if (channel.trySend(Queued(item, seq, globals)).isSuccess) {
+            if (channel.trySend(Queued(item, seq, globals, held)).isSuccess) {
                 notifyAccepted(item)
                 true
             } else {
@@ -135,6 +143,21 @@ internal class EventPipeline(
         val hook = onItemAccepted ?: return
         if (item.level != LogLevel.ERROR && item.level != LogLevel.FATAL) return
         runCatching { hook(item) }
+    }
+
+    /**
+     * Makes the held items of [sessionId] uploadable and flushes. Ordered after everything enqueued before this call
+     * (the consumer first stores those), so the samples an error just flushed are included. Never blocks.
+     */
+    fun promoteHeld(sessionId: String) = submitHeld(HeldCommand(sessionId, promote = true))
+
+    /** Deletes the held items of [sessionId], after everything enqueued before this call is stored. Never blocks. */
+    fun dropHeld(sessionId: String) = submitHeld(HeldCommand(sessionId, promote = false))
+
+    private fun submitHeld(command: HeldCommand) {
+        heldCommands.add(command)
+        progress.update { it.copy(heldCommands = it.heldCommands + 1) }
+        nudge.trySend(Unit)
     }
 
     /** Starts the foreground flush timer; flushes only when something is pending. Idempotent. */
@@ -213,7 +236,7 @@ internal class EventPipeline(
         val discardTarget = discardRequested.get()
         nudge.trySend(Unit)
         progress.first {
-            it.stopped || (it.settled >= target && it.flushes == 0 && it.discardsHandled >= discardTarget)
+            it.stopped || (it.settled >= target && it.flushes == 0 && it.heldCommands == 0 && it.discardsHandled >= discardTarget)
         }
     }
 
@@ -276,7 +299,7 @@ internal class EventPipeline(
                 }
             }
             groupMessages++
-            val stored = prepare(item, queued.globals)
+            val stored = prepare(item, queued.globals, queued.held)
             if (stored != null) buffer += stored
             if (groupMessages >= GROUP_SIZE || stored?.priority == 0) persistGroup()
         }
@@ -295,8 +318,10 @@ internal class EventPipeline(
                 }
                 // Taking the flag first means every item enqueued before flushNow() is visible to tryReceive.
                 val flushAfter = drainFlushPending.compareAndSet(true, false)
+                val commands = ArrayList<HeldCommand>()
+                while (true) commands += heldCommands.poll() ?: break
                 try {
-                    if (flushAfter) {
+                    if (flushAfter || commands.isNotEmpty()) {
                         while (true) {
                             val next = channel.tryReceive().getOrNull() ?: break
                             try {
@@ -309,7 +334,9 @@ internal class EventPipeline(
                         }
                     }
                     if (groupMessages > 0) persistGroup()
+                    commands.forEach(::runHeldCommand)
                 } finally {
+                    if (commands.isNotEmpty()) progress.update { it.copy(heldCommands = it.heldCommands - commands.size) }
                     if (flushAfter) {
                         // Trigger first, then release flushNow()'s reservation, so the count never dips to zero.
                         triggerFlush()
@@ -331,13 +358,13 @@ internal class EventPipeline(
      * straight to the queue. Null when the item is dropped.
      */
     // A crash of an earlier process must not carry the global properties of this one.
-    fun prepareRecovered(item: TelemetryItem): StoredItem? = prepare(item, GlobalSnapshot.EMPTY)
+    fun prepareRecovered(item: TelemetryItem): StoredItem? = prepare(item, GlobalSnapshot.EMPTY, held = false)
 
     /**
      * globals -> beforeSend -> redaction -> serialisation. Null when the item is dropped (by beforeSend, or
      * unserialisable). The merged item is what beforeSend sees, and what is kept when the hook throws.
      */
-    private fun prepare(unmerged: TelemetryItem, globals: GlobalSnapshot): StoredItem? {
+    private fun prepare(unmerged: TelemetryItem, globals: GlobalSnapshot, held: Boolean): StoredItem? {
         return try {
             // `$identify` carries the traits only: merged globals would end up in the stored user traits.
             val isIdentify = unmerged.type == ItemType.EVENT && unmerged.name == "\$identify"
@@ -376,6 +403,9 @@ internal class EventPipeline(
                 // Never later than "now": a future timestamp would defeat the 7-day purge.
                 createdAtMs = safe.timestampMs.coerceAtMost(clock.nowMs()),
                 payloadJson = safe.toJson(),
+                held = held,
+                // beforeSend may change the id: the held row belongs to the session it ends up reported under.
+                sessionId = if (held) safe.sessionId else null,
             )
         } catch (e: CancellationException) {
             throw e
@@ -384,6 +414,20 @@ internal class EventPipeline(
             // stack) must cost one item, never the consumer coroutine (which would silently end all recording).
             SdkLog.w("dropping item that could not be processed (${e.javaClass.simpleName})")
             null
+        }
+    }
+
+    private fun runHeldCommand(command: HeldCommand) {
+        try {
+            if (command.promote) {
+                if (queue.promoteHeld(command.sessionId) > 0) triggerFlush()
+            } else {
+                queue.dropHeld(command.sessionId)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            SdkLog.w("${if (command.promote) "promoting" else "dropping"} held items failed (${e.javaClass.simpleName})")
         }
     }
 
