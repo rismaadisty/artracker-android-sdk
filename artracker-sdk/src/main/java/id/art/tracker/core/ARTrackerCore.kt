@@ -458,6 +458,8 @@ internal class ARTrackerCore(
                         it.onError()
                         it.onTrigger(TriggerKind.ERROR) // the error dialog / screen is on display now: capture it
                     }
+                    // In buffer mode the minute of performance samples before this error is uploaded, plus the next 30 s.
+                    runCatching { perf?.onError() }
                 }
             },
         )
@@ -775,9 +777,13 @@ internal class ARTrackerCore(
         intervalMs = config.performance.sampleIntervalMs,
         memoryInfoWarnings = PerfMonitor.memoryInfoWarningsFor(Build.VERSION.SDK_INT),
         sessionId = { session.peekId() },
-        emit = { sessionId, build ->
-            if (!isDisabled()) emit(build(itemsFor(sessionId, endedSessionUserId ?: identity.userId)))
+        config = config.performance,
+        nowMs = clock::nowMs,
+        emit = { sessionId, held, build ->
+            if (!isDisabled()) emit(build(itemsFor(sessionId, endedSessionUserId ?: identity.userId)), held = held)
         },
+        onPromoteSession = pipeline::promoteHeld,
+        onDropSession = pipeline::dropHeld,
     )
 
     /** Starts the frame source and the sampling loop on [scope]; idempotent while the loop runs. */
@@ -867,6 +873,8 @@ internal class ARTrackerCore(
             // held chunks behind. Never uploaded, so dropped.
             runCatching { if (replayDatabaseExists()) replayQueue.dropHeldBefore(processStartMs) }
                 .onFailure { SdkLog.w("dropping held replay chunks failed", it) }
+            runCatching { queue.dropHeldBefore(processStartMs) }
+                .onFailure { SdkLog.w("dropping held perf samples failed", it) }
             return
         }
         // The crash JSON goes through beforeSend and the same redaction as every other item before it is queued.
@@ -875,7 +883,29 @@ internal class ARTrackerCore(
         }
         if (recovered > 0) leftoverItems = true
         val exitCrashed = collectExitInfo()
-        decideHeldReplay(previousRunCrashed = recovered > 0 || exitCrashed)
+        val previousRunCrashed = recovered > 0 || exitCrashed
+        decideHeldReplay(previousRunCrashed)
+        decideHeldPerf(previousRunCrashed)
+    }
+
+    /**
+     * Held (buffer-mode) `perf.samples` stored before this process started belong to an earlier one: uploaded when it
+     * ended in a crash, a native crash or an ANR (the minute of performance that led to it), dropped otherwise. Does
+     * nothing while the SDK is disabled; like [decideHeldReplay] the rows are not kept for a later decision.
+     */
+    private fun decideHeldPerf(previousRunCrashed: Boolean) {
+        runCatching {
+            if (isDisabled()) return@runCatching
+            if (previousRunCrashed) {
+                val n = queue.promoteHeldBefore(processStartMs)
+                if (n > 0) {
+                    SdkLog.d("perf buffer promoted after a crash: $n batches")
+                    leftoverItems = true
+                }
+            } else {
+                queue.dropHeldBefore(processStartMs)
+            }
+        }.onFailure { SdkLog.w("deciding on held perf samples failed", it) }
     }
 
     /**
@@ -1244,8 +1274,8 @@ internal class ARTrackerCore(
     fun isDisabled(): Boolean = killSwitch.isActive()
 
     /** The globals in force NOW travel with the item (not those in force when the pipeline gets to it). */
-    internal fun emit(item: TelemetryItem, withGlobals: Boolean = true) {
-        pipeline.enqueue(item, if (withGlobals) globals.current() else GlobalSnapshot.EMPTY)
+    internal fun emit(item: TelemetryItem, withGlobals: Boolean = true, held: Boolean = false) {
+        pipeline.enqueue(item, if (withGlobals) globals.current() else GlobalSnapshot.EMPTY, held)
     }
 
     private fun itemsFor(sessionId: String, userId: String?) = ItemFactory(clock, { sessionId }, { userId })

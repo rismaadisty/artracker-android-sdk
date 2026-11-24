@@ -324,6 +324,119 @@ class EventStoreTest {
         s.purgeOlderThan(1)
     }
 
+    // region held items (buffer-mode performance samples)
+
+    private fun held(id: String, sessionId: String, createdAt: Long, priority: Int = 2) =
+        StoredItem(id, priority, createdAt, "{\"id\":\"$id\"}", held = true, sessionId = sessionId)
+
+    private fun heldIds(): Set<String> = db().use { d ->
+        d.rawQuery("SELECT id FROM items WHERE held = 1", null).use { c ->
+            buildSet { while (c.moveToNext()) add(c.getString(0)) }
+        }
+    }
+
+    @Test
+    fun held_isNeitherClaimedNorCounted_untilPromoted() {
+        val s = store()
+        s.insert(listOf(held("h1", "s1", clock.nowMs()), item("ready", 2, 5)))
+        assertEquals(1, s.pendingCount())
+        assertEquals(listOf("ready"), s.claimBatch()!!.items.map { it.id })
+        assertNull("the held row stays put", s.claimBatch())
+
+        assertEquals(1, s.promoteHeld("s1"))
+        assertEquals(1, s.pendingCount())
+        assertEquals(listOf("h1"), s.claimBatch()!!.items.map { it.id })
+    }
+
+    @Test
+    fun held_trimmedToTheLast60Seconds() {
+        val s = store()
+        val now = clock.nowMs()
+        s.insert(listOf(held("old", "s1", now), held("mid", "s1", now + 30_000)))
+        s.insert(listOf(held("new", "s1", now + 61_000)))
+        assertEquals("old is more than 60 s before the newest", setOf("mid", "new"), heldIds())
+        s.insert(listOf(held("edge", "s1", now + 121_000)))
+        assertEquals("exactly 60 s before the newest is kept", setOf("new", "edge"), heldIds())
+    }
+
+    @Test
+    fun held_cappedAtSevenPerSession_oldestFirst() {
+        val s = store()
+        val now = clock.nowMs()
+        s.insert((1..10).map { held("h%02d".format(it), "s1", now + it * 1_000L) })
+        assertEquals((4..10).map { "h%02d".format(it) }.toSet(), heldIds())
+    }
+
+    @Test
+    fun trim_leavesOtherSessionsAndEarlierProcessRowsAlone() {
+        val now = clock.nowMs()
+        val first = store()
+        first.insert(listOf(held("prev1", "s0", now - 500_000), held("prev2", "s0", now - 400_000)))
+        first.close()
+        clock.advance(10_000)
+        val second = store()
+        val t = clock.nowMs()
+        second.insert(listOf(held("other", "s2", t)))
+        second.insert((1..9).map { held("n%d".format(it), "s1", t + it * 1_000L) })
+        val kept = heldIds()
+        assertTrue("an earlier process's rows wait for the launch decision", kept.containsAll(setOf("prev1", "prev2")))
+        assertTrue("another session's rows are not trimmed", "other" in kept)
+        assertEquals("only s1's own rows were capped", 7, kept.count { it.startsWith("n") })
+    }
+
+    @Test
+    fun promoteHeldBefore_promotesAcrossSessions() {
+        val s = store()
+        val now = clock.nowMs()
+        s.insert(listOf(held("a", "s1", now - 10), held("b", "s2", now - 5), held("c", "s1", now + 5)))
+        assertEquals(2, s.promoteHeldBefore(now))
+        assertEquals(setOf("c"), heldIds())
+        assertEquals(2, s.pendingCount())
+    }
+
+    @Test
+    fun dropHeld_andDropHeldBefore_deleteRows() {
+        val s = store()
+        val now = clock.nowMs()
+        s.insert(listOf(held("a", "s1", now), held("b", "s2", now), held("c", "s2", now - 5), item("ready", 2, 5)))
+        assertEquals(1, s.dropHeld("s1"))
+        assertEquals(1, s.dropHeldBefore(now))
+        assertEquals(setOf("b"), heldIds())
+        assertEquals("a ready item is never touched", 1, s.pendingCount())
+        assertEquals(0, s.dropHeld("nobody"))
+        assertEquals(0, s.promoteHeld("nobody"))
+    }
+
+    @Test
+    fun eviction_dropsHeldRowsBeforeAnyReadyItem() {
+        val s = store(maxRows = 3)
+        val now = clock.nowMs()
+        s.insert(listOf(item("e1", 2, now), item("e2", 2, now + 1), item("err", 1, now + 2)))
+        s.insert(listOf(held("h", "s1", now + 3)))
+        assertEquals("the held row went, not the oldest event", setOf("e1", "e2", "err"), allIds().toSet())
+    }
+
+    @Test
+    fun upgrade_fromVersion1_keepsRowsAsReadyToSend() {
+        context.getDatabasePath(dbName).parentFile?.mkdirs()
+        SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(dbName), null).use { d ->
+            d.execSQL(
+                "CREATE TABLE items (id TEXT PRIMARY KEY, priority INTEGER NOT NULL, created_at INTEGER NOT NULL, " +
+                    "size_bytes INTEGER NOT NULL, payload TEXT NOT NULL, batch_id TEXT, " +
+                    "attempts INTEGER NOT NULL DEFAULT 0)",
+            )
+            d.execSQL("INSERT INTO items VALUES ('old', 2, 1, 2, '{}', NULL, 0)")
+            d.version = 1
+        }
+        val s = store()
+        assertEquals("a row from before the upgrade is not held", 1, s.pendingCount())
+        s.insert(listOf(held("h", "s1", clock.nowMs())))
+        assertEquals(setOf("h"), heldIds())
+        assertEquals(listOf("old"), s.claimBatch()!!.items.map { it.id })
+    }
+
+    // endregion
+
     private fun db(): SQLiteDatabase =
         SQLiteDatabase.openDatabase(context.getDatabasePath(dbName).path, null, SQLiteDatabase.OPEN_READONLY)
 

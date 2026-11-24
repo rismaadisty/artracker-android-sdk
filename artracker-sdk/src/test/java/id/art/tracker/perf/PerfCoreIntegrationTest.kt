@@ -93,7 +93,26 @@ class PerfCoreIntegrationTest {
         return c
     }
 
-    private fun enabled() = PerformanceConfig(enabled = true, sampleIntervalMs = 1_000, trackFrames = false)
+    /** Every session sampled in full: batches go out as they are made. */
+    private fun enabled() = PerformanceConfig(enabled = true, sampleIntervalMs = 1_000, trackFrames = false, sampleRate = 1.0)
+
+    /** The default mode: every session sampled in buffer mode. */
+    private fun buffering() = PerformanceConfig(enabled = true, sampleIntervalMs = 1_000, trackFrames = false)
+
+    /** Samples carried by the `perf.samples` items that were actually sent. */
+    private fun sentSamples(): Int = requests.sumOf { request ->
+        val items = JSONObject(GZIPInputStream(request.body.inputStream()).use { String(it.readBytes()) }).getJSONArray("items")
+        (0 until items.length()).map { items.getJSONObject(it) }
+            .filter { it.getString("name") == "perf.samples" }
+            .sumOf { it.getJSONObject("attributes").getJSONArray("samples").length() }
+    }
+
+    private fun heldRows(): Int {
+        val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+            app.getDatabasePath("artracker.db").path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        )
+        return db.use { d -> d.rawQuery("SELECT COUNT(*) FROM items WHERE held = 1", null).use { c -> c.moveToFirst(); c.getInt(0) } }
+    }
 
     /** Runs [n] sampling intervals and returns once the loop is waiting for the next one (so n ticks are done). */
     private fun tick(n: Int) {
@@ -333,4 +352,99 @@ class PerfCoreIntegrationTest {
         Thread.sleep(300)
         assertEquals("a loop kept running in the background", before, delays.get())
     }
+
+    // region buffer mode (the default)
+
+    @Test
+    fun `a healthy buffer session uploads no perf samples`() {
+        val c = startCore(buffering())
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(30)
+        c.onBackground()
+        settle()
+
+        assertEquals("sampled and stored", 3, perfItems().size)
+        assertEquals("but kept on the device", 0, sentSamples())
+        assertTrue(heldRows() > 0)
+    }
+
+    @Test
+    fun `a logged error uploads the samples before it`() {
+        val c = startCore(buffering())
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(25) // two stored batches and five samples still in memory
+        c.captureException(RuntimeException("boom"), emptyMap())
+        settle()
+
+        assertEquals(25, sentSamples())
+        assertEquals(0, heldRows())
+    }
+
+    @Test
+    fun `batches after an error are sent for 30 seconds and held again after`() {
+        val c = startCore(buffering())
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(5)
+        c.captureException(RuntimeException("boom"), emptyMap())
+        settle()
+        assertEquals(5, sentSamples())
+
+        tick(20) // inside the follow-up window: both batches are ready (the flush timer would send them)
+        c.pipeline.flushNow()
+        settle()
+        assertEquals(25, sentSamples())
+
+        tick(20) // the window ends 30 s after the error: batches made from now on are held again
+        c.pipeline.flushNow()
+        settle()
+        assertEquals(25, sentSamples())
+        assertTrue(heldRows() > 0)
+    }
+
+    @Test
+    fun `an error burst uploads the buffer once`() {
+        val c = startCore(buffering())
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(10)
+        repeat(5) { c.captureException(RuntimeException("boom"), emptyMap()) }
+        settle()
+
+        assertEquals(10, sentSamples())
+    }
+
+    @Test
+    fun `a buffer session that ends without an error drops its held batches`() {
+        val c = startCore(buffering())
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(15)
+        settle()
+        assertTrue(heldRows() > 0)
+
+        c.reset() // the session ends and a new one starts
+        tick(2)
+        settle()
+
+        assertEquals(0, heldRows())
+        assertEquals(0, sentSamples())
+    }
+
+    @Test
+    fun `sampleRate 0 and onErrorSampleRate 0 take no samples`() {
+        val c = startCore(PerformanceConfig(enabled = true, trackFrames = false, onErrorSampleRate = 0.0))
+        c.onForeground()
+        waitUntil { delays.get() == 1 }
+        tick(12)
+        c.captureException(RuntimeException("boom"), emptyMap())
+        settle()
+
+        assertTrue(perfItems().isEmpty())
+        assertEquals(0, sentSamples())
+    }
+
+    // endregion
 }

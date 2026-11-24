@@ -1,9 +1,11 @@
 package id.art.tracker.perf
 
 import id.art.tracker.ItemType
+import id.art.tracker.PerformanceConfig
 import id.art.tracker.TelemetryItem
 import id.art.tracker.core.ItemFactory
 import id.art.tracker.core.Json
+import id.art.tracker.replay.PERF_ON_ERROR_SALT
 import id.art.tracker.testutil.FakeClock
 import id.art.tracker.testutil.FakeDeviceProbe
 import id.art.tracker.testutil.FakeFrameSource
@@ -28,17 +30,30 @@ class PerfMonitorTest {
     private var session: String? = "s1"
     private val emitted = ArrayList<Pair<String, TelemetryItem>>()
     private var ticks = 0L
+    private val heldFlags = ArrayList<Boolean>()
+    private val calls = ArrayList<String>()
+    private var now = 0L
 
     private fun monitor(
         withFrames: Boolean = true,
         flushEvery: Int = PerfMonitor.FLUSH_EVERY,
         memoryInfoWarnings: Boolean = false,
+        sampleFn: (String, Double) -> Boolean = { _, _ -> true },
     ): PerfMonitor {
         val sampler = PerfSampler(reader, if (withFrames) frames else null, device, network, clock) { mono }
         return PerfMonitor(
             sampler, device, network, intervalMs = 1_000, sessionId = { session }, flushEvery = flushEvery,
             memoryInfoWarnings = memoryInfoWarnings,
-            emit = { sid, build -> emitted += sid to build(ItemFactory(clock, { sid }, { null })) },
+            config = PerformanceConfig(enabled = true),
+            samplerFn = sampleFn,
+            nowMs = { now },
+            onPromoteSession = { calls += "promote:$it" },
+            onDropSession = { calls += "drop:$it" },
+            emit = { sid, held, build ->
+                emitted += sid to build(ItemFactory(clock, { sid }, { null }))
+                heldFlags += held
+                calls += "emit:$sid:${if (held) "held" else "ready"}"
+            },
         )
     }
 
@@ -374,4 +389,142 @@ class PerfMonitorTest {
         assertTrue(PerfMonitor.memoryInfoWarningsFor(34))
         assertTrue(PerfMonitor.memoryInfoWarningsFor(35))
     }
+
+    // region recording modes
+
+    private val onlyOnError = { id: String, _: Double -> id.endsWith(PERF_ON_ERROR_SALT) }
+    private val never = { _: String, _: Double -> false }
+
+    private fun bufferMonitor() = monitor(sampleFn = onlyOnError)
+
+    @Test
+    fun `full mode emits ready batches and ignores errors`() {
+        val m = monitor(sampleFn = { id, _ -> !id.endsWith(PERF_ON_ERROR_SALT) })
+        repeat(10) { m.tickOnce() }
+        m.onError()
+        repeat(10) { m.tickOnce() }
+        assertEquals(listOf(false, false), heldFlags)
+        assertTrue(calls.none { it.startsWith("promote") || it.startsWith("drop") })
+    }
+
+    @Test
+    fun `buffer mode holds every batch and promotes nothing without an error`() {
+        val m = bufferMonitor()
+        repeat(20) { m.tickOnce() }
+        assertEquals(listOf(true, true), heldFlags)
+        assertTrue(calls.none { it.startsWith("promote") })
+    }
+
+    @Test
+    fun `a session that is not sampled takes no samples and emits nothing`() {
+        val m = monitor(sampleFn = never)
+        repeat(12) { m.tickOnce() }
+        m.flush()
+        m.onError()
+        assertTrue(emitted.isEmpty())
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
+    fun `an error in buffer mode flushes the open samples held and then promotes the session`() {
+        val m = bufferMonitor()
+        repeat(4) { m.tickOnce() }
+        now = 5_000
+        m.onError()
+        assertEquals(listOf("emit:s1:held", "promote:s1"), calls)
+        assertEquals(4, samplesOf(perfItems().single().second).size)
+    }
+
+    @Test
+    fun `batches are ready for 30 seconds after an error and held again after`() {
+        val m = bufferMonitor()
+        now = 1_000
+        repeat(2) { m.tickOnce() }
+        m.onError()
+        heldFlags.clear()
+        now = 1_000 + PerfMonitor.FOLLOW_UP_MS - 1
+        repeat(10) { m.tickOnce() }
+        assertEquals("inside the window", listOf(false), heldFlags)
+        now = 1_000 + PerfMonitor.FOLLOW_UP_MS
+        repeat(10) { m.tickOnce() }
+        assertEquals("the window is over", listOf(false, true), heldFlags)
+    }
+
+    @Test
+    fun `thermal changes are held in buffer mode too`() {
+        val m = bufferMonitor()
+        m.tickOnce()
+        device.thermal = "serious"
+        m.tickOnce()
+        val thermal = emitted.indexOfFirst { it.second.name == "perf.thermal_change" }
+        assertEquals(true, heldFlags[thermal])
+    }
+
+    @Test
+    fun `errors are rate limited by the policy`() {
+        val m = bufferMonitor()
+        m.tickOnce()
+        fun error(at: Long): Boolean {
+            now = at
+            val before = calls.count { it.startsWith("promote") }
+            m.onError()
+            return calls.count { it.startsWith("promote") } > before
+        }
+        assertTrue(error(0))
+        assertFalse("inside the 60 s gap", error(59_999))
+        assertTrue(error(60_000))
+        assertTrue(error(120_000))
+        assertFalse("a fourth in the same session", error(500_000))
+    }
+
+    @Test
+    fun `leaving a buffer session drops its held batches and decides the next session again`() {
+        val m = bufferMonitor()
+        repeat(5) { m.tickOnce() }
+        session = "s2"
+        m.tickOnce()
+        assertEquals(listOf("emit:s1:held", "drop:s1"), calls)
+        assertEquals("the leftover samples go out under their own session", "s1", emitted.single().first)
+
+        m.onError() // s2 is a buffer session too
+        assertTrue("promote:s2" in calls)
+    }
+
+    @Test
+    fun `an error right after a session change waits for the new session's first sample`() {
+        val m = bufferMonitor()
+        repeat(2) { m.tickOnce() }
+        session = "s2" // no tick yet: the mode and the held batches still belong to s1
+        m.onError()
+        assertTrue(calls.none { it.startsWith("promote") })
+        assertTrue(emitted.isEmpty())
+    }
+
+    @Test
+    fun `leaving a full session drops nothing`() {
+        val m = monitor(sampleFn = { id, _ -> !id.endsWith(PERF_ON_ERROR_SALT) })
+        repeat(3) { m.tickOnce() }
+        session = "s2"
+        m.tickOnce()
+        assertTrue(calls.none { it.startsWith("drop") })
+    }
+
+    @Test
+    fun `a promote callback that throws does not break the monitor`() {
+        val sampler = PerfSampler(reader, frames, device, network, clock) { mono }
+        val m = PerfMonitor(
+            sampler, device, network, intervalMs = 1_000, sessionId = { session },
+            config = PerformanceConfig(enabled = true), samplerFn = onlyOnError, nowMs = { now },
+            onPromoteSession = { error("pipeline") },
+            emit = { sid, held, build -> emitted += sid to build(ItemFactory(clock, { sid }, { null })); heldFlags += held },
+        )
+        m.tickOnce()
+        m.onError() // flushes the first sample, then the callback throws
+        assertEquals(1, perfItems().size)
+        m.tickOnce()
+        m.flush()
+        assertEquals("sampling carries on", 2, perfItems().size)
+    }
+
+    // endregion
 }

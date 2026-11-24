@@ -33,10 +33,13 @@ import id.art.tracker.testutil.FakeReplayBackend
 import id.art.tracker.testutil.RecordedCall
 import id.art.tracker.testutil.testScreenshotKit
 import id.art.tracker.testutil.testReplayController
+import id.art.tracker.transport.EventStore
 import id.art.tracker.transport.FlusherRegistry
+import id.art.tracker.transport.StoredItem
 import id.art.tracker.transport.NewReplayBatch
 import id.art.tracker.transport.ReplayStore
 import id.art.tracker.TelemetryItem
+import id.art.tracker.toJson
 import id.art.tracker.lifecycle.AnnotatedActivity
 import id.art.tracker.lifecycle.FragmentSupport
 import id.art.tracker.lifecycle.HostActivity
@@ -981,6 +984,71 @@ class ARTrackerCoreTest {
             backend.shutdown()
         }
     }
+
+    // region performance buffer: the launch decision
+
+    /** Held `perf.samples` of an earlier process, stored a minute before [T0]. Returns their ids. */
+    private fun seedHeldPerf(sessionId: String, count: Int = 2): List<String> {
+        val factory = ItemFactory(FakeClock(T0 - 60_000), { sessionId }, { null })
+        val store = EventStore(app, FakeClock(T0 - 60_000))
+        try {
+            val items = (0 until count).map { i ->
+                val item = factory.event("perf.samples").copy(timestampMs = T0 - 70_000 + i * 10_000L)
+                StoredItem(item.id, 2, item.timestampMs, item.toJson(), held = true, sessionId = sessionId)
+            }
+            assertTrue(store.insert(items))
+            return items.map { it.id }
+        } finally {
+            store.close()
+        }
+    }
+
+    /** The `held` flag of each id in the queue; an id that is gone is missing from the map. */
+    private fun heldFlags(ids: List<String>): Map<String, Boolean> {
+        val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+            app.getDatabasePath("artracker.db").path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        )
+        return db.use { d ->
+            d.rawQuery("SELECT id, held FROM items", null).use { c ->
+                buildMap { while (c.moveToNext()) if (c.getString(0) in ids) put(c.getString(0), c.getInt(1) == 1) }
+            }
+        }
+    }
+
+    @Test
+    fun crashThenRelaunch_promotesPreviousPerfBuffer() {
+        crashOfEarlierProcess()
+        val ids = seedHeldPerf("session-before-crash")
+
+        startCoreAt(FakeClock(T0))
+        settle()
+
+        val flags = heldFlags(ids)
+        assertTrue("nothing is held any more", flags.values.none { it })
+    }
+
+    @Test
+    fun cleanRelaunch_dropsPreviousPerfBuffer() {
+        val ids = seedHeldPerf("session-clean")
+
+        startCoreAt(FakeClock(T0))
+        settle()
+
+        assertEquals(emptyMap<String, Boolean>(), heldFlags(ids))
+    }
+
+    @Test
+    fun optOutRelaunch_dropsPreviousPerfBuffer_evenAfterACrash() {
+        crashOfEarlierProcess(optOut = true)
+        val ids = seedHeldPerf("session-before-crash")
+
+        startCoreAt(FakeClock(T0))
+        settle()
+
+        assertEquals(emptyMap<String, Boolean>(), heldFlags(ids))
+    }
+
+    // endregion
 
     @Test
     fun cleanRelaunch_dropsPreviousBuffer() {

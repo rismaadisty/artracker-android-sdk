@@ -5,6 +5,13 @@ internal data class StoredItem(
     val priority: Int,
     val createdAtMs: Long,
     val payloadJson: String,
+    /**
+     * Held items are stored but never claimed, counted as pending or sent until promoted (buffer-mode performance
+     * samples: kept on the device and uploaded only when an error trigger fires).
+     */
+    val held: Boolean = false,
+    /** The session a held item belongs to; what [ItemQueue.promoteHeld] and [ItemQueue.dropHeld] select by. */
+    val sessionId: String? = null,
 ) {
     /** UTF-8 byte size of [payloadJson]; this is what counts toward batch and storage limits. */
     val sizeBytes: Int = payloadJson.toByteArray(Charsets.UTF_8).size
@@ -43,4 +50,16 @@ internal interface ItemQueue {
 
     /** Drops items created before [cutoffMs], except priority 0 (crash/fatal). */
     fun purgeOlderThan(cutoffMs: Long)
+
+    /** Makes the held items of [sessionId] pending (uploadable). Returns the number of rows promoted. */
+    fun promoteHeld(sessionId: String): Int = 0
+
+    /** Promotes every held item (any session) created before [cutoffMs]. Returns the number of rows promoted. */
+    fun promoteHeldBefore(cutoffMs: Long): Int = 0
+
+    /** Deletes the held items of [sessionId]. Returns the number of rows deleted. */
+    fun dropHeld(sessionId: String): Int = 0
+
+    /** Deletes every held item (any session) created before [cutoffMs]. Returns the number of rows deleted. */
+    fun dropHeldBefore(cutoffMs: Long): Int = 0
 }
